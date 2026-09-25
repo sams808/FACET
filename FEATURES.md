@@ -125,16 +125,16 @@ Last updated at the end of Phase 4.
 
 ## 8. Volumetric data and surfaces
 
-Nothing in this area is implemented. It is the largest single gap and is
-accepted as a later phase.
+The core is in place: a periodic Grid type, marching-tetrahedra isosurfaces
+verified against an analytic sphere, planar sections, and bond-valence maps.
 
 | Feature | CM | VESTA | FACET |
 |---|:--:|:--:|---|
-| Import charge density (CHGCAR, CUBE, XSF) | – | ✓ | **planned** |
-| Isosurfaces | – | ✓ | **planned** |
-| 2D sections and contour maps | – | ✓ | **planned** |
-| Fourier / difference maps | – | ✓ | **planned** |
-| Bond-valence energy landscapes | – | ✓ | **planned** | a natural fit for this application |
+| Import charge density (CHGCAR, CUBE, XSF) | – | ✓ | **done** |
+| Isosurfaces | – | ✓ | **done** |
+| 2D sections and contour maps | – | ✓ | **partial** |
+| Fourier / difference maps | – | ✓ | **partial** |
+| Bond-valence energy landscapes | – | ✓ | **done** | the V=3 surface passes within 0.07 Å of the real Bi sites |
 | Hirshfeld surfaces | – | – | out of scope | CrystalExplorer does this well |
 
 ## 9. Diffraction
@@ -153,7 +153,7 @@ accepted as a later phase.
 |---|:--:|:--:|---|
 | CIF | **done** | **done** | reads multi-block with esds; writes P1 with the analysis as comments |
 | VASP POSCAR / CONTCAR | **done** | **done** | VASP 4 and 5 layouts, selective dynamics, negative scale |
-| XYZ | **planned** | **done** | extended XYZ with `Lattice=` |
+| XYZ | **done** | **done** | extended XYZ; invents a box and says so when there is no `Lattice=` |
 | VESTA `.vesta` | **done** | **done** | reads CELLP and STRUC; writes bond rules at the distance the valence threshold corresponds to |
 | CrystalMaker | **partial** | – | `.cmtx` text is read; `.cmdf` is an undocumented binary and is refused with a way forward |
 | SHELX `.res` / `.ins` | **done** | – | applies LATT and SYMM, so the analysis is not run on the asymmetric unit alone |

@@ -77,6 +77,17 @@ class Scene:
     poly_alpha: float = 0.38
     poly_sites: list[int] = field(default_factory=list)
 
+    # --- isosurface -------------------------------------------------------
+    # A triangulated level set of a volumetric field: a bond-valence surface,
+    # a charge density, an ELF. Kept separate from the coordination polyhedra
+    # because the two are drawn with different colours and opacities and are
+    # toggled independently.
+    iso_vertices: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), np.float32))
+    iso_normals: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), np.float32))
+    iso_color: tuple[float, float, float] = (0.98, 0.78, 0.30)
+    iso_alpha: float = 0.55
+    iso_label: str = ""
+
     # --- unit cell --------------------------------------------------------
     cell_segments: np.ndarray = field(default_factory=lambda: np.zeros((0, 2, 3), np.float32))
 
@@ -112,6 +123,36 @@ class Scene:
     @property
     def n_poly_triangles(self) -> int:
         return len(self.poly_vertices) // 3
+
+    @property
+    def n_iso_triangles(self) -> int:
+        return len(self.iso_vertices) // 3
+
+    def set_isosurface(self, vertices, faces, normals, *, color=None,
+                       alpha: float | None = None, label: str = "") -> None:
+        """Adopt a triangulated level set.
+
+        Indexed triangles are flattened to a triangle soup, because that is
+        what the renderer's one mesh path takes and an isosurface is uploaded
+        once rather than edited.
+        """
+        vertices = np.asarray(vertices, np.float32)
+        faces = np.asarray(faces, int)
+        normals = np.asarray(normals, np.float32)
+        if len(faces) == 0 or len(vertices) == 0:
+            self.iso_vertices = np.zeros((0, 3), np.float32)
+            self.iso_normals = np.zeros((0, 3), np.float32)
+            self.iso_label = ""
+            return
+        flat = faces.reshape(-1)
+        self.iso_vertices = vertices[flat]
+        self.iso_normals = (normals[flat] if len(normals) == len(vertices)
+                            else np.zeros_like(self.iso_vertices))
+        if color is not None:
+            self.iso_color = tuple(float(c) for c in color)
+        if alpha is not None:
+            self.iso_alpha = float(alpha)
+        self.iso_label = label
 
     def restyle(self, v_bond: float) -> None:
         """Apply a new bond threshold to a scene that is already built.
@@ -257,6 +298,10 @@ def _replicate(structure: Structure, scene: Scene) -> None:
         scene.poly_vertices = np.vstack(
             [scene.poly_vertices + sh for sh in shifts]).astype(np.float32)
         scene.poly_normals = np.tile(scene.poly_normals, (n_copies, 1))
+    if len(scene.iso_vertices):
+        scene.iso_vertices = np.vstack(
+            [scene.iso_vertices + sh for sh in shifts]).astype(np.float32)
+        scene.iso_normals = np.tile(scene.iso_normals, (n_copies, 1))
 
 
 def _add_bonded_images(structure: Structure, scene: Scene) -> None:
@@ -570,6 +615,8 @@ def _frame(scene: Scene, structure: Structure) -> None:
     pts = [scene.atom_position] if scene.n_atoms else []
     if len(scene.cell_segments):
         pts.append(scene.cell_segments.reshape(-1, 3))
+    if len(scene.iso_vertices):
+        pts.append(scene.iso_vertices)
     if not pts:
         scene.center = np.zeros(3, np.float32)
         scene.radius = 1.0

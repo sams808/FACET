@@ -208,6 +208,13 @@ class Renderer:
         else:
             self._counts["poly"] = 0
 
+        if scene.n_iso_triangles:
+            self._make_vao("iso", {"aPosition": scene.iso_vertices,
+                                   "aNormal": scene.iso_normals},
+                           len(scene.iso_vertices))
+        else:
+            self._counts["iso"] = 0
+
         lines = buffers.line_vertices(scene.cell_segments)
         if len(lines):
             self._make_vao("line", {"aPosition": lines}, len(lines))
@@ -271,6 +278,7 @@ class Renderer:
             if not picking:
                 self._draw_lines(view, proj)
                 self._draw_polyhedra(view, proj, light_view, scene)
+                self._draw_isosurface(view, proj, light_view, scene)
 
         self._gbuffer.release()
 
@@ -355,6 +363,38 @@ class Renderer:
         self._vaos["poly"].bind()
         gl.glDrawArrays(GL_TRIANGLES, 0, self._counts["poly"])
         self._vaos["poly"].release()
+        p.release()
+
+        gl.glDepthMask(True)
+        gl.glDisable(GL_BLEND)
+        self._draw_buffers(3)
+
+    def _draw_isosurface(self, view, proj, light, scene: Scene) -> None:
+        """The level set, blended over the structure.
+
+        Drawn with the same transparent path as the coordination polyhedra but
+        with back faces first, so the far side of a closed surface shows
+        through the near side instead of being hidden by it.
+        """
+        if not self._counts.get("iso"):
+            return
+        gl = self.gl
+        self._draw_buffers(1)
+        gl.glEnable(GL_BLEND)
+        gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        gl.glDepthMask(False)
+        gl.glDisable(GL_CULL_FACE)
+
+        p = self._programs["poly"]
+        p.bind()
+        self._set_matrix(p, "uView", view)
+        self._set_matrix(p, "uProj", proj)
+        gl.glUniform3f(p.uniformLocation("uLight"), *light)
+        gl.glUniform3f(p.uniformLocation("uColor"), *scene.iso_color)
+        gl.glUniform1f(p.uniformLocation("uAlpha"), scene.iso_alpha)
+        self._vaos["iso"].bind()
+        gl.glDrawArrays(GL_TRIANGLES, 0, self._counts["iso"])
+        self._vaos["iso"].release()
         p.release()
 
         gl.glDepthMask(True)
