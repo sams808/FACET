@@ -126,6 +126,12 @@ class SiteResult:
     bvv_vector: np.ndarray = field(default_factory=lambda: np.zeros(3))
     valence_discrepancy: float | None = None
     f3: float = float("nan")
+    # Uncertainty on the bond-valence sum, split by origin. The systematic
+    # part comes from R0 and scales the whole sum; the random part comes from
+    # the coordinates and partly cancels. See bv.valence_uncertainty.
+    bvs_systematic: float = float("nan")
+    bvs_random: float = float("nan")
+    bvs_uncertainty: float = float("nan")
 
     # --- geometry ----------------------------------------------------------
     shape: dict = field(default_factory=dict)
@@ -324,6 +330,16 @@ def _fill_valence_quantities(r: SiteResult) -> None:
         r.bvv, r.phi, r.bvv_vector = mag, phi, vec
         r.f3 = polyhedra.valence_fraction_in_shortest(
             [c.valence for c in bonded], 3)
+        param = next((c.param for c in bonded if c.param), None)
+        if param is not None:
+            # an estimated R0 is worth roughly half the accuracy of a fitted
+            # one, which is why the distinction is carried this far
+            r0_error = 0.02 if param.fitted else 0.06
+            unc = bv.valence_uncertainty(
+                [c.distance for c in bonded], param.r0, param.b, r0_error)
+            r.bvs_systematic = unc["systematic"]
+            r.bvs_random = unc["random"]
+            r.bvs_uncertainty = unc["total"]
         if r.ox is not None:
             r.valence_discrepancy = r.bvs - r.ox
 

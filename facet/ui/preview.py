@@ -591,6 +591,11 @@ class PreviewWindow(QMainWindow):
         bvs = sum(c.valence * c.occupancy for c in bonded)
         discrepancy = ("" if r.ox is None
                        else f" ({bvs - r.ox:+.2f} against {r.ox:+d})")
+        # The R0 uncertainty is systematic: it scales the whole sum rather
+        # than averaging out, so a discrepancy smaller than it is not a
+        # measurement of anything.
+        uncertainty = ("" if r.bvs_uncertainty != r.bvs_uncertainty
+                       else f" &plusmn; {r.bvs_uncertainty:.2f}")
 
         rows = "".join(
             f"<tr><td>{c.label}</td>"
@@ -639,7 +644,7 @@ class PreviewWindow(QMainWindow):
           <tr><td>Coordination number</td>
               <td align='right'><b style='font-size:15px'>{cn}</b></td></tr>
           <tr><td>Bond-valence sum</td>
-              <td align='right'>{bvs:.2f} v.u.{discrepancy}</td></tr>
+              <td align='right'>{bvs:.2f}{uncertainty} v.u.{discrepancy}</td></tr>
           <tr><td>ECoN (Hoppe)</td><td align='right'>{r.cn_ecoN:.2f}</td></tr>
           <tr><td>Maximum-gap split</td><td align='right'>{r.cn_gap}</td></tr>
           <tr><td>&phi; (stereoactivity)</td><td align='right'>{r.phi:.3f}</td></tr>

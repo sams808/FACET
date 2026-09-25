@@ -304,6 +304,49 @@ def phi_index(vectors, valences) -> tuple[float, float, np.ndarray]:
     return mag, (mag / s if s else float("nan")), vec
 
 
+def valence_uncertainty(distances, r0: float, b: float,
+                        r0_error: float = 0.02,
+                        distance_errors=None) -> dict:
+    """Propagate the known uncertainties into a bond-valence sum.
+
+    Two sources, and they behave differently:
+
+    * **R0** is shared by every bond of the pair, so its error is *systematic*
+      -- it scales the whole sum by exp(delta/b) rather than averaging out.
+      A fitted R0 carries about 0.02 A, which is 5.6 % at b = 0.37; an
+      estimated one carries two to four times that.
+    * **coordinate errors** are independent per bond, so they add in
+      quadrature and partly cancel.
+
+    Reporting them separately matters: the systematic part cannot be reduced by
+    finding more bonds, and the random part can.
+    """
+    d = np.asarray(distances, float)
+    if d.size == 0:
+        return {"bvs": 0.0, "systematic": 0.0, "random": 0.0, "total": 0.0}
+
+    v = np.exp((r0 - d) / b)
+    total = float(v.sum())
+
+    # a shift of R0 by delta multiplies every term by exp(delta/b)
+    systematic = float(abs(total * (math.exp(r0_error / b) - 1.0)))
+
+    if distance_errors is None:
+        random = 0.0
+    else:
+        sigma = np.asarray(distance_errors, float)
+        # dv/dd = -v/b, so each term contributes v*sigma/b
+        random = float(np.sqrt(np.sum((v * sigma / b) ** 2)))
+
+    return {
+        "bvs": total,
+        "systematic": systematic,
+        "random": random,
+        "total": float(math.hypot(systematic, random)),
+        "r0_error": r0_error,
+    }
+
+
 def global_instability_index(discrepancies) -> float:
     """GII = sqrt(mean((BVS_i - V_i)^2)) over every site in the structure.
 

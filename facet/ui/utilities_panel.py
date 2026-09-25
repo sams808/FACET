@@ -12,6 +12,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import utilities
+from ..core import cn_methods, utilities
 
 
 def _table(headers: list[str]) -> QTableWidget:
@@ -120,6 +121,22 @@ class UtilitiesPanel(QWidget):
             "Intensities need structure factors and are not computed here.",
             refl_row), "Reflections")
 
+        self.methods = _table(["method", "CN", "parameters", "note"])
+        method_row = QHBoxLayout()
+        self.include_pymatgen = QCheckBox("include pymatgen strategies")
+        self.include_pymatgen.setToolTip(
+            "Eight further near-neighbour rules from pymatgen. Off by default "
+            "because they rebuild the structure and are much slower, and the "
+            "built application ships without pymatgen.")
+        self.include_pymatgen.toggled.connect(self._refresh_methods)
+        method_row.addWidget(self.include_pymatgen)
+        method_row.addStretch(1)
+        self.tabs.addTab(self._wrap(
+            self.methods,
+            "The same site counted every defensible way. No rule is marked "
+            "correct; they are shown together.", method_row),
+            "CN methods")
+
         self.connectivity = _table(["site A", "site B", "shared ligands",
                                     "sharing"])
         self.tabs.addTab(self._wrap(
@@ -160,6 +177,7 @@ class UtilitiesPanel(QWidget):
         self._refresh_shells()
         self._refresh_reflections()
         self._refresh_connectivity()
+        self._refresh_methods()
 
     def _refresh_summary(self) -> None:
         s = self.structure
@@ -259,6 +277,32 @@ class UtilitiesPanel(QWidget):
         _fill(self.reflections,
               [[r["h"], r["k"], r["l"], r["d"], r["two_theta"]]
                for r in rows[:600]])
+
+    def _refresh_methods(self) -> None:
+        if self.site_result is None:
+            self.methods.setRowCount(0)
+            return
+        try:
+            found = cn_methods.all_methods(
+                self.site_result, self.structure,
+                include_pymatgen=self.include_pymatgen.isChecked())
+        except Exception:
+            self.methods.setRowCount(0)
+            return
+        rows = []
+        for m in found:
+            params = ", ".join(f"{k} {v:.3g}" if isinstance(v, float)
+                               else f"{k} {v}"
+                               for k, v in m.parameters.items())
+            rows.append([m.method, m.display, params, m.note])
+        summary = cn_methods.spread(found)
+        if summary.get("n"):
+            rows.append(["— spread —",
+                         f"{summary['min']:.2f}–{summary['max']:.2f}",
+                         f"{summary['n']} methods",
+                         "distinct integers: "
+                         + ", ".join(str(v) for v in summary["integer_values"])])
+        _fill(self.methods, rows)
 
     def _refresh_connectivity(self) -> None:
         if self.structure is None or not self.results:

@@ -85,6 +85,8 @@ Last updated at the end of Phase 4.
 | Effective coordination number | – | ✓ | **done** | Hoppe ECoN |
 | Bond-valence sum | – | ✓ | **done** | with parameter provenance |
 | Bond-valence map | – | ✓ | **partial** | the grid is computed; the isosurface that draws it is Phase 9 |
+| Uncertainty on the bond-valence sum | – | – | **done** | systematic (R0) and random (coordinates) reported separately |
+| Structure health checks | – | – | **done** | impossible contacts, split sites, charge, esds, valence |
 | Bond strain index | – | – | **done** | |
 | Void / free-volume analysis | ✓ | ✓ | **partial** | the void cone half-angle; no cavity mapping |
 | Centroid and eccentricity | ✓ | ✓ | **done** | |
@@ -99,7 +101,7 @@ Last updated at the end of Phase 4.
 | **Plateau analysis — is this CN a result or a choice?** | – | – | **done** |
 | **Sub-threshold contacts drawn, not hidden** | – | – | **done** |
 | **Bond thickness proportional to bond valence** | – | – | **done** |
-| Several CN definitions side by side | – | – | **partial** | valence, ECoN, max-gap; Voronoi and CrystalNN still to add |
+| Several CN definitions side by side | – | – | **done** | ten native rules plus eight pymatgen strategies, with the spread |
 | φ, the scale-free stereoactivity index | – | – | **done** |
 | Oxidation state by bond-valence self-consistency | – | – | **done** |
 | Parameter-set switching with citations | – | – | **partial** | one fitted set plus the estimator; more to ship |
