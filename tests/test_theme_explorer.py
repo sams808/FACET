@@ -1,0 +1,390 @@
+"""Colour themes and the cutoff explorer."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from facet.core import theme as T
+
+SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs\1526458_Bi2O3.cif")
+
+
+# --- palettes and overrides --------------------------------------------------
+
+def test_every_shipped_palette_covers_the_common_elements():
+    for name, factory in T.PALETTES.items():
+        p = factory()
+        for sym in ("O", "Si", "Na", "Fe", "Bi"):
+            assert sym in p, f"{name} has no colour for {sym}"
+            assert all(0.0 <= c <= 1.0 for c in p[sym]), f"{name}/{sym} out of range"
+
+
+def test_an_element_colour_can_be_overridden_and_restored():
+    t = T.Theme()
+    original = t.element_color("Bi")
+    t.set_element_color("Bi", (0.1, 0.2, 0.3))
+    assert t.element_color("Bi") == (0.1, 0.2, 0.3)
+    t.clear_element_color("Bi")
+    assert t.element_color("Bi") == original
+
+
+def test_overrides_survive_a_palette_change():
+    """A user's own colour is theirs; switching palette must not discard it."""
+    t = T.Theme()
+    t.set_element_color("O", (0.0, 0.0, 1.0))
+    t.palette_name = "Jmol / CPK"
+    assert t.element_color("O") == (0.0, 0.0, 1.0)
+
+
+def test_label_normalisation_applies_to_overrides():
+    t = T.Theme()
+    t.set_element_color("bi", (0.5, 0.5, 0.5))
+    assert t.element_color("Bi") == (0.5, 0.5, 0.5)
+    assert t.element_color("Bi3+") == (0.5, 0.5, 0.5)
+
+
+def test_greyscale_palette_is_actually_grey():
+    for rgb in T.PALETTES["Greyscale"]().values():
+        assert rgb[0] == pytest.approx(rgb[1]) == pytest.approx(rgb[2])
+
+
+def test_greyscale_orders_by_atomic_number():
+    """Heavier must be darker, or the ordering is lost when printed."""
+    p = T.PALETTES["Greyscale"]()
+    assert p["Bi"][0] < p["O"][0]
+
+
+def test_high_contrast_avoids_pure_red_against_green():
+    """Red against green is the pairing that fails most often, and is exactly
+    what CPK uses for oxygen against chlorine."""
+    p = T.PALETTES["High contrast"]()
+    o, cl = p["O"], p["Cl"]
+    assert not (o[0] > 0.7 and o[1] < 0.3 and cl[1] > 0.6 and cl[0] < 0.3)
+
+
+# --- persistence -------------------------------------------------------------
+
+def test_a_theme_round_trips_through_a_file(tmp_path):
+    t = T.publication()
+    t.set_element_color("Bi", (0.9, 0.1, 0.4))
+    t.color_mode = T.ColorMode.PHI
+    t.bond_color_mode = T.BondColorMode.BY_VALENCE
+    t.scale_min, t.scale_max = 0.0, 0.6
+    path = tmp_path / "theme.json"
+    t.save(path)
+
+    back = T.Theme.load(path)
+    assert back.palette_name == t.palette_name
+    assert back.element_color("Bi") == (0.9, 0.1, 0.4)
+    assert back.color_mode is T.ColorMode.PHI
+    assert back.bond_color_mode is T.BondColorMode.BY_VALENCE
+    assert back.background == t.background
+    assert (back.scale_min, back.scale_max) == (0.0, 0.6)
+    assert back.fog_amount == t.fog_amount
+
+
+def test_a_theme_file_is_readable_json(tmp_path):
+    path = tmp_path / "t.json"
+    T.Theme().save(path)
+    json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_loading_a_theme_with_missing_keys_uses_defaults():
+    back = T.Theme.from_dict({"name": "sparse"})
+    assert back.name == "sparse"
+    assert back.color_mode is T.ColorMode.ELEMENT
+
+
+def test_loading_a_theme_with_a_bad_mode_does_not_raise():
+    back = T.Theme.from_dict({"color_mode": "not a mode"})
+    assert back.color_mode is T.ColorMode.ELEMENT
+
+
+def test_copy_does_not_share_the_override_dictionary():
+    a = T.Theme()
+    b = a.copy()
+    b.set_element_color("O", (1.0, 0.0, 0.0))
+    assert "O" not in a.overrides
+
+
+# --- presets -----------------------------------------------------------------
+
+def test_presets_all_construct_and_differ():
+    made = {name: factory() for name, factory in T.PRESETS.items()}
+    assert len(made) == len(T.PRESETS)
+    backgrounds = {tuple(t.background) for t in made.values()}
+    assert len(backgrounds) > 1
+
+
+def test_light_and_publication_themes_know_they_are_light():
+    assert T.publication().is_light_background
+    assert T.light().is_light_background
+    assert not T.dark().is_light_background
+
+
+def test_a_light_theme_gives_dark_ink():
+    """Switching to a white background must not keep pale grey text."""
+    ink = T.publication().contrasting_ink()
+    assert sum(ink) < 1.0
+
+
+def test_publication_theme_turns_off_depth_cueing():
+    """Depth cueing reads as haze in print and makes a figure look badly
+    reproduced rather than three-dimensional."""
+    assert T.publication().fog_amount == 0.0
+
+
+# --- ramps and scaling -------------------------------------------------------
+
+def test_ramp_is_continuous_and_in_range():
+    previous = T.ramp(0.0)
+    for t in np.linspace(0, 1, 60)[1:]:
+        c = T.ramp(float(t))
+        assert all(0.0 <= v <= 1.0 for v in c)
+        assert max(abs(a - b) for a, b in zip(c, previous)) < 0.35
+        previous = c
+
+
+def test_ramp_handles_nan():
+    assert T.ramp(float("nan")) == T.ramp(None)
+
+
+def test_diverging_ramp_is_symmetric_about_its_middle():
+    lo, hi = T.ramp(0.0, diverging=True), T.ramp(1.0, diverging=True)
+    assert lo != hi
+    mid = T.ramp(0.5, diverging=True)
+    assert abs(mid[0] - mid[2]) < 0.15        # near-neutral at the midpoint
+
+
+def test_valence_discrepancy_range_is_symmetric_about_zero():
+    """A signed quantity must put zero in the middle of the ramp, or the sign
+    stops being readable."""
+    values = {0: -0.1, 1: 0.4}
+    lo, hi = T.scale_range(values, T.Theme(), T.ColorMode.VALENCE_DISCREPANCY)
+    assert lo == pytest.approx(-hi)
+
+
+def test_a_pinned_range_overrides_autoscale():
+    """Pinning is what makes two figures comparable."""
+    t = T.Theme(scale_min=0.0, scale_max=1.0)
+    assert T.scale_range({0: 5.0}, t, T.ColorMode.BVS) == (0.0, 1.0)
+
+
+def test_scale_range_survives_all_nan():
+    lo, hi = T.scale_range({0: float("nan")}, T.Theme(), T.ColorMode.BVS)
+    assert lo < hi
+
+
+def test_identical_values_still_give_a_usable_range():
+    lo, hi = T.scale_range({0: 3.0, 1: 3.0}, T.Theme(), T.ColorMode.BVS)
+    assert hi > lo
+
+
+# --- colour modes on a real structure ----------------------------------------
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="sample structure not present")
+class TestColorModesOnAStructure:
+
+    @pytest.fixture(scope="class")
+    def loaded(self):
+        from facet.core import cif, coordination
+
+        s = cif.read(SAMPLE)
+        return s, coordination.analyse_structure(s)
+
+    def test_element_mode_gives_one_colour_per_element(self, loaded):
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        scene = build_scene(s, res, theme=T.Theme(color_mode=T.ColorMode.ELEMENT))
+        assert len(np.unique(scene.atom_color, axis=0)) == 2      # Bi and O
+
+    def test_phi_mode_distinguishes_the_two_bismuth_sites(self, loaded):
+        """The two Bi sites of alpha-Bi2O3 have phi 0.433 and 0.370, so a
+        stereoactivity colouring must tell them apart."""
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        scene = build_scene(s, res, theme=T.Theme(color_mode=T.ColorMode.PHI))
+        bi = [i for i, e in enumerate(scene.atom_element) if e == "Bi"]
+        assert len(np.unique(scene.atom_color[bi], axis=0)) == 2
+
+    def test_uniform_mode_gives_one_colour(self, loaded):
+        """Including the periodic images: an image atom is an atom, and must
+        not take its colour from the bond that reached it."""
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        scene = build_scene(s, res, theme=T.Theme(color_mode=T.ColorMode.UNIFORM))
+        assert len(np.unique(scene.atom_color, axis=0)) == 1
+
+    def test_image_atoms_match_the_atoms_they_duplicate(self, loaded):
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        t = T.Theme(bond_color_mode=T.BondColorMode.BY_VALENCE)
+        scene = build_scene(s, res, theme=t)
+        cell = np.unique(scene.atom_color[:scene.n_cell_atoms], axis=0)
+        image = np.unique(scene.atom_color[scene.n_cell_atoms:], axis=0)
+        for c in image:
+            assert any(np.allclose(c, d) for d in cell),                 "an image atom has a colour no cell atom has"
+
+    def test_the_bond_scale_survives_moving_the_threshold(self, loaded):
+        """restyle() recomputes the radii, and must reapply the theme's scale
+        rather than reverting every bond to the unscaled width."""
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        scene = build_scene(s, res, theme=T.Theme(bond_scale=2.5))
+        before = float(scene.bond_radius.mean())
+        scene.restyle(scene.v_bond)
+        assert float(scene.bond_radius.mean()) == pytest.approx(before, rel=1e-6)
+
+    def test_an_override_reaches_the_scene(self, loaded):
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        t = T.Theme()
+        t.set_element_color("Bi", (1.0, 0.0, 1.0))
+        scene = build_scene(s, res, theme=t)
+        bi = [i for i, e in enumerate(scene.atom_element) if e == "Bi"]
+        assert np.allclose(scene.atom_color[bi[0]], [1.0, 0.0, 1.0])
+
+    def test_atom_and_bond_scale_reach_the_scene(self, loaded):
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        small = build_scene(s, res, theme=T.Theme(atom_scale=0.5, bond_scale=0.5))
+        big = build_scene(s, res, theme=T.Theme(atom_scale=2.0, bond_scale=2.0))
+        assert big.atom_radius.mean() == pytest.approx(
+            small.atom_radius.mean() * 4.0, rel=1e-5)
+        assert big.bond_radius.mean() > small.bond_radius.mean()
+
+    def test_the_subthreshold_colour_follows_the_theme(self, loaded):
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        t = T.Theme(subthreshold_color=(1.0, 0.0, 0.0))
+        scene = build_scene(s, res, theme=t)
+        below = scene.bond_valence < scene.v_bond
+        assert below.any()
+        # faded towards red, so the red channel must exceed the blue
+        faded = scene.bond_color_a[below]
+        assert (faded[:, 0] > faded[:, 2]).any()
+
+    def test_cell_range_replicates_contents_and_outlines_every_cell(self, loaded):
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        one = build_scene(s, res, theme=T.Theme())
+        block = build_scene(s, res, theme=T.Theme(), cell_range=(2, 2, 1))
+        assert block.n_cell_atoms == one.n_cell_atoms * 4
+        assert block.n_bonds == one.n_bonds * 4
+        assert len(block.cell_segments) == 12 * 4
+
+    def test_all_polyhedra_covers_every_cation_site(self, loaded):
+        from facet.gl.scene import build_scene
+
+        s, res = loaded
+        one = build_scene(s, res, theme=T.Theme(),
+                          polyhedron_sites=[res[0].site_index])
+        every = build_scene(s, res, theme=T.Theme(),
+                            polyhedron_sites=[r.site_index for r in res])
+        assert every.n_poly_triangles > one.n_poly_triangles
+
+
+# --- the cutoff explorer -----------------------------------------------------
+
+@pytest.fixture(scope="module")
+def qapp():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="sample structure not present")
+class TestCutoffExplorer:
+
+    @pytest.fixture(scope="class")
+    def result(self):
+        from facet.core import cif, coordination
+
+        s = cif.read(SAMPLE)
+        return coordination.analyse_structure(s)[0]
+
+    def _widget(self, qapp, result):
+        from facet.ui.cutoff_explorer import CutoffExplorer
+
+        w = CutoffExplorer()
+        w.resize(900, 220)
+        w.set_result(result)
+        return w
+
+    def test_the_valence_axis_round_trips(self, qapp, result):
+        w = self._widget(qapp, result)
+        w._layout()
+        for v in (0.01, 0.075, 0.3):
+            assert w._x_to_v(w._v_to_x(v)) == pytest.approx(v, rel=1e-6)
+
+    def test_the_axis_is_monotonic(self, qapp, result):
+        w = self._widget(qapp, result)
+        w._layout()
+        xs = [w._v_to_x(v) for v in (0.005, 0.02, 0.075, 0.2, 0.5)]
+        assert all(b > a for a, b in zip(xs, xs[1:]))
+
+    def test_it_renders_without_error_in_both_themes(self, qapp, result):
+        for theme in (T.dark(), T.publication()):
+            w = self._widget(qapp, result)
+            w.set_theme(theme)
+            image = w.grab().toImage()
+            seen = set()
+            for y in range(0, image.height(), 7):
+                for x in range(0, image.width(), 7):
+                    c = image.pixelColor(x, y)
+                    seen.add((c.red(), c.green(), c.blue()))
+            assert len(seen) > 8, f"{theme.name} drew nothing"
+
+    def test_it_survives_having_no_result(self, qapp):
+        from facet.ui.cutoff_explorer import CutoffExplorer
+
+        w = CutoffExplorer()
+        w.resize(400, 200)
+        assert not w.grab().isNull()
+
+    def test_double_click_snaps_to_the_middle_of_a_plateau(self, qapp, result):
+        """The useful gesture: land on the most defensible threshold rather
+        than hunting for it by hand."""
+        import math
+
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        w = self._widget(qapp, result)
+        w.resize(900, 220)
+        w._layout()
+        widest = max(result.plateaus, key=lambda q: q.width_decades)
+        target_v = math.sqrt(widest.v_low * widest.v_high)
+        # click somewhere inside that plateau but not at its centre
+        click_v = math.sqrt(widest.v_low * target_v)
+        x = w._v_to_x(click_v)
+
+        event = QMouseEvent(QMouseEvent.MouseButtonDblClick,
+                            QPointF(x, w._plot.center().y()),
+                            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+        w.mouseDoubleClickEvent(event)
+        assert w.v_bond == pytest.approx(target_v, rel=1e-6)
+
+    def test_the_threshold_is_clamped_to_the_visible_axis(self, qapp, result):
+        w = self._widget(qapp, result)
+        w.set_threshold(1e6)
+        assert w.v_bond <= 0.6
+        w.set_threshold(-5.0)
+        assert w.v_bond >= 0.004
+
+    def test_the_reference_distance_can_be_cleared(self, qapp, result):
+        w = self._widget(qapp, result)
+        w.set_reference_distance(None)
+        assert not w.grab().isNull()

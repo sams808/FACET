@@ -25,7 +25,7 @@ from enum import Enum
 
 import numpy as np
 
-from ..core import bv, elements
+from ..core import bv, elements, theme as theme_mod
 from ..core.coordination import SiteResult
 from ..core.structure import Structure
 
@@ -75,6 +75,7 @@ class Scene:
     poly_normals: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), np.float32))
     poly_color: tuple[float, float, float] = (0.30, 0.74, 0.96)
     poly_alpha: float = 0.38
+    poly_sites: list[int] = field(default_factory=list)
 
     # --- unit cell --------------------------------------------------------
     cell_segments: np.ndarray = field(default_factory=lambda: np.zeros((0, 2, 3), np.float32))
@@ -90,6 +91,10 @@ class Scene:
     v_bond: float = bv.V_BOND_DEFAULT
     style: Style = Style.BALL_AND_STICK
     selected_atom: int | None = None
+    cell_range: tuple[int, int, int] = (1, 1, 1)
+    # the theme this scene was built with; the renderer reads its presentation
+    # settings, and restyle() needs its sub-threshold colour and bond scale
+    theme: object | None = None
 
     # ------------------------------------------------------------------
     @property
@@ -117,16 +122,22 @@ class Scene:
         v = self.bond_valence
         is_bond = v >= self.v_bond
 
-        self.bond_radius = bond_radius_for(v, self.v_bond)
+        # The theme's bond scale has to be reapplied here. restyle() recomputes
+        # the radii from scratch, so without this it silently reverts every
+        # bond to the unscaled width the moment the threshold is touched.
+        scale = float(getattr(self.theme, "bond_scale", 1.0) or 1.0)
+        self.bond_radius = bond_radius_for(v, self.v_bond) * scale
 
         # fade everything below the threshold towards neutral, proportionally,
         # so a contact just under the line still looks nearly like a bond
+        fade = np.array(getattr(self.theme, "subthreshold_color", None)
+                        or _FADE_TO, np.float32)
         frac = np.clip(v / max(self.v_bond, 1e-9), 0.0, 1.0)[:, None]
         weight = np.where(is_bond[:, None], 1.0, 0.25 + 0.75 * frac)
         self.bond_color_a = (self._bond_base_a * weight
-                             + _FADE_TO * (1.0 - weight)).astype(np.float32)
+                             + fade * (1.0 - weight)).astype(np.float32)
         self.bond_color_b = (self._bond_base_b * weight
-                             + _FADE_TO * (1.0 - weight)).astype(np.float32)
+                             + fade * (1.0 - weight)).astype(np.float32)
 
     def bonds_above_threshold(self) -> int:
         return int((self.bond_valence >= self.v_bond).sum())
@@ -154,7 +165,10 @@ def build_scene(structure: Structure,
                 v_bond: float = bv.V_BOND_DEFAULT,
                 v_list: float = bv.V_LIST_DEFAULT,
                 polyhedron_site: int | None = None,
+                polyhedron_sites: list[int] | None = None,
                 show_cell: bool = True,
+                cell_range: tuple[int, int, int] = (1, 1, 1),
+                theme=None,
                 params: bv.ParameterSet | None = None) -> Scene:
     """Build a drawable scene for a structure.
 
@@ -168,17 +182,77 @@ def build_scene(structure: Structure,
         results = coordination.analyse_structure(structure, params,
                                                  v_bond=v_bond, v_list=v_list)
 
-    scene = Scene(style=style, v_bond=v_bond)
-    _build_atoms(structure, scene, style)
-    _build_bonds(structure, results, scene)
+    theme = theme or theme_mod.Theme()
+    scene = Scene(style=style, v_bond=v_bond, theme=theme)
+    scene.poly_color = theme.polyhedron_color
+    scene.poly_alpha = theme.polyhedron_alpha
+    scene.cell_range = tuple(max(1, int(n)) for n in cell_range)
+
+    _build_atoms(structure, scene, style, theme, results)
+    _build_bonds(structure, results, scene, theme)
     _add_bonded_images(scene, style)
-    if polyhedron_site is not None:
-        _build_polyhedron(structure, results, scene, polyhedron_site)
+
+    sites = list(polyhedron_sites or [])
+    if polyhedron_site is not None and polyhedron_site not in sites:
+        sites.append(polyhedron_site)
+    scene.poly_sites = sites
+    if sites:
+        _build_polyhedra(structure, results, scene, sites)
+
     if show_cell:
-        scene.cell_segments = unit_cell_segments(structure)
+        scene.cell_segments = unit_cell_segments(structure, scene.cell_range)
+    if scene.cell_range != (1, 1, 1):
+        _replicate(structure, scene)
     _frame(scene, structure)
     scene.restyle(v_bond)
     return scene
+
+
+def _replicate(structure: Structure, scene: Scene) -> None:
+    """Repeat the drawn contents across a block of unit cells.
+
+    CrystalMaker and VESTA both call this a cell range, and it is how anyone
+    looks at connectivity beyond a single cell. Applied after bonds are built,
+    so every copy carries the same bonds including those crossing a boundary.
+    """
+    nx, ny, nz = scene.cell_range
+    if (nx, ny, nz) == (1, 1, 1):
+        return
+    orth = structure.cell.orth
+    shifts = [orth @ np.array([i, j, k], float)
+              for i in range(nx) for j in range(ny) for k in range(nz)]
+    n_copies = len(shifts)
+    if n_copies <= 1:
+        return
+
+    base_atoms = scene.n_atoms
+    base_bonds = scene.n_bonds
+    scene.atom_position = np.vstack(
+        [scene.atom_position + sh for sh in shifts]).astype(np.float32)
+    scene.atom_radius = np.tile(scene.atom_radius, n_copies)
+    scene.atom_color = np.tile(scene.atom_color, (n_copies, 1))
+    scene.atom_site = np.tile(scene.atom_site, n_copies)
+    scene.atom_label = scene.atom_label * n_copies
+    scene.atom_element = scene.atom_element * n_copies
+    scene.atom_index = np.arange(len(scene.atom_radius), dtype=np.int32)
+    scene.n_cell_atoms = scene.n_cell_atoms * n_copies
+
+    if base_bonds:
+        scene.bond_a = np.vstack([scene.bond_a + sh for sh in shifts]).astype(np.float32)
+        scene.bond_b = np.vstack([scene.bond_b + sh for sh in shifts]).astype(np.float32)
+        scene.bond_valence = np.tile(scene.bond_valence, n_copies)
+        scene.bond_distance = np.tile(scene.bond_distance, n_copies)
+        scene._bond_base_a = np.tile(scene._bond_base_a, (n_copies, 1))
+        scene._bond_base_b = np.tile(scene._bond_base_b, (n_copies, 1))
+        scene.bond_radius = np.tile(scene.bond_radius, n_copies)
+        offsets = np.repeat(np.arange(n_copies) * base_atoms, base_bonds)
+        scene.bond_atoms = (np.tile(scene.bond_atoms, (n_copies, 1))
+                            + offsets[:, None]).astype(np.int32)
+
+    if len(scene.poly_vertices):
+        scene.poly_vertices = np.vstack(
+            [scene.poly_vertices + sh for sh in shifts]).astype(np.float32)
+        scene.poly_normals = np.tile(scene.poly_normals, (n_copies, 1))
 
 
 def _add_bonded_images(scene: Scene, style: Style) -> None:
@@ -205,16 +279,20 @@ def _add_bonded_images(scene: Scene, style: Style) -> None:
         if k in present:
             continue
         present.add(k)
-        # the far half of the bond carries the neighbour's colour, so the image
-        # atom is coloured and sized from that rather than looked up again
-        colour = scene._bond_base_b[i]
+        # Take everything from the atom this is an image OF, including its
+        # colour. Using the bond's far-half colour instead looks right only
+        # while bonds are coloured by element -- under a uniform or a
+        # by-valence bond colouring the image atoms would silently diverge
+        # from the cell atoms they duplicate.
         source = int(scene.bond_atoms[i, 1])
         if 0 <= source < scene.n_atoms:
+            colour = scene.atom_color[source]
             radius = float(scene.atom_radius[source])
             label = scene.atom_label[source]
             element = scene.atom_element[source]
             site = int(scene.atom_site[source])
         else:
+            colour = scene._bond_base_b[i]
             radius, label, element, site = 0.3, "", "", -1
         extra_pos.append(end)
         extra_col.append(colour)
@@ -241,7 +319,8 @@ def _add_bonded_images(scene: Scene, style: Style) -> None:
     scene.n_cell_atoms = n0
 
 
-def _build_atoms(structure: Structure, scene: Scene, style: Style) -> None:
+def _build_atoms(structure: Structure, scene: Scene, style: Style,
+                 theme, results) -> None:
     atoms = structure.atoms
     if not atoms:
         return
@@ -250,8 +329,7 @@ def _build_atoms(structure: Structure, scene: Scene, style: Style) -> None:
     scene.atom_site = np.array([a.site_index for a in atoms], np.int32)
     scene.atom_label = [a.label for a in atoms]
     scene.atom_element = [a.element for a in atoms]
-    scene.atom_color = np.array(
-        [elements.info(a.element).color for a in atoms], np.float32)
+    scene.atom_color = _atom_colors(structure, atoms, theme, results)
 
     info = [elements.info(a.element) for a in atoms]
     if style is Style.SPACE_FILLING:
@@ -264,11 +342,50 @@ def _build_atoms(structure: Structure, scene: Scene, style: Style) -> None:
 
     # a partially occupied site is drawn smaller, so disorder is visible
     occ = np.array([a.occupancy for a in atoms], np.float32)
-    scene.atom_radius = scene.atom_radius * (0.55 + 0.45 * np.clip(occ, 0, 1))
+    scene.atom_radius = (scene.atom_radius * (0.55 + 0.45 * np.clip(occ, 0, 1))
+                         * float(theme.atom_scale))
+    scene.n_cell_atoms = len(atoms)
+
+
+def _atom_colors(structure: Structure, atoms, theme, results) -> np.ndarray:
+    """Apply the theme's colour mode.
+
+    Colouring by element is the default and is what every other program offers.
+    The rest put the analysis onto the structure: a site coloured by phi or by
+    bond-valence sum shows its chemistry in the picture, not only in a table
+    beside it.
+    """
+    mode = theme.color_mode
+
+    if mode is theme_mod.ColorMode.UNIFORM:
+        return np.tile(np.array(theme.uniform_atom_color, np.float32),
+                       (len(atoms), 1))
+
+    if mode is theme_mod.ColorMode.SITE:
+        cycle = theme_mod.SITE_CYCLE
+        return np.array([cycle[a.site_index % len(cycle)] for a in atoms],
+                        np.float32)
+
+    if mode is not theme_mod.ColorMode.ELEMENT and results:
+        values = theme_mod.site_values(results, mode)
+        lo, hi = theme_mod.scale_range(values, theme, mode)
+        diverging = mode is theme_mod.ColorMode.VALENCE_DISCREPANCY
+        out = []
+        for a in atoms:
+            if a.site_index in values:
+                out.append(theme_mod.color_for_value(values[a.site_index],
+                                                     lo, hi, diverging))
+            else:
+                # anions carry no per-site scalar; keep them elemental so the
+                # framework stays readable behind the coloured cations
+                out.append(theme.element_color(a.element))
+        return np.array(out, np.float32)
+
+    return np.array([theme.element_color(a.element) for a in atoms], np.float32)
 
 
 def _build_bonds(structure: Structure, results: list[SiteResult],
-                 scene: Scene) -> None:
+                 scene: Scene, theme) -> None:
     """One drawn bond per contact of every analysed site.
 
     Contacts are de-duplicated: a cation-anion contact appears in the cation's
@@ -301,8 +418,9 @@ def _build_bonds(structure: Structure, results: list[SiteResult],
                 seen.add(key)
                 a_pos.append(origin)
                 b_pos.append(end)
-                col_a.append(elements.info(res.element).color)
-                col_b.append(elements.info(c.element).color)
+                ca, cb = _bond_colors(theme, res.element, c.element, c.valence)
+                col_a.append(ca)
+                col_b.append(cb)
                 valence.append(c.valence)
                 distance.append(c.distance)
                 pairs.append((centre, c.atom_index))
@@ -318,62 +436,97 @@ def _build_bonds(structure: Structure, results: list[SiteResult],
     scene.bond_valence = np.array(valence, np.float32)
     scene.bond_distance = np.array(distance, np.float32)
     scene.bond_atoms = np.array(pairs, np.int32)
-    scene.bond_radius = bond_radius_for(scene.bond_valence, scene.v_bond)
+    scene.bond_radius = (bond_radius_for(scene.bond_valence, scene.v_bond)
+                         * float(theme.bond_scale))
 
 
-def _build_polyhedron(structure: Structure, results: list[SiteResult],
-                      scene: Scene, site_index: int) -> None:
-    """Convex hull of the bonded ligands of one site."""
-    res = next((r for r in results if r.site_index == site_index), None)
-    if res is None:
-        return
-    bonded = res.bonds
-    if len(bonded) < 4:
-        return
+def _bond_colors(theme, element_a: str, element_b: str, valence: float):
+    mode = theme.bond_color_mode
+    if mode is theme_mod.BondColorMode.UNIFORM:
+        return theme.uniform_bond_color, theme.uniform_bond_color
+    if mode is theme_mod.BondColorMode.BY_VALENCE:
+        # a ramp from weak to strong, so relative bond strength is legible
+        # without having to compare thicknesses
+        c = theme_mod.ramp(min(float(valence) / 0.8, 1.0))
+        return c, c
+    return theme.element_color(element_a), theme.element_color(element_b)
 
-    atoms = structure.atoms_of_site(site_index)
-    if not atoms:
-        return
-    origin = structure.atoms[atoms[0]].cart
-    points = np.array([origin + c.vector for c in bonded], float)
 
+def _build_polyhedra(structure: Structure, results: list[SiteResult],
+                     scene: Scene, site_indices: list[int]) -> None:
+    """Convex hulls of the bonded ligands, for every requested site.
+
+    Every symmetry copy of a site gets its own polyhedron, not just the
+    representative -- a polyhedral view of a framework is the point, and one
+    polyhedron floating in a cell is not that.
+    """
+    verts: list[np.ndarray] = []
+    norms: list[np.ndarray] = []
+    for site_index in site_indices:
+        res = next((r for r in results if r.site_index == site_index), None)
+        if res is None or len(res.bonds) < 4:
+            continue
+        rep_atoms = structure.atoms_of_site(site_index)
+        if not rep_atoms:
+            continue
+        origin = structure.atoms[rep_atoms[0]].cart
+        offsets = [structure.atoms[a].cart - origin for a in rep_atoms]
+        base = np.array([origin + c.vector for c in res.bonds], float)
+        for off in offsets:
+            _hull_into(base + off, verts, norms)
+
+    scene.poly_vertices = (np.array(verts, np.float32) if verts
+                           else np.zeros((0, 3), np.float32))
+    scene.poly_normals = (np.array(norms, np.float32) if norms
+                          else np.zeros((0, 3), np.float32))
+
+
+def _hull_into(points: np.ndarray, verts: list, norms: list) -> None:
+    """Append one outward-oriented convex hull to the triangle lists."""
     try:
         from scipy.spatial import ConvexHull
 
         hull = ConvexHull(points)
     except Exception:
         return
-
     centroid = points.mean(axis=0)
-    verts, norms = [], []
     for simplex in hull.simplices:
         p, q, r = points[simplex[0]], points[simplex[1]], points[simplex[2]]
         n = np.cross(q - p, r - p)
         ln = np.linalg.norm(n)
         if ln < 1e-9:
             continue
-        n /= ln
+        n = n / ln
         if np.dot(n, (p + q + r) / 3.0 - centroid) < 0:
             p, q = q, p
             n = -n
         verts += [p, q, r]
         norms += [n, n, n]
-    scene.poly_vertices = np.array(verts, np.float32)
-    scene.poly_normals = np.array(norms, np.float32)
 
 
-def unit_cell_segments(structure: Structure) -> np.ndarray:
-    """The twelve edges of the unit cell, as (12, 2, 3) cartesian endpoints."""
+def unit_cell_segments(structure: Structure,
+                       cell_range: tuple[int, int, int] = (1, 1, 1)) -> np.ndarray:
+    """Unit-cell edges, as (n, 2, 3) cartesian endpoints.
+
+    With a cell range, every cell of the block is outlined rather than only the
+    enclosing box -- which is what makes it possible to see where one cell ends
+    and the next begins.
+    """
     orth = structure.cell.orth
+    nx, ny, nz = (max(1, int(n)) for n in cell_range)
     corners = np.array([[x, y, z] for x in (0, 1) for y in (0, 1) for z in (0, 1)],
                        float)
-    cart = (orth @ corners.T).T
     edges = []
-    for i in range(8):
-        for j in range(i + 1, 8):
-            # neighbours on the cube differ in exactly one coordinate
-            if int(np.abs(corners[i] - corners[j]).sum()) == 1:
-                edges.append([cart[i], cart[j]])
+    for ox in range(nx):
+        for oy in range(ny):
+            for oz in range(nz):
+                shifted = corners + np.array([ox, oy, oz], float)
+                cart = (orth @ shifted.T).T
+                for i in range(8):
+                    for j in range(i + 1, 8):
+                        # neighbours on a cube differ in exactly one coordinate
+                        if int(np.abs(corners[i] - corners[j]).sum()) == 1:
+                            edges.append([cart[i], cart[j]])
     return np.array(edges, np.float32)
 
 

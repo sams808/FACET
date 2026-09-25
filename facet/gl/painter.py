@@ -46,11 +46,28 @@ class PainterRenderer:
     def __init__(self):
         self.depth_cue = True
         self.fog_amount = 0.55
+        self.cell_color = QColor(110, 118, 134)
+        self.selection_color = QColor(255, 214, 92)
         self._scale = 1.0            # pixels per angstrom at the target plane
         self._distance = 1.0
         self._perspective = True
         self._near = 0.0
         self._far = 1.0
+
+    def apply_theme(self, theme) -> None:
+        """Adopt a theme's colours. Ambient occlusion and outlines have no
+        equivalent here and are simply absent."""
+        bg = QColor()
+        bg.setRgbF(*theme.background)
+        self.background = bg
+        cell = QColor()
+        cell.setRgbF(*theme.cell_color)
+        self.cell_color = cell
+        sel = QColor()
+        sel.setRgbF(*theme.selection_color)
+        self.selection_color = sel
+        self.fog_amount = float(theme.fog_amount)
+        self.depth_cue = theme.fog_amount > 0.0
 
     # -- entry point -------------------------------------------------------
     def render(self, painter: QPainter, scene: Scene, camera: Camera,
@@ -181,7 +198,7 @@ class PainterRenderer:
 
     def _cell_drawer(self, seg):
         def draw(painter: QPainter):
-            painter.setPen(QPen(QColor(110, 118, 134), 1.0))
+            painter.setPen(QPen(self.cell_color, 1.0))
             painter.drawLine(QPointF(seg[0, 0], seg[0, 1]),
                              QPointF(seg[1, 0], seg[1, 1]))
         return draw
@@ -194,5 +211,5 @@ class PainterRenderer:
             return
         r = max(4.0, self.radius_at(float(scene.atom_radius[index]), z))
         painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor(255, 214, 92), 2.0))
+        painter.setPen(QPen(self.selection_color, 2.0))
         painter.drawEllipse(QPointF(x, y), r + 4, r + 4)

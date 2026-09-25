@@ -40,6 +40,7 @@ class StructureView(QOpenGLWidget):
         self.camera = Camera()
         self.scene: Scene | None = None
         self.caps: caps_mod.Capabilities | None = None
+        self.theme = None
 
         self._renderer = None
         self._gl = None
@@ -55,8 +56,24 @@ class StructureView(QOpenGLWidget):
         self._status = ""
 
     # -- public API --------------------------------------------------------
+    def set_theme(self, theme) -> None:
+        """Adopt a theme. The scene must be rebuilt separately for the colour
+        mode and scales, which are baked into its vertex arrays."""
+        self.theme = theme
+        if self._renderer is not None:
+            self.makeCurrent()
+            try:
+                self._renderer.apply_theme(theme)
+            finally:
+                self.doneCurrent()
+        if self._fallback is not None:
+            self._fallback.apply_theme(theme)
+        self.update()
+
     def set_scene(self, scene: Scene, reframe: bool = True) -> None:
         self.scene = scene
+        if scene is not None and scene.theme is not None:
+            self.theme = scene.theme
         if reframe:
             self.camera.frame(scene.center, scene.radius)
         self._selected = None
@@ -155,6 +172,8 @@ class StructureView(QOpenGLWidget):
         self._gl, _ = caps_mod._load_functions(self.caps.major, self.caps.minor)
         try:
             self._renderer = Renderer(self._gl, self.caps)
+            if self.theme is not None:
+                self._renderer.apply_theme(self.theme)
             if self.scene is not None:
                 self._renderer.set_scene(self.scene)
         except (ShaderError, Exception) as exc:      # noqa: B014 - deliberate
@@ -167,6 +186,8 @@ class StructureView(QOpenGLWidget):
         self._failed = True
         self._renderer = None
         self._fallback = PainterRenderer()
+        if self.theme is not None:
+            self._fallback.apply_theme(self.theme)
         if self.caps is not None:
             self.caps.tier = caps_mod.Tier.BASIC
             self.caps.reason = reason
@@ -222,7 +243,9 @@ class StructureView(QOpenGLWidget):
             self._paint_status(painter)
 
     def _paint_placeholder(self, painter: QPainter) -> None:
-        painter.fillRect(self.rect(), QColor(22, 24, 28))
+        painter.fillRect(self.rect(), self._ink(self.theme.background
+                                                if self.theme
+                                                else (0.086, 0.094, 0.110)))
         painter.setPen(QColor(150, 155, 165))
         f = QFont(painter.font())
         f.setPointSizeF(f.pointSizeF() + 1)
@@ -241,7 +264,8 @@ class StructureView(QOpenGLWidget):
         f = QFont(painter.font())
         f.setPointSizeF(max(7.5, f.pointSizeF() - 0.5))
         painter.setFont(f)
-        painter.setPen(QColor(235, 238, 245))
+        painter.setPen(self._ink(self.theme.contrasting_ink() if self.theme
+                                 else (0.92, 0.93, 0.96)))
 
         order = np.argsort(px[:, 2])[::-1]     # far to near
         drawn: list[tuple[float, float]] = []
@@ -266,12 +290,14 @@ class StructureView(QOpenGLWidget):
         if px[2] >= 0:
             return
         r = self._screen_radius(s.atom_position[i], s.atom_radius[i])
-        pen = QPen(QColor(255, 214, 92), 2.0)
+        pen = QPen(self._ink(self.theme.selection_color if self.theme
+                            else (1.0, 0.84, 0.36)), 2.0)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(QPoint(int(px[0]), int(px[1])),
                             int(r + 4), int(r + 4))
-        painter.setPen(QColor(255, 214, 92))
+        painter.setPen(self._ink(self.theme.selection_color if self.theme
+                                 else (1.0, 0.84, 0.36)))
         painter.drawText(QPoint(int(px[0]) + int(r) + 8, int(px[1]) - int(r) - 2),
                          s.atom_label[i])
 
@@ -300,8 +326,15 @@ class StructureView(QOpenGLWidget):
         for p in px:
             painter.drawEllipse(QPoint(int(p[0]), int(p[1])), 3, 3)
 
+    @staticmethod
+    def _ink(rgb) -> QColor:
+        c = QColor()
+        c.setRgbF(float(rgb[0]), float(rgb[1]), float(rgb[2]))
+        return c
+
     def _paint_status(self, painter: QPainter) -> None:
-        painter.setPen(QColor(210, 216, 226))
+        painter.setPen(self._ink(self.theme.contrasting_ink() if self.theme
+                                 else (0.82, 0.85, 0.89)))
         rect = self.rect().adjusted(10, 0, -10, -8)
         painter.drawText(rect, Qt.AlignLeft | Qt.AlignBottom, self._status)
 

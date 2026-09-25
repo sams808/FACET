@@ -70,8 +70,14 @@ class Renderer:
         self.use_ssao = caps.supports_ssao
         self.use_outline = caps.tier is Tier.FULL
         self.background = np.array([0.086, 0.094, 0.110], np.float32)
+        self.cell_color = np.array([0.45, 0.48, 0.55], np.float32)
         self.fog_amount = 0.65
         self.supersample = 1
+        # what the tier allows, kept separate from what the theme asks for, so
+        # a theme requesting ambient occlusion on a software renderer is
+        # honoured as far as it can be rather than silently ignored
+        self._ssao_available = caps.supports_ssao
+        self._outline_available = caps.tier is Tier.FULL
 
         self._programs: dict[str, QOpenGLShaderProgram] = {}
         self._vaos: dict[str, QOpenGLVertexArrayObject] = {}
@@ -90,6 +96,21 @@ class Renderer:
 
         self._build_programs()
         self._build_quad()
+
+    # -- theme -------------------------------------------------------------
+    def apply_theme(self, theme) -> None:
+        """Adopt a theme's presentation settings.
+
+        Only the settings the tier can honour are taken. A theme asking for
+        ambient occlusion on the software renderer keeps the request -- so that
+        moving the same theme to a machine with a GPU turns it on -- but does
+        not enable a pass that would make interaction unusable here.
+        """
+        self.background = np.array(theme.background, np.float32)
+        self.cell_color = np.array(theme.cell_color, np.float32)
+        self.fog_amount = float(theme.fog_amount)
+        self.use_ssao = bool(theme.ambient_occlusion) and self._ssao_available
+        self.use_outline = bool(theme.outlines) and self._outline_available
 
     # -- setup -------------------------------------------------------------
     def _build_programs(self) -> None:
@@ -305,7 +326,7 @@ class Renderer:
         p.bind()
         self._set_matrix(p, "uView", view)
         self._set_matrix(p, "uProj", proj)
-        self.gl.glUniform3f(p.uniformLocation("uColor"), 0.45, 0.48, 0.55)
+        self.gl.glUniform3f(p.uniformLocation("uColor"), *self.cell_color)
         self.gl.glUniform1f(p.uniformLocation("uAlpha"), 0.85)
         self._vaos["line"].bind()
         self.gl.glDrawArrays(GL_LINES, 0, self._counts["line"])
