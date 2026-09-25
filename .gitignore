@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# FACET's own build output and user data
+/licenses/
+# proto renders are kept: they are the evidence the renderer works
+*.spec
+facet_settings.json

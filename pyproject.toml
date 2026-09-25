@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "facet"
+version = "0.1.0"
+description = "Coordination analysis from crystal structure files, cut by bond valence rather than by distance"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Sam Souda" }]
+keywords = ["crystallography", "bond valence", "coordination number", "CIF"]
+
+# Kept deliberately small. gemmi parses, spglib supplies symmetry, numpy and
+# scipy do the arithmetic, PySide6 is the interface. pymatgen is NOT a hard
+# dependency: it is imported lazily and only for the O'Keeffe-Brese parameter
+# estimate and the comparison coordination-number definitions, both of which
+# degrade gracefully when it is absent.
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "gemmi>=0.6",
+    "spglib>=2.0",
+    "PySide6>=6.6",
+]
+
+[project.optional-dependencies]
+extra = ["pymatgen>=2024.1"]        # estimated parameters, comparison CN methods
+report = ["pandas>=2.0", "matplotlib>=3.8"]
+dev = ["pytest>=8.0", "pytest-qt>=4.4"]
+
+[project.gui-scripts]
+facet = "facet.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["facet*"]
+
+[tool.setuptools.package-data]
+facet = ["data/*.csv", "data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:pymatgen.*",
+    "ignore::DeprecationWarning:spglib.*",
+]
