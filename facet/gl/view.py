@@ -13,12 +13,14 @@ worse than one that draws flatly.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtCore import QPoint, QPointF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
+from PySide6.QtOpenGL import QOpenGLPaintDevice
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
 
 from . import caps as caps_mod
+from . import labels as labels_mod
 from .camera import Camera
 from .scene import Scene, Style
 
@@ -30,6 +32,7 @@ class StructureView(QOpenGLWidget):
     sitePicked = Signal(int)            # site index, or -1
     measured = Signal(str)              # human-readable measurement
     ready = Signal(object)              # Capabilities, once the context exists
+    labelsChanged = Signal(object)      # LabelSettings, after a keyboard cycle
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -51,9 +54,10 @@ class StructureView(QOpenGLWidget):
         self._button = Qt.NoButton
         self._selected: int | None = None
         self._measure_chain: list[int] = []
-        self._show_labels = False
-        self._label_elements_only = True
         self._status = ""
+        self.labels = labels_mod.LabelSettings()
+        self.structure = None
+        self.results = None
 
     # -- public API --------------------------------------------------------
     def set_theme(self, theme) -> None:
@@ -104,9 +108,20 @@ class StructureView(QOpenGLWidget):
                 self.doneCurrent()
         self.update()
 
-    def set_labels(self, on: bool, elements_only: bool = True) -> None:
-        self._show_labels = bool(on)
-        self._label_elements_only = bool(elements_only)
+    def set_labels(self, settings: labels_mod.LabelSettings) -> None:
+        """Adopt a whole label configuration."""
+        self.labels = settings
+        self.update()
+
+    def set_label_context(self, structure=None, results=None) -> None:
+        """Supply what the labels need beyond the scene.
+
+        Wyckoff letters, oxidation states, coordination numbers and phi live on
+        the structure and its analysis, not on the drawable scene, so labelling
+        by them needs both.
+        """
+        self.structure = structure
+        self.results = results
         self.update()
 
     def set_projection(self, orthographic: bool) -> None:
@@ -197,22 +212,47 @@ class StructureView(QOpenGLWidget):
             self._renderer.resize(w, h)
 
     def paintGL(self) -> None:
+        """GL first, then the label and measurement overlay.
+
+        The overlay is painted onto a **QOpenGLPaintDevice**, not onto the
+        widget. This is not a stylistic choice, and it cost an afternoon:
+
+        * A QPainter opened on the widget from ``paintEvent`` targets a surface
+          that is discarded. Nothing appears, and no error is raised.
+        * A QPainter opened on the widget from ``paintGL`` works only while the
+          renderer has not bound a framebuffer of its own. FACET composites
+          straight into the widget's framebuffer, which leaves Qt's own
+          tracking of the bound framebuffer stale, and QPainter then draws into
+          nothing -- again silently.
+        * ``QOpenGLFramebufferObject.bindDefault()`` does not rescue it: it
+          binds framebuffer 0, and a QOpenGLWidget's default framebuffer is its
+          own, not 0.
+
+        A QOpenGLPaintDevice draws into whatever framebuffer is currently
+        bound, which is exactly the one the GL output went to. It is the
+        supported way to paint over a custom framebuffer render.
+        """
+        ratio = self.devicePixelRatioF()
+        w = max(1, int(self.width() * ratio))
+        h = max(1, int(self.height() * ratio))
+
         if self._renderer is not None and self.scene is not None:
-            ratio = self.devicePixelRatioF()
-            w = max(1, int(self.width() * ratio))
-            h = max(1, int(self.height() * ratio))
             self._renderer.target_fbo = self.defaultFramebufferObject()
             try:
                 self._renderer.render(self.camera, w, h)
             finally:
                 self._renderer.target_fbo = None
+            # and hand the context back clean, or the glyphs fail the depth
+            # test left over from the geometry pass
+            self._renderer.reset_state()
 
-    def paintEvent(self, event) -> None:
-        # QOpenGLWidget runs paintGL from inside paintEvent; calling the base
-        # first draws the GL content, then the QPainter overlay goes on top.
         if self._renderer is not None:
-            super().paintEvent(event)
-        painter = QPainter(self)
+            device = QOpenGLPaintDevice(QSize(w, h))
+            device.setDevicePixelRatio(ratio)
+            painter = QPainter(device)
+        else:
+            painter = QPainter(self)
+
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         if self._renderer is None:
@@ -233,8 +273,7 @@ class StructureView(QOpenGLWidget):
         if self.scene is None:
             self._paint_placeholder(painter)
             return
-        if self._show_labels:
-            self._paint_labels(painter)
+        self._paint_labels(painter)
         if self._selected is not None:
             self._paint_selection(painter)
         if len(self._measure_chain) >= 2:
@@ -257,29 +296,76 @@ class StructureView(QOpenGLWidget):
         return self.camera.project(positions, self.width(), self.height())
 
     def _paint_labels(self, painter: QPainter) -> None:
+        """Atom, bond, axis and measurement labels, de-cluttered and haloed."""
         s = self.scene
-        if s.n_atoms == 0:
+        settings = self.labels
+        if s is None or s.n_atoms == 0:
             return
-        px = self._visible(s.atom_position)
-        f = QFont(painter.font())
-        f.setPointSizeF(max(7.5, f.pointSizeF() - 0.5))
-        painter.setFont(f)
-        painter.setPen(self._ink(self.theme.contrasting_ink() if self.theme
-                                 else (0.92, 0.93, 0.96)))
+        if not settings.any_enabled() and not (
+                settings.show_measurements and len(self._measure_chain) >= 2):
+            return
 
-        order = np.argsort(px[:, 2])[::-1]     # far to near
-        drawn: list[tuple[float, float]] = []
-        for i in order:
-            x, y, z = px[i]
-            if z >= 0 or not (0 <= x <= self.width() and 0 <= y <= self.height()):
-                continue
-            # cheap de-clutter: skip a label that would sit on another
-            if any((x - dx) ** 2 + (y - dy) ** 2 < 400 for dx, dy in drawn):
-                continue
-            drawn.append((x, y))
-            text = (s.atom_element[i] if self._label_elements_only
-                    else s.atom_label[i])
-            painter.drawText(QPoint(int(x) + 6, int(y) - 6), text)
+        font = QFont(painter.font())
+        font.setPointSizeF(max(6.0, settings.font_points))
+        font.setBold(settings.bold)
+        painter.setFont(font)
+        metrics = QFontMetricsF(font)
+
+        def measure(text: str) -> tuple[float, float]:
+            return metrics.horizontalAdvance(text), metrics.height()
+
+        placed = labels_mod.build(
+            s, self.camera, settings, width=self.width(), height=self.height(),
+            measure=measure, results=self.results, structure=self.structure,
+            selected_site=self._selected_site())
+
+        if settings.show_measurements and len(self._measure_chain) >= 2:
+            placed += labels_mod.measurement_labels(
+                s, self.camera, self._measure_chain,
+                width=self.width(), height=self.height(),
+                decimals=settings.decimals)
+
+        base = (settings.color if settings.color is not None
+                else (self.theme.contrasting_ink() if self.theme
+                      else (0.92, 0.93, 0.96)))
+        ink = self._ink(base)
+        halo = self._halo_color()
+
+        for label in placed:
+            colour = ink
+            if label.kind == "measurement":
+                colour = self._ink(self.theme.selection_color if self.theme
+                                   else (1.0, 0.84, 0.36))
+            elif label.kind == "bond" and not label.emphasis:
+                colour = self._ink(self.theme.subthreshold_color if self.theme
+                                   else (0.62, 0.64, 0.68))
+            self._draw_haloed(painter, label.text, label.x, label.y,
+                              colour, halo, settings.halo)
+
+    def _halo_color(self) -> QColor:
+        """A contrasting outline, so text reads over an atom, the background or
+        a transparent polyhedron without having to know which."""
+        if self.theme is not None and self.theme.is_light_background:
+            return QColor(255, 255, 255, 215)
+        return QColor(0, 0, 0, 205)
+
+    @staticmethod
+    def _draw_haloed(painter: QPainter, text: str, x: float, y: float,
+                     colour: QColor, halo: QColor, enabled: bool) -> None:
+        if enabled:
+            painter.setPen(halo)
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1),
+                           (-1, -1), (1, -1), (-1, 1), (1, 1)):
+                painter.drawText(QPointF(x + dx, y + dy), text)
+        painter.setPen(colour)
+        painter.drawText(QPointF(x, y), text)
+
+    def _selected_site(self) -> int | None:
+        if self._selected is None or self.scene is None:
+            return None
+        if self._selected >= self.scene.n_atoms:
+            return None
+        return int(self.scene.atom_site[self._selected])
 
     def _paint_selection(self, painter: QPainter) -> None:
         s = self.scene
@@ -323,8 +409,8 @@ class StructureView(QOpenGLWidget):
         painter.setPen(pen)
         for a, b in zip(px[:-1], px[1:]):
             painter.drawLine(int(a[0]), int(a[1]), int(b[0]), int(b[1]))
-        for p in px:
-            painter.drawEllipse(QPoint(int(p[0]), int(p[1])), 3, 3)
+        for point in px:
+            painter.drawEllipse(QPoint(int(point[0]), int(point[1])), 3, 3)
 
     @staticmethod
     def _ink(rgb) -> QColor:
@@ -384,7 +470,13 @@ class StructureView(QOpenGLWidget):
         if key == Qt.Key_R:
             self.reset_view()
         elif key == Qt.Key_L:
-            self.set_labels(not self._show_labels, self._label_elements_only)
+            # cycle through the atom label kinds, so L keeps working as the
+            # quick "show me what these are" key
+            kinds = list(labels_mod.AtomLabel)
+            i = kinds.index(self.labels.atom)
+            self.labels.atom = kinds[(i + 1) % len(kinds)]
+            self.labelsChanged.emit(self.labels)
+            self.update()
         elif key == Qt.Key_O:
             self.set_projection(not self.camera.orthographic)
         elif key == Qt.Key_Escape:

@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import bv, cif, coordination, theme as theme_mod
+from ..gl.labels import AtomLabel, BondLabel, LabelScope, LabelSettings
 from ..gl.scene import Style, build_scene
 from ..gl.view import StructureView
 from ..version import NAME, __version__
@@ -63,12 +64,14 @@ class PreviewWindow(QMainWindow):
         self.v_bond = bv.V_BOND_DEFAULT
         self.theme = theme_mod.Theme()
         self.poly_mode = PolyhedraMode.SELECTED
+        self.labels = LabelSettings()
 
         self.view = StructureView()
         self.view.set_theme(self.theme)
         self.view.sitePicked.connect(self._on_site_picked)
         self.view.measured.connect(lambda t: self.statusBar().showMessage(t, 9000))
         self.view.ready.connect(self._on_ready)
+        self.view.labelsChanged.connect(self._on_labels_cycled)
 
         self.explorer = CutoffExplorer()
         self.explorer.set_theme(self.theme)
@@ -164,10 +167,19 @@ class PreviewWindow(QMainWindow):
         self.cell_check.toggled.connect(lambda _=False: self._rebuild())
         row.addWidget(self.cell_check)
 
-        self.label_check = QCheckBox("Labels")
-        self.label_check.toggled.connect(
-            lambda on: self.view.set_labels(on, elements_only=True))
-        row.addWidget(self.label_check)
+        row.addWidget(QLabel("Label atoms"))
+        self.atom_label_box = QComboBox()
+        for kind in AtomLabel:
+            self.atom_label_box.addItem(kind.value, kind)
+        self.atom_label_box.activated.connect(self._on_labels)
+        row.addWidget(self.atom_label_box)
+
+        row.addWidget(QLabel("bonds"))
+        self.bond_label_box = QComboBox()
+        for kind in BondLabel:
+            self.bond_label_box.addItem(kind.value, kind)
+        self.bond_label_box.activated.connect(self._on_labels)
+        row.addWidget(self.bond_label_box)
 
         self.ortho_check = QCheckBox("Orthographic")
         self.ortho_check.toggled.connect(self.view.set_projection)
@@ -217,7 +229,8 @@ class PreviewWindow(QMainWindow):
 
     def _set_enabled(self, on: bool) -> None:
         for w in (self.style_box, self.poly_box, self.cell_check,
-                  self.label_check, self.ortho_check, *self.range_boxes):
+                  self.atom_label_box, self.bond_label_box,
+                  self.ortho_check, *self.range_boxes):
             w.setEnabled(on)
 
     # -- drag and drop -----------------------------------------------------
@@ -303,6 +316,7 @@ class PreviewWindow(QMainWindow):
             cell_range=cell_range, theme=self.theme)
         self.view.set_scene(self.scene, reframe=reframe)
         self.view.set_theme(self.theme)
+        self.view.set_label_context(self.structure, self.results)
         self.explorer.set_result(self._current_result())
         self.explorer.set_threshold(self.v_bond)
         self._update_analysis()
@@ -336,6 +350,18 @@ class PreviewWindow(QMainWindow):
         if 0 <= row < len(getattr(self, "_rows", [])):
             self.site_index = self._rows[row]
             self._rebuild()
+
+    def _on_labels(self) -> None:
+        self.labels.atom = self.atom_label_box.currentData()
+        self.labels.bond = self.bond_label_box.currentData()
+        self.view.set_labels(self.labels)
+
+    def _on_labels_cycled(self, settings) -> None:
+        """The viewport cycled the atom label kind with the L key."""
+        self.labels = settings
+        i = self.atom_label_box.findData(settings.atom)
+        if i >= 0:
+            self.atom_label_box.setCurrentIndex(i)
 
     def _on_poly_mode(self) -> None:
         self.poly_mode = self.poly_box.currentData()

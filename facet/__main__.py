@@ -3,7 +3,7 @@ import sys
 
 
 def main() -> int:
-    from facet.ui.preview import main as run
+    from facet.ui.app import main as run
 
     return run(sys.argv)
 

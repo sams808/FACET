@@ -417,6 +417,34 @@ class Renderer:
         if self.target_fbo is None:
             self._composite.release()
 
+    def reset_state(self) -> None:
+        """Hand the context back in a state QPainter can draw into.
+
+        QPainter has its own OpenGL paint engine, and it assumes a clean
+        context. Left as the geometry pass leaves it -- depth test on, a custom
+        program bound, a vertex array bound -- every glyph QPainter draws fails
+        the depth test against a buffer already full of near values. Nothing is
+        drawn, no GL error is raised, and the overlay simply never appears.
+        """
+        gl = self.gl
+        # Note: QOpenGLFramebufferObject.bindDefault() is NOT wanted here. It
+        # binds framebuffer 0, and a QOpenGLWidget's default framebuffer is its
+        # own rather than 0, so calling it would send the overlay to a surface
+        # that is never shown. The overlay uses a QOpenGLPaintDevice instead,
+        # which draws into whatever is currently bound.
+        try:
+            gl.glDisable(GL_DEPTH_TEST)
+            gl.glDisable(GL_BLEND)
+            gl.glDisable(GL_CULL_FACE)
+            gl.glDepthMask(True)
+            gl.glUseProgram(0)
+            gl.glBindVertexArray(0)
+            gl.glActiveTexture(GL_TEXTURE0)
+            gl.glBindTexture(GL_TEXTURE_2D, 0)
+        except Exception:
+            # a tier that cannot do one of these is no worse off than before
+            pass
+
     def _draw_quad(self) -> None:
         self._vaos["quad"].bind()
         self.gl.glDrawArrays(GL_TRIANGLES, 0, self._counts["quad"])

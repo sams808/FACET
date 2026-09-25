@@ -12,3 +12,10 @@ venv/
 # proto renders are kept: they are the evidence the renderer works
 *.spec
 facet_settings.json
+
+# Built binaries. dist/README.md is tracked; the artefacts are not --
+# FACET-Setup-0.1.0.exe is 146 MB and GitHub rejects anything over 100 MB.
+# Binaries belong in a GitHub Release, which allows 2 GB per file.
+/dist/*
+!/dist/README.md
+/assets/*.ico
