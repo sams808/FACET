@@ -84,6 +84,8 @@ Last updated at the end of Phase 4.
 | Polyhedral distortion indices | ✓ | ✓ | **done** | Baur, bond-angle variance, quadratic elongation, volume |
 | Effective coordination number | – | ✓ | **done** | Hoppe ECoN |
 | Bond-valence sum | – | ✓ | **done** | with parameter provenance |
+| Bond-valence map | – | ✓ | **partial** | the grid is computed; the isosurface that draws it is Phase 9 |
+| Bond strain index | – | – | **done** | |
 | Void / free-volume analysis | ✓ | ✓ | **partial** | the void cone half-angle; no cavity mapping |
 | Centroid and eccentricity | ✓ | ✓ | **done** | |
 
@@ -138,7 +140,7 @@ accepted as a later phase.
 | Feature | CM | VESTA | FACET |
 |---|:--:|:--:|---|
 | Powder pattern simulation | ✓ (CrystalDiffract) | ✓ | **planned** |
-| d-spacing and hkl table | ✓ | ✓ | **planned** |
+| d-spacing and hkl table | ✓ | ✓ | **done** (see §7) |
 | Overlay on a measured pattern | ✓ | – | **planned** |
 | Single-crystal / reciprocal lattice | ✓ (SingleCrystal) | – | out of scope |
 | Electron diffraction | ✓ | – | out of scope |
