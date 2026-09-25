@@ -152,12 +152,12 @@ accepted as a later phase.
 | Format | Read | Write | Note |
 |---|:--:|:--:|---|
 | CIF | **done** | **done** | reads multi-block with esds; writes P1 with the analysis as comments |
-| VASP POSCAR / CONTCAR | **planned** | **done** | |
+| VASP POSCAR / CONTCAR | **done** | **done** | VASP 4 and 5 layouts, selective dynamics, negative scale |
 | XYZ | **planned** | **done** | extended XYZ with `Lattice=` |
-| VESTA `.vesta` | **planned** | **done** | bond rules written at the distance the valence threshold corresponds to |
-| CrystalMaker `.cmdf` | **planned** | – | format is not openly documented |
-| SHELX `.res` / `.ins` | **planned** | – | |
-| PDB / mmCIF | **planned** | – | gemmi already parses both |
+| VESTA `.vesta` | **done** | **done** | reads CELLP and STRUC; writes bond rules at the distance the valence threshold corresponds to |
+| CrystalMaker | **partial** | – | `.cmtx` text is read; `.cmdf` is an undocumented binary and is refused with a way forward |
+| SHELX `.res` / `.ins` | **done** | – | applies LATT and SYMM, so the analysis is not run on the asymmetric unit alone |
+| PDB / mmCIF | **done** | – | via gemmi; invents a box when the file has no real cell |
 | FEFF input | – | **done** | absorber first at the origin; distances asserted to match the analysis |
 | CSV / XLSX of results | – | **done** | every file carries the parameter set and both thresholds |
 | PNG image | – | **done** | supersampled, any resolution |

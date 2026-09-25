@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import (bv, cif, coordination, exporters, project as project_mod,
-                    theme as theme_mod)
+                    readers, theme as theme_mod)
 from ..gl.labels import AtomLabel, BondLabel, LabelScope, LabelSettings
 from ..gl.scene import Style, build_scene, merge_scenes
 from ..gl.view import StructureView
@@ -331,30 +331,37 @@ class PreviewWindow(QMainWindow):
             w.setEnabled(on)
 
     # -- drag and drop -----------------------------------------------------
-    def dragEnterEvent(self, event) -> None:
-        """Accept a dropped structure file.
+    _DROPPABLE = (".cif", ".mcif", ".vasp", ".xyz", ".extxyz", ".vesta",
+                  ".res", ".ins", ".pdb", ".ent", ".cmtx", ".cmdf")
 
-        The shortest path from "someone sent me a CIF" to an answer, and the
+    def _droppable(self, path: str) -> bool:
+        lower = path.lower()
+        name = Path(path).name.upper()
+        return (lower.endswith(self._DROPPABLE)
+                or name.startswith(("POSCAR", "CONTCAR")))
+
+    def dragEnterEvent(self, event) -> None:
+        """Accept dropped structure files, of any format FACET reads.
+
+        The shortest path from "someone sent me a file" to an answer, and the
         one a person who does not write code will reach for first.
         """
         if event.mimeData().hasUrls() and any(
-                u.toLocalFile().lower().endswith((".cif", ".mcif"))
+                self._droppable(u.toLocalFile())
                 for u in event.mimeData().urls()):
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:
-        for url in event.mimeData().urls():
-            path = url.toLocalFile()
-            if path.lower().endswith((".cif", ".mcif")):
-                self.load(path)
-                event.acceptProposedAction()
-                return
+        paths = [u.toLocalFile() for u in event.mimeData().urls()
+                 if self._droppable(u.toLocalFile())]
+        if paths:
+            self.load_many(paths)
+            event.acceptProposedAction()
 
     # -- loading -----------------------------------------------------------
     def _choose_file(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Open structures", "",
-            "Crystal structures (*.cif);;All files (*)")
+            self, "Open structures", "", readers.FILE_FILTER)
         if paths:
             self.load_many(paths)
 
@@ -362,10 +369,20 @@ class PreviewWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Open a folder of CIFs")
         if not folder:
             return
-        paths = sorted(str(p) for p in Path(folder).glob("*.cif"))
+        patterns = ("*.cif", "*.mcif", "POSCAR*", "CONTCAR*", "*.vasp",
+                    "*.xyz", "*.extxyz", "*.vesta", "*.res", "*.ins",
+                    "*.pdb", "*.cmtx")
+        found: list[str] = []
+        for pattern in patterns:
+            found += [str(p) for p in Path(folder).glob(pattern)]
+        paths = sorted(set(found))
         if not paths:
-            QMessageBox.information(self, "Nothing to open",
-                                    f"No .cif files in {folder}")
+            QMessageBox.information(
+                self, "Nothing to open",
+                f"No structure files in {folder}.
+
+FACET reads CIF, POSCAR, "
+                "XYZ, .vesta, SHELX .res/.ins, PDB and CrystalMaker .cmtx.")
             return
         self.load_many(paths)
 

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import bv, cif, coordination
+from . import bv, cif, coordination, readers
 from .structure import Structure
 
 
@@ -118,7 +118,8 @@ class Project:
         return entry
 
     def add_file(self, path: str | Path) -> Entry:
-        return self.add(cif.read(path), str(path))
+        """Load any format FACET reads, chosen by extension then by content."""
+        return self.add(readers.read(path), str(path))
 
     def add_files(self, paths) -> tuple[list[Entry], list[tuple[str, str]]]:
         """Load many files. Returns the entries added and the ones that failed.
