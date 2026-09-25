@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QDoubleSpinBox,
     QSpinBox,
     QSplitter,
     QStatusBar,
@@ -36,13 +37,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import bv, cif, coordination, theme as theme_mod
+from ..core import (bv, cif, coordination, exporters, project as project_mod,
+                    theme as theme_mod)
 from ..gl.labels import AtomLabel, BondLabel, LabelScope, LabelSettings
-from ..gl.scene import Style, build_scene
+from ..gl.scene import Style, build_scene, merge_scenes
 from ..gl.view import StructureView
 from ..version import NAME, __version__
 from .cutoff_explorer import CutoffExplorer
+from .structure_list import StructureList
 from .theme_panel import ThemePanel
+from .utilities_panel import UtilitiesPanel
 
 
 class PolyhedraMode:
@@ -57,11 +61,8 @@ class PreviewWindow(QMainWindow):
         self.setWindowTitle(f"{NAME} {__version__}")
         self.resize(1420, 900)
 
-        self.structure = None
-        self.results: list[coordination.SiteResult] = []
+        self.project = project_mod.Project()
         self.scene = None
-        self.site_index: int | None = None
-        self.v_bond = bv.V_BOND_DEFAULT
         self.theme = theme_mod.Theme()
         self.poly_mode = PolyhedraMode.SELECTED
         self.labels = LabelSettings()
@@ -88,6 +89,16 @@ class PreviewWindow(QMainWindow):
         self.site_list = QListWidget()
         self.site_list.currentRowChanged.connect(self._on_site_row)
 
+        self.structure_panel = StructureList()
+        self.structure_panel.set_project(self.project)
+        self.structure_panel.activeChanged.connect(self._on_structure_row)
+        self.structure_panel.visibilityChanged.connect(
+            lambda: self._rebuild(reframe=True))
+        self.structure_panel.overlayChanged.connect(self._on_overlay)
+        self.structure_panel.removeRequested.connect(self._on_remove)
+
+        self.utilities = UtilitiesPanel()
+
         self._build_layout()
         self._build_menu()
         self.setStatusBar(QStatusBar())
@@ -97,19 +108,57 @@ class PreviewWindow(QMainWindow):
         if path:
             self.load(path)
 
+    # -- the active structure ----------------------------------------------
+    @property
+    def structure(self):
+        entry = self.project.current
+        return entry.structure if entry else None
+
+    @property
+    def results(self):
+        entry = self.project.current
+        return self.project.results_for(entry) if entry else []
+
+    @property
+    def site_index(self):
+        entry = self.project.current
+        return entry.selected_site if entry else None
+
+    @site_index.setter
+    def site_index(self, value):
+        entry = self.project.current
+        if entry is not None:
+            entry.selected_site = value
+
+    @property
+    def v_bond(self) -> float:
+        return self.project.v_bond
+
+    @v_bond.setter
+    def v_bond(self, value: float) -> None:
+        self.project.set_bond_threshold(value)
+
     # -- layout ------------------------------------------------------------
     def _build_layout(self) -> None:
+        structures = QDockWidget("Structures", self)
+        structures.setWidget(self.structure_panel)
+        structures.setFeatures(QDockWidget.DockWidgetMovable
+                               | QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.LeftDockWidgetArea, structures)
+        structures.setMinimumWidth(210)
+
         sites = QDockWidget("Sites", self)
         sites.setWidget(self.site_list)
         sites.setFeatures(QDockWidget.DockWidgetMovable
                           | QDockWidget.DockWidgetFloatable)
         self.addDockWidget(Qt.LeftDockWidgetArea, sites)
-        sites.setMinimumWidth(190)
+        sites.setMinimumWidth(210)
 
         tabs = QTabWidget()
         tabs.addTab(self.analysis, "Site")
+        tabs.addTab(self.utilities, "Utilities")
         tabs.addTab(self.theme_panel, "Appearance")
-        tabs.setMinimumWidth(380)
+        tabs.setMinimumWidth(400)
 
         centre = QWidget()
         col = QVBoxLayout(centre)
@@ -186,6 +235,22 @@ class PreviewWindow(QMainWindow):
         row.addWidget(self.ortho_check)
 
         row.addStretch(1)
+        # The search radius, expressed as the valence below which a contact is
+        # not tabulated at all. Unlike the bond threshold this re-runs the
+        # neighbour search, so it is a spin box rather than something to drag.
+        row.addWidget(QLabel("Tabulate above"))
+        self.list_threshold = QDoubleSpinBox()
+        self.list_threshold.setDecimals(4)
+        self.list_threshold.setRange(0.0005, 0.2)
+        self.list_threshold.setSingleStep(0.005)
+        self.list_threshold.setValue(bv.V_LIST_DEFAULT)
+        self.list_threshold.setSuffix(" v.u.")
+        self.list_threshold.setToolTip(
+            "Contacts weaker than this are not searched for at all.\n"
+            "Widening it re-runs the neighbour search; the bond threshold "
+            "below only classifies what was found.")
+        self.list_threshold.valueChanged.connect(self._on_list_threshold)
+        row.addWidget(self.list_threshold)
         return bar
 
     def _build_menu(self) -> None:
@@ -201,9 +266,41 @@ class PreviewWindow(QMainWindow):
         quit_.setShortcut(QKeySequence.Quit)
         quit_.triggered.connect(self.close)
 
+        openfolder = QAction("Open a &folder of CIFs…", self)
+        openfolder.triggered.connect(self._choose_folder)
+
         m = self.menuBar().addMenu("&File")
         m.addAction(openf)
+        m.addAction(openfolder)
+        m.addSeparator()
         m.addAction(save)
+
+        export = m.addMenu("&Export")
+        for label, handler in (
+                ("Site table (&CSV)…", self._export_sites_csv),
+                ("Contact table (CSV)…", self._export_contacts_csv),
+                ("Both tables (&XLSX)…", self._export_xlsx),
+                (None, None),
+                ("Structure as CI&F…", self._export_cif),
+                ("Structure as &POSCAR…", self._export_poscar),
+                ("Structure as X&YZ…", self._export_xyz),
+                ("Structure as &VESTA…", self._export_vesta),
+                (None, None),
+                ("FEFF input for this &site…", self._export_feff)):
+            if label is None:
+                export.addSeparator()
+                continue
+            action = QAction(label, self)
+            action.triggered.connect(handler)
+            export.addAction(action)
+
+        m.addSeparator()
+        session_save = QAction("Save sessio&n…", self)
+        session_save.triggered.connect(self._save_session)
+        session_open = QAction("Open session…", self)
+        session_open.triggered.connect(self._open_session)
+        m.addAction(session_save)
+        m.addAction(session_open)
         m.addSeparator()
         m.addAction(quit_)
 
@@ -230,7 +327,7 @@ class PreviewWindow(QMainWindow):
     def _set_enabled(self, on: bool) -> None:
         for w in (self.style_box, self.poly_box, self.cell_check,
                   self.atom_label_box, self.bond_label_box,
-                  self.ortho_check, *self.range_boxes):
+                  self.ortho_check, self.list_threshold, *self.range_boxes):
             w.setEnabled(on)
 
     # -- drag and drop -----------------------------------------------------
@@ -255,33 +352,64 @@ class PreviewWindow(QMainWindow):
 
     # -- loading -----------------------------------------------------------
     def _choose_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open a structure", "",
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Open structures", "",
             "Crystal structures (*.cif);;All files (*)")
-        if path:
-            self.load(path)
+        if paths:
+            self.load_many(paths)
+
+    def _choose_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Open a folder of CIFs")
+        if not folder:
+            return
+        paths = sorted(str(p) for p in Path(folder).glob("*.cif"))
+        if not paths:
+            QMessageBox.information(self, "Nothing to open",
+                                    f"No .cif files in {folder}")
+            return
+        self.load_many(paths)
+
+    def load_many(self, paths) -> None:
+        """Load a set of files. Failures are listed, not raised.
+
+        A folder of downloaded CIFs reliably contains a few that will not
+        parse; the rest still open.
+        """
+        added, failed = self.project.add_files(paths)
+        self.structure_panel.refresh()
+        if added:
+            self.project.set_active(len(self.project) - len(added))
+            self._after_load(reframe=True)
+        if failed:
+            detail = "\n".join(f"{Path(p).name}: {why}" for p, why in failed)
+            QMessageBox.warning(
+                self, "Some files could not be read",
+                f"{len(added)} loaded, {len(failed)} skipped.\n\n{detail}")
 
     def load(self, path: str) -> None:
-        try:
-            structure = cif.read(path)
-            results = coordination.analyse_structure(structure)
-        except Exception as exc:
-            QMessageBox.warning(self, "Could not read the structure",
-                                f"{Path(path).name}\n\n{exc}")
-            return
+        self.load_many([path])
 
-        self.structure = structure
-        self.results = results
-        self.site_index = results[0].site_index if results else None
-        self.theme_panel.set_elements(structure.elements_present)
+    def _after_load(self, reframe: bool = False) -> None:
+        entry = self.project.current
+        if entry is None:
+            return
+        results = self.project.results_for(entry)
+        if entry.selected_site is None and results:
+            entry.selected_site = results[0].site_index
+        elements = sorted({e for x in self.project for e in
+                           x.structure.elements_present})
+        self.theme_panel.set_elements(elements)
         self._fill_site_list()
+        self.structure_panel.refresh()
         self._set_enabled(True)
-        self._rebuild(reframe=True)
+        self._rebuild(reframe=reframe)
         self.setWindowTitle(
-            f"{NAME} {__version__} — {Path(path).name}  ·  "
-            f"{structure.spacegroup_hm or 'unknown symmetry'}")
-        if structure.notes:
-            self.statusBar().showMessage(structure.notes[0], 14000)
+            f"{NAME} {__version__} — {entry.name}  ·  "
+            f"{entry.structure.spacegroup_hm or 'unknown symmetry'}"
+            + (f"   [{len(self.project)} structures]" if len(self.project) > 1
+               else ""))
+        if entry.structure.notes:
+            self.statusBar().showMessage(entry.structure.notes[0], 14000)
 
     def _fill_site_list(self) -> None:
         self.site_list.blockSignals(True)
@@ -298,34 +426,56 @@ class PreviewWindow(QMainWindow):
 
     # -- rebuilding --------------------------------------------------------
     def _polyhedron_sites(self) -> list[int]:
-        if self.poly_mode == PolyhedraMode.NONE:
+        entry = self.project.current
+        if entry is None or self.poly_mode == PolyhedraMode.NONE:
             return []
         if self.poly_mode == PolyhedraMode.ALL:
-            return [r.site_index for r in self.results]
-        return [self.site_index] if self.site_index is not None else []
+            return [r.site_index for r in self.project.results_for(entry)]
+        return [entry.selected_site] if entry.selected_site is not None else []
 
     def _rebuild(self, reframe: bool = False) -> None:
-        if self.structure is None:
+        entries = self.project.visible_entries
+        if not entries:
             return
         style = self.style_box.currentData() or Style.BALL_AND_STICK
         cell_range = tuple(b.value() for b in self.range_boxes)
-        self.scene = build_scene(
-            self.structure, self.results, style=style, v_bond=self.v_bond,
-            polyhedron_sites=self._polyhedron_sites(),
-            show_cell=self.cell_check.isChecked(),
-            cell_range=cell_range, theme=self.theme)
+        active = self.project.current
+
+        scenes = []
+        for entry in entries:
+            results = self.project.results_for(entry)
+            sites = (self._polyhedron_sites() if entry is active
+                     else ([r.site_index for r in results]
+                           if self.poly_mode == PolyhedraMode.ALL else []))
+            scenes.append(build_scene(
+                entry.structure, results, style=style,
+                v_bond=self.project.v_bond, v_list=self.project.v_list,
+                polyhedron_sites=sites,
+                show_cell=self.cell_check.isChecked(),
+                cell_range=cell_range, theme=self.theme,
+                params=self.project.params))
+
+        self.scene = (scenes[0] if len(scenes) == 1
+                      else merge_scenes(scenes, [e.offset for e in entries]))
         self.view.set_scene(self.scene, reframe=reframe)
         self.view.set_theme(self.theme)
-        self.view.set_label_context(self.structure, self.results)
+        self.view.set_label_context(
+            active.structure if active else None,
+            self.project.results_for(active) if active else None)
         self.explorer.set_result(self._current_result())
-        self.explorer.set_threshold(self.v_bond)
+        self.explorer.set_threshold(self.project.v_bond)
         self._update_analysis()
+        self.utilities.update_for(
+            active.structure if active else None,
+            self.project.results_for(active) if active else None,
+            self._current_result(), self.project.v_bond)
 
     def _current_result(self):
-        if self.site_index is None:
+        entry = self.project.current
+        if entry is None or entry.selected_site is None:
             return None
-        return next((r for r in self.results
-                     if r.site_index == self.site_index), None)
+        return next((r for r in self.project.results_for(entry)
+                     if r.site_index == entry.selected_site), None)
 
     # -- events ------------------------------------------------------------
     def _on_ready(self, caps) -> None:
@@ -363,15 +513,48 @@ class PreviewWindow(QMainWindow):
         if i >= 0:
             self.atom_label_box.setCurrentIndex(i)
 
+    def _on_structure_row(self, row: int) -> None:
+        self.project.set_active(row)
+        self._after_load(reframe=not self.project.overlay)
+
+    def _on_overlay(self, on: bool, spacing: float) -> None:
+        self.project.set_overlay(on, spacing)
+        self.structure_panel.refresh()
+        self._rebuild(reframe=True)
+
+    def _on_remove(self, row: int) -> None:
+        if row < 0:
+            return
+        self.project.remove(row)
+        self.structure_panel.refresh()
+        if len(self.project):
+            self._after_load(reframe=True)
+        else:
+            self.scene = None
+            self.site_list.clear()
+            self._set_enabled(False)
+            self.setWindowTitle(f"{NAME} {__version__}")
+
+    def _on_list_threshold(self, value: float) -> None:
+        """The tabulation threshold. Unlike the bond threshold this DOES
+        re-run the neighbour search, so it is a spin box rather than a drag."""
+        self.project.set_list_threshold(value)
+        self._rebuild()
+
     def _on_poly_mode(self) -> None:
         self.poly_mode = self.poly_box.currentData()
         self._rebuild()
 
     def _on_threshold(self, v: float) -> None:
-        """The whole point: restyle, do not re-analyse."""
-        self.v_bond = float(v)
-        self.view.set_threshold(self.v_bond)
+        """Restyle, do not re-analyse."""
+        self.project.set_bond_threshold(float(v))
+        self.view.set_threshold(self.project.v_bond)
         self._update_analysis()
+        entry = self.project.current
+        self.utilities.update_for(
+            entry.structure if entry else None,
+            self.project.results_for(entry) if entry else None,
+            self._current_result(), self.project.v_bond)
 
     def _on_theme_cosmetic(self, theme) -> None:
         """Background, fog, ambient occlusion: no vertex data changes."""
@@ -478,6 +661,155 @@ class PreviewWindow(QMainWindow):
         </table>
         {provenance}
         """)
+
+    # -- export ------------------------------------------------------------
+    def _provenance(self) -> list[str]:
+        from ..core.version_info import provenance_lines
+
+        estimated = any(r.uses_estimated_params
+                        for e in self.project
+                        for r in self.project.results_for(e))
+        return provenance_lines(self.project.params, self.project.v_bond,
+                                self.project.v_list, estimated)
+
+    def _ask(self, title: str, default: str, filt: str) -> str | None:
+        path, _ = QFileDialog.getSaveFileName(self, title, default, filt)
+        return path or None
+
+    def _wrote(self, path) -> None:
+        self.statusBar().showMessage(f"Wrote {path}", 8000)
+
+    def _export_sites_csv(self) -> None:
+        path = self._ask("Export the site table", "facet_sites.csv",
+                         "CSV (*.csv)")
+        if path:
+            exporters.write_csv(self.project.site_table(), path,
+                                self._provenance())
+            self._wrote(path)
+
+    def _export_contacts_csv(self) -> None:
+        path = self._ask("Export the contact table", "facet_contacts.csv",
+                         "CSV (*.csv)")
+        if path:
+            exporters.write_csv(self.project.contact_table(), path,
+                                self._provenance())
+            self._wrote(path)
+
+    def _export_xlsx(self) -> None:
+        path = self._ask("Export both tables", "facet.xlsx", "Excel (*.xlsx)")
+        if path:
+            out = exporters.write_xlsx({"sites": self.project.site_table(),
+                                        "contacts": self.project.contact_table()},
+                                       path, self._provenance())
+            self._wrote(out)
+
+    def _export_cif(self) -> None:
+        entry = self.project.current
+        if entry is None:
+            return
+        path = self._ask("Export as CIF", f"{Path(entry.name).stem}_facet.cif",
+                         "CIF (*.cif)")
+        if path:
+            exporters.write_cif(entry.structure, path,
+                                self.project.results_for(entry),
+                                self._provenance())
+            self._wrote(path)
+
+    def _export_poscar(self) -> None:
+        entry = self.project.current
+        if entry is None:
+            return
+        path = self._ask("Export as POSCAR", "POSCAR", "VASP (POSCAR*);;All (*)")
+        if path:
+            exporters.write_poscar(entry.structure, path)
+            self._wrote(path)
+
+    def _export_xyz(self) -> None:
+        entry = self.project.current
+        if entry is None:
+            return
+        path = self._ask("Export as XYZ", f"{Path(entry.name).stem}.xyz",
+                         "XYZ (*.xyz)")
+        if path:
+            exporters.write_xyz(entry.structure, path,
+                                cell_range=tuple(b.value()
+                                                 for b in self.range_boxes))
+            self._wrote(path)
+
+    def _export_vesta(self) -> None:
+        entry = self.project.current
+        if entry is None:
+            return
+        path = self._ask("Export for VESTA", f"{Path(entry.name).stem}.vesta",
+                         "VESTA (*.vesta)")
+        if path:
+            exporters.write_vesta(entry.structure, path, theme=self.theme,
+                                  v_bond=self.project.v_bond)
+            self._wrote(path)
+
+    def _export_feff(self) -> None:
+        entry = self.project.current
+        result = self._current_result()
+        if entry is None or result is None:
+            QMessageBox.information(self, "No site selected",
+                                    "Select a cation site first.")
+            return
+        path = self._ask(f"FEFF input for {result.label}", "feff.inp",
+                         "FEFF input (*.inp)")
+        if path:
+            exporters.write_feff(entry.structure, result.site_index, path)
+            self._wrote(path)
+
+    def _save_session(self) -> None:
+        path = self._ask("Save the session", "facet_session.json",
+                         "FACET session (*.json)")
+        if path:
+            exporters.save_session(self.project, path, theme=self.theme,
+                                   camera=self.view.camera, labels=self.labels)
+            self._wrote(path)
+
+    def _open_session(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Open a session", "",
+                                              "FACET session (*.json)")
+        if not path:
+            return
+        try:
+            data = exporters.load_session(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not read the session", str(exc))
+            return
+
+        paths = [e["path"] for e in data.get("entries", []) if e.get("path")]
+        missing = [p for p in paths if not Path(p).exists()]
+        self.project.clear()
+        self.load_many([p for p in paths if Path(p).exists()])
+
+        self.project.set_bond_threshold(data.get("v_bond",
+                                                 self.project.v_bond))
+        self.project.set_list_threshold(data.get("v_list",
+                                                 self.project.v_list))
+        if "theme" in data:
+            self.theme = theme_mod.Theme.from_dict(data["theme"])
+            self.theme_panel.theme = self.theme
+            self.theme_panel._reload()
+        if "camera" in data:
+            import numpy as np
+
+            cam = data["camera"]
+            self.view.camera.target = np.array(cam["target"], float)
+            self.view.camera.distance = cam["distance"]
+            self.view.camera.orientation = np.array(cam["orientation"], float)
+            self.view.camera.fov = cam["fov"]
+            self.view.camera.orthographic = cam["orthographic"]
+        self.project.set_overlay(data.get("overlay", False),
+                                 data.get("overlay_spacing", 0.0))
+        self.structure_panel.refresh()
+        self._rebuild(reframe="camera" not in data)
+        if missing:
+            QMessageBox.information(
+                self, "Some files have moved",
+                "A session records where the files were, not their contents.\n\n"
+                + "\n".join(Path(p).name for p in missing))
 
     # -- output ------------------------------------------------------------
     def _save_image(self) -> None:

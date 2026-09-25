@@ -92,6 +92,10 @@ class Scene:
     style: Style = Style.BALL_AND_STICK
     selected_atom: int | None = None
     cell_range: tuple[int, int, int] = (1, 1, 1)
+    # which merged structure each atom came from, when several are shown at
+    # once; empty for a single-structure scene
+    structure_of: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, np.int32))
     # the theme this scene was built with; the renderer reads its presentation
     # settings, and restyle() needs its sub-threshold colour and bond scale
     theme: object | None = None
@@ -563,6 +567,107 @@ def unit_cell_segments(structure: Structure,
 
 def _frame(scene: Scene, structure: Structure) -> None:
     """Bounding sphere of everything drawn, atom radii included."""
+    pts = [scene.atom_position] if scene.n_atoms else []
+    if len(scene.cell_segments):
+        pts.append(scene.cell_segments.reshape(-1, 3))
+    if not pts:
+        scene.center = np.zeros(3, np.float32)
+        scene.radius = 1.0
+        return
+    allpts = np.concatenate(pts, axis=0)
+    centre = allpts.mean(axis=0)
+    r = float(np.linalg.norm(allpts - centre, axis=1).max())
+    if scene.n_atoms:
+        r = max(r, float((np.linalg.norm(scene.atom_position - centre, axis=1)
+                          + scene.atom_radius).max()))
+    scene.center = centre.astype(np.float32)
+    scene.radius = max(r, 1e-3)
+
+
+def merge_scenes(scenes: list[Scene], offsets=None) -> Scene:
+    """Combine several scenes into one drawable, each shifted by its offset.
+
+    Used to show a set of structures at once. Atom indices are renumbered so
+    that picking still identifies a unique atom, and `structure_of` records
+    which scene each atom came from so a click can be traced back to a file.
+    """
+    scenes = [s for s in scenes if s is not None and s.n_atoms]
+    if not scenes:
+        return Scene()
+    if offsets is None:
+        offsets = [np.zeros(3) for _ in scenes]
+
+    out = Scene(style=scenes[0].style, v_bond=scenes[0].v_bond,
+                theme=scenes[0].theme)
+    out.poly_color = scenes[0].poly_color
+    out.poly_alpha = scenes[0].poly_alpha
+
+    atom_pos, atom_rad, atom_col, atom_site = [], [], [], []
+    structure_of = []
+    bond_a, bond_b, base_a, base_b = [], [], [], []
+    bond_v, bond_d, bond_pairs = [], [], []
+    poly_v, poly_n, cell_seg = [], [], []
+    base = 0
+
+    for index, (scene, offset) in enumerate(zip(scenes, offsets)):
+        offset = np.asarray(offset, np.float32)
+        atom_pos.append(scene.atom_position + offset)
+        atom_rad.append(scene.atom_radius)
+        atom_col.append(scene.atom_color)
+        atom_site.append(scene.atom_site)
+        out.atom_label.extend(scene.atom_label)
+        out.atom_element.extend(scene.atom_element)
+        structure_of.extend([index] * scene.n_atoms)
+
+        if scene.n_bonds:
+            bond_a.append(scene.bond_a + offset)
+            bond_b.append(scene.bond_b + offset)
+            base_a.append(scene._bond_base_a)
+            base_b.append(scene._bond_base_b)
+            bond_v.append(scene.bond_valence)
+            bond_d.append(scene.bond_distance)
+            bond_pairs.append(scene.bond_atoms + base)
+        if len(scene.poly_vertices):
+            poly_v.append(scene.poly_vertices + offset)
+            poly_n.append(scene.poly_normals)
+        if len(scene.cell_segments):
+            cell_seg.append(scene.cell_segments + offset)
+        base += scene.n_atoms
+
+    out.atom_position = np.vstack(atom_pos).astype(np.float32)
+    out.atom_radius = np.concatenate(atom_rad).astype(np.float32)
+    out.atom_color = np.vstack(atom_col).astype(np.float32)
+    out.atom_site = np.concatenate(atom_site).astype(np.int32)
+    out.atom_index = np.arange(len(out.atom_radius), dtype=np.int32)
+    out.structure_of = np.array(structure_of, np.int32)
+    out.n_cell_atoms = sum(s.n_cell_atoms for s in scenes)
+
+    if bond_a:
+        out.bond_a = np.vstack(bond_a).astype(np.float32)
+        out.bond_b = np.vstack(bond_b).astype(np.float32)
+        out._bond_base_a = np.vstack(base_a).astype(np.float32)
+        out._bond_base_b = np.vstack(base_b).astype(np.float32)
+        out.bond_color_a = out._bond_base_a.copy()
+        out.bond_color_b = out._bond_base_b.copy()
+        out.bond_valence = np.concatenate(bond_v).astype(np.float32)
+        out.bond_distance = np.concatenate(bond_d).astype(np.float32)
+        out.bond_atoms = np.vstack(bond_pairs).astype(np.int32)
+        # n_bonds reads the radius array, and restyle() returns early when it
+        # is empty -- so it has to be filled before restyling, not by it
+        out.bond_radius = bond_radius_for(out.bond_valence, out.v_bond)
+    if poly_v:
+        out.poly_vertices = np.vstack(poly_v).astype(np.float32)
+        out.poly_normals = np.vstack(poly_n).astype(np.float32)
+    if cell_seg:
+        out.cell_segments = np.vstack(cell_seg).astype(np.float32)
+
+    _frame_points(out)
+    out.restyle(out.v_bond)
+    return out
+
+
+def _frame_points(scene: Scene) -> None:
+    """Bounding sphere of a merged scene."""
     pts = [scene.atom_position] if scene.n_atoms else []
     if len(scene.cell_segments):
         pts.append(scene.cell_segments.reshape(-1, 3))
