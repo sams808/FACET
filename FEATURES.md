@@ -9,7 +9,7 @@ out of scope — so that what is missing is visible rather than discovered.
 Legend: **done** · **partial** — usable but incomplete · **planned** — accepted,
 not started · **out of scope** — with a reason.
 
-Last updated at the end of Phase 3.
+Last updated at the end of Phase 4.
 
 ---
 
@@ -62,15 +62,15 @@ Last updated at the end of Phase 3.
 |---|:--:|:--:|---|---|
 | Unit cell outline | ✓ | ✓ | **done** | every cell of a range, not just the box |
 | Cell range / supercell | ✓ | ✓ | **done** | up to 6×6×6 |
-| Atom labels | ✓ | ✓ | **done** | de-cluttered; element or site label |
-| Bond labels / distances on screen | ✓ | ✓ | **planned** | |
+| Atom labels | ✓ | ✓ | **done** | 11 kinds, de-cluttered, haloed |
+| Bond labels / distances on screen | ✓ | ✓ | **done** | 6 kinds, including **bond valence per contact** |
 | View down a crystallographic axis | ✓ | ✓ | **done** | a, b, c |
 | Lattice planes, Miller planes | ✓ | ✓ | **planned** | |
 | Slab / clipping plane | ✓ | ✓ | **planned** | |
 | Boundary modes (whole molecules, packing) | ✓ | ✓ | **partial** | periodic images that close a bond are drawn |
 | Show partial occupancy | – | ✓ | **done** | drawn as a smaller sphere |
 | Disorder groups | – | ✓ | **planned** | |
-| Multiple structures at once | ✓ | ✓ | **planned** | the Compare workspace |
+| Multiple structures at once | ✓ | ✓ | **done** | load many or a whole folder; tick to show; overlay superimposed or laid out in a row |
 
 ## 5. Measurement and geometry
 
@@ -80,7 +80,7 @@ Last updated at the end of Phase 3.
 | Angle | ✓ | ✓ | **done** | three atoms |
 | Torsion | ✓ | ✓ | **done** | four atoms |
 | Bond-length table | ✓ | ✓ | **done** | per site, with valence per contact |
-| Bond-angle table | ✓ | ✓ | **planned** | |
+| Bond-angle table | ✓ | ✓ | **done** | Utilities ▸ Angles |
 | Polyhedral distortion indices | ✓ | ✓ | **done** | Baur, bond-angle variance, quadratic elongation, volume |
 | Effective coordination number | – | ✓ | **done** | Hoppe ECoN |
 | Bond-valence sum | – | ✓ | **done** | with parameter provenance |
@@ -111,6 +111,11 @@ Last updated at the end of Phase 3.
 | Wyckoff positions | ✓ | ✓ | **done** | |
 | Site symmetry | ✓ | ✓ | **done** | |
 | Symmetry operator list | ✓ | ✓ | **planned** | |
+| Reciprocal cell, metric tensor | ✓ | ✓ | **done** | Utilities ▸ Cell |
+| Density, composition, charge balance | ✓ | ✓ | **done** | atomic and weight per cent |
+| d-spacing and hkl table | ✓ | ✓ | **done** | Utilities ▸ Reflections; geometry only, no intensities |
+| Polyhedral connectivity | ✓ | ✓ | **done** | corner / edge / face, by shared ligands |
+| Radial shells with degeneracies | – | – | **done** | Utilities ▸ Shells |
 | Transform to another setting / cell | ✓ | ✓ | **planned** | |
 | Search for higher symmetry | – | ✓ | **planned** | |
 
@@ -142,15 +147,15 @@ accepted as a later phase.
 
 | Format | Read | Write | Note |
 |---|:--:|:--:|---|
-| CIF | **done** | **planned** | multi-block, esds preserved, spglib cross-check |
-| VASP POSCAR / CONTCAR | **planned** | **planned** | |
-| XYZ | **planned** | **planned** | |
-| VESTA `.vesta` | **planned** | **planned** | interoperability with the group's existing files |
+| CIF | **done** | **done** | reads multi-block with esds; writes P1 with the analysis as comments |
+| VASP POSCAR / CONTCAR | **planned** | **done** | |
+| XYZ | **planned** | **done** | extended XYZ with `Lattice=` |
+| VESTA `.vesta` | **planned** | **done** | bond rules written at the distance the valence threshold corresponds to |
 | CrystalMaker `.cmdf` | **planned** | – | format is not openly documented |
 | SHELX `.res` / `.ins` | **planned** | – | |
 | PDB / mmCIF | **planned** | – | gemmi already parses both |
-| FEFF input | – | **planned** | for the Bi L₃ EXAFS work |
-| CSV / XLSX of results | – | **planned** | |
+| FEFF input | – | **done** | absorber first at the origin; distances asserted to match the analysis |
+| CSV / XLSX of results | – | **done** | every file carries the parameter set and both thresholds |
 | PNG image | – | **done** | supersampled, any resolution |
 | Vector (SVG / PDF) | – | **planned** | needed for a publication figure |
 
@@ -175,10 +180,10 @@ that already exist. Revisit only if it is actually wanted.
 | Rotate, pan, zoom | ✓ | ✓ | **done** | quaternion arcball |
 | Click to select an atom | ✓ | ✓ | **done** | exact, by id buffer |
 | Site list | ✓ | ✓ | **done** | |
-| Drag and drop a file | ✓ | ✓ | **planned** | |
+| Drag and drop a file | ✓ | ✓ | **done** | |
 | Right-click context menus | ✓ | ✓ | **planned** | |
 | Undo | ✓ | – | **planned** | |
-| Session save and restore | ✓ | ✓ | **planned** | |
+| Session save and restore | ✓ | ✓ | **done** | paths, thresholds, theme, camera, labels |
 | Animation, movies | ✓ | – | out of scope |
 | Scripting / batch | – | – | **planned** | the Library workspace |
 
