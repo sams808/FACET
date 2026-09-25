@@ -136,6 +136,9 @@ class Camera:
     fov: float = 22.0
     orthographic: bool = False
     scene_radius: float = 1.0
+    # +1 drags the object with the pointer; -1 orbits around it. Exposed
+    # because which one feels right is a matter of habit, not of correctness.
+    rotation_sense: float = 1.0
 
     # Publication figures usually want a long lens: less perspective distortion
     # makes a polyhedron read as its real shape rather than a foreshortened one.
@@ -183,8 +186,11 @@ class Camera:
         if np.linalg.norm(axis) < 1e-9:
             return
         angle = math.acos(max(-1.0, min(1.0, float(np.dot(a, b)))))
-        # rotate the world under the camera, so the object follows the pointer
-        delta = quat_from_axis_angle(axis, -angle * 2.0)
+        # The sign is the "grab the object" convention: dragging right turns
+        # the near face of the structure to the right, as though a hand were
+        # on it. The opposite sign orbits a fixed object instead, which reads
+        # as inverted to anyone used to a molecular viewer.
+        delta = quat_from_axis_angle(axis, angle * 2.0 * self.rotation_sense)
         self.orientation = quat_multiply(delta, self.orientation)
 
     def drag_pan(self, dx: float, dy: float, width: int, height: int) -> None:

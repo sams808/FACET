@@ -189,8 +189,8 @@ def build_scene(structure: Structure,
     scene.cell_range = tuple(max(1, int(n)) for n in cell_range)
 
     _build_atoms(structure, scene, style, theme, results)
-    _build_bonds(structure, results, scene, theme)
-    _add_bonded_images(scene, style)
+    _build_bonds(structure, scene, theme, params, v_list)
+    _add_bonded_images(structure, scene)
 
     sites = list(polyhedron_sites or [])
     if polyhedron_site is not None and polyhedron_site not in sites:
@@ -255,35 +255,39 @@ def _replicate(structure: Structure, scene: Scene) -> None:
         scene.poly_normals = np.tile(scene.poly_normals, (n_copies, 1))
 
 
-def _add_bonded_images(scene: Scene, style: Style) -> None:
-    """Draw the periodic images that close a bond.
+def _add_bonded_images(structure: Structure, scene: Scene) -> None:
+    """Draw the periodic images that terminate a bond.
 
-    Without this, every bond that crosses a cell boundary is drawn running out
-    to an atom that is not on screen -- a spray of stubs into empty space, and
-    a coordination polyhedron that looks broken. Only the images that actually
-    terminate a bond are added, so the atom count stays close to the cell's.
+    Without these, every bond crossing a cell boundary runs out to an atom that
+    is not on screen. Only the images that actually close a bond are added.
+
+    Duplicates are rejected by **distance**, not by rounding coordinates to a
+    fixed number of decimals. Rounding has a boundary failure -- two
+    representations of the same point either side of a rounding step become two
+    different keys -- and that produced pairs of atoms a few thousandths of an
+    angstrom apart, drawn as one slightly thickened sphere.
     """
     if scene.n_bonds == 0 or scene.n_atoms == 0:
         return
 
-    def key(p):
-        return (round(float(p[0]), 3), round(float(p[1]), 3), round(float(p[2]), 3))
+    from scipy.spatial import cKDTree
 
-    present = {key(p) for p in scene.atom_position}
+    known = list(scene.atom_position)
+    tree = cKDTree(np.array(known, float))
     extra_pos, extra_col, extra_rad = [], [], []
     extra_label, extra_element, extra_site = [], [], []
+    added: list[np.ndarray] = []
+
+    TOL = 0.05          # angstrom; far below any real interatomic distance
 
     for i in range(scene.n_bonds):
-        end = scene.bond_b[i]
-        k = key(end)
-        if k in present:
+        end = np.asarray(scene.bond_b[i], float)
+        if tree.query(end, distance_upper_bound=TOL)[0] < TOL:
             continue
-        present.add(k)
-        # Take everything from the atom this is an image OF, including its
-        # colour. Using the bond's far-half colour instead looks right only
-        # while bonds are coloured by element -- under a uniform or a
-        # by-valence bond colouring the image atoms would silently diverge
-        # from the cell atoms they duplicate.
+        if any(np.linalg.norm(end - p) < TOL for p in added):
+            continue
+        added.append(end)
+
         source = int(scene.bond_atoms[i, 1])
         if 0 <= source < scene.n_atoms:
             colour = scene.atom_color[source]
@@ -294,6 +298,7 @@ def _add_bonded_images(scene: Scene, style: Style) -> None:
         else:
             colour = scene._bond_base_b[i]
             radius, label, element, site = 0.3, "", "", -1
+
         extra_pos.append(end)
         extra_col.append(colour)
         extra_rad.append(radius)
@@ -304,7 +309,6 @@ def _add_bonded_images(scene: Scene, style: Style) -> None:
     if not extra_pos:
         return
 
-    n0 = scene.n_atoms
     scene.atom_position = np.vstack([scene.atom_position,
                                      np.array(extra_pos, np.float32)])
     scene.atom_color = np.vstack([scene.atom_color,
@@ -316,7 +320,6 @@ def _add_bonded_images(scene: Scene, style: Style) -> None:
     scene.atom_index = np.arange(len(scene.atom_radius), dtype=np.int32)
     scene.atom_label.extend(extra_label)
     scene.atom_element.extend(extra_element)
-    scene.n_cell_atoms = n0
 
 
 def _build_atoms(structure: Structure, scene: Scene, style: Style,
@@ -348,13 +351,7 @@ def _build_atoms(structure: Structure, scene: Scene, style: Style,
 
 
 def _atom_colors(structure: Structure, atoms, theme, results) -> np.ndarray:
-    """Apply the theme's colour mode.
-
-    Colouring by element is the default and is what every other program offers.
-    The rest put the analysis onto the structure: a site coloured by phi or by
-    bond-valence sum shows its chemistry in the picture, not only in a table
-    beside it.
-    """
+    """Apply the theme's colour mode."""
     mode = theme.color_mode
 
     if mode is theme_mod.ColorMode.UNIFORM:
@@ -384,46 +381,80 @@ def _atom_colors(structure: Structure, atoms, theme, results) -> np.ndarray:
     return np.array([theme.element_color(a.element) for a in atoms], np.float32)
 
 
-def _build_bonds(structure: Structure, results: list[SiteResult],
-                 scene: Scene, theme) -> None:
-    """One drawn bond per contact of every analysed site.
+def _bond_key(i: int, j: int, image) -> tuple:
+    """A canonical identity for one contact, so it is drawn once.
 
-    Contacts are de-duplicated: a cation-anion contact appears in the cation's
-    list, and would appear again in the anion's if anions were analysed too.
+    A contact between two atoms of the home cell is found twice, once from each
+    end, with opposite lattice translations. Ordering the pair and flipping the
+    translation with it collapses the two into one key.
     """
+    image = tuple(int(x) for x in image)
+    return min((i, j, image), (j, i, tuple(-x for x in image)))
+
+
+def _build_bonds(structure: Structure, scene: Scene, theme,
+                 params, v_list: float) -> None:
+    """Every drawn contact, taken straight from the periodic neighbour search.
+
+    This used to propagate the representative atom's contact vectors to the
+    other atoms of the same site by **translation**, which is wrong for every
+    structure whose sites have multiplicity above one: symmetry copies are
+    related by rotations, screws and inversions, not by translation. Each copy
+    was given the representative's bond directions, producing bonds that
+    pointed at nothing and invented image atoms a tenth of an angstrom away
+    from real ones.
+
+    Searching per atom is exact and costs little: the neighbour tree is built
+    once for the structure, and querying it is milliseconds.
+    """
+    from ..core.neighbors import NeighborFinder, search_radius_for
+
+    rmax = search_radius_for(structure, params, v_list)
+    try:
+        finder = NeighborFinder(structure, rmax=rmax)
+    except ValueError:
+        return
+
+    orth = structure.cell.orth
     a_pos, b_pos, col_a, col_b = [], [], [], []
     valence, distance, pairs = [], [], []
     seen: set[tuple] = set()
 
-    for res in results:
-        centres = structure.atoms_of_site(res.site_index)
-        if not centres:
+    for i, j, d, image in finder.pairs_within(rmax):
+        site_i = structure.atoms[i].site_index
+        site_j = structure.atoms[j].site_index
+        anion_i = structure.sites[site_i].is_anion
+        anion_j = structure.sites[site_j].is_anion
+        # a bond valence is defined for a cation against an anion; a
+        # cation-cation contact is reported separately, not drawn as a bond
+        if anion_i == anion_j:
             continue
-        # every atom of the site, not just the representative: the whole cell
-        # is drawn, and each copy needs its own bonds
-        for centre in centres:
-            origin = structure.atoms[centre].cart
-            rep = structure.atoms[structure.atoms_of_site(res.site_index)[0]].cart
-            offset = origin - rep
-            for c in res.contacts:
-                if c.valence is None:
-                    continue
-                end = rep + c.vector + offset
-                key = (round(float(origin[0]), 3), round(float(origin[1]), 3),
-                       round(float(origin[2]), 3), round(float(end[0]), 3),
-                       round(float(end[1]), 3), round(float(end[2]), 3))
-                rev = key[3:] + key[:3]
-                if key in seen or rev in seen:
-                    continue
-                seen.add(key)
-                a_pos.append(origin)
-                b_pos.append(end)
-                ca, cb = _bond_colors(theme, res.element, c.element, c.valence)
-                col_a.append(ca)
-                col_b.append(cb)
-                valence.append(c.valence)
-                distance.append(c.distance)
-                pairs.append((centre, c.atom_index))
+
+        key = _bond_key(i, j, image)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        cation = structure.atoms[j if anion_i else i]
+        anion = structure.atoms[i if anion_i else j]
+        site = structure.sites[cation.site_index]
+        param = params.get(site.element, site.ox, anion.element)
+        if param is None:
+            continue
+        v = float(param.valence(d))
+        if v <= v_list:
+            continue
+
+        shift = orth @ np.array(image, float)
+        a_pos.append(structure.atoms[i].cart)
+        b_pos.append(structure.atoms[j].cart + shift)
+        ca, cb = _bond_colors(theme, structure.atoms[i].element,
+                              structure.atoms[j].element, v)
+        col_a.append(ca)
+        col_b.append(cb)
+        valence.append(v)
+        distance.append(d)
+        pairs.append((i, j))
 
     if not a_pos:
         return

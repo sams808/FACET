@@ -165,19 +165,22 @@ def test_deliberate_differences_are_still_what_we_decided(comparison):
             continue
         assert int(row["cn_bond"]) == spec["survey_cn"], "fixture changed"
         assert got.cn_valence == spec["facet_cn"], spec["why"]
-        assert got.warnings, "a departure this large must be explained to the user"
+        assert got.notes, "a departure this large must state its numbers"
         checked += 1
     if not checked:
         pytest.skip("no deliberate-difference sites present in this fixture")
 
 
-def test_zero_coordination_is_explained_not_hidden(comparison):
+def test_zero_coordination_states_the_numbers(comparison):
+    """CN 0 is reported rather than floored at 1, and the distances that led
+    to it are given -- without any claim about what they mean."""
     paired, _, _ = comparison
     for row, got in paired:
         if got.cn_valence == 0:
-            joined = " ".join(got.warnings)
+            joined = " ".join(got.notes)
             assert "bond threshold" in joined, (
-                f"{row['file']}:{row['bi_label']} reports CN 0 with no explanation")
+                f"{row['file']}:{row['bi_label']} reports CN 0 with no numbers")
+            assert "nearest" in joined
 
 
 def test_bond_valence_sums_reproduce(comparison):

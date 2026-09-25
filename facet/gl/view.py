@@ -58,6 +58,7 @@ class StructureView(QOpenGLWidget):
         self.labels = labels_mod.LabelSettings()
         self.structure = None
         self.results = None
+        self.show_axis_gizmo = True
 
     # -- public API --------------------------------------------------------
     def set_theme(self, theme) -> None:
@@ -278,6 +279,8 @@ class StructureView(QOpenGLWidget):
             self._paint_selection(painter)
         if len(self._measure_chain) >= 2:
             self._paint_measurement(painter)
+        if self.show_axis_gizmo and self.structure is not None:
+            self._paint_axis_gizmo(painter)
         if self._status:
             self._paint_status(painter)
 
@@ -341,6 +344,63 @@ class StructureView(QOpenGLWidget):
                                    else (0.62, 0.64, 0.68))
             self._draw_haloed(painter, label.text, label.x, label.y,
                               colour, halo, settings.halo)
+
+    def _paint_axis_gizmo(self, painter: QPainter) -> None:
+        """a, b and c drawn in the corner, showing which way the cell points.
+
+        Drawn from the camera's rotation only, with no translation and no
+        perspective, so it reports orientation and nothing else. It sits in the
+        corner rather than on the structure because it has to stay readable
+        when the cell is off screen or zoomed past.
+        """
+        from .camera import quat_to_matrix
+
+        size = 46
+        margin = 14
+        cx = self.width() - size - margin
+        cy = self.height() - size - margin
+
+        orth = self.structure.cell.orth
+        rot = quat_to_matrix(self.camera.orientation)
+
+        axes = []
+        for i, name in enumerate(("a", "b", "c")):
+            world = orth[:, i]
+            n = np.linalg.norm(world)
+            if n < 1e-9:
+                continue
+            view = rot @ (world / n)
+            # screen x to the right, screen y downwards
+            axes.append((name, float(view[0]), float(-view[1]), float(view[2])))
+
+        # draw the axis pointing away from the viewer first, so the nearer
+        # ones overlap it rather than the other way round
+        axes.sort(key=lambda a: a[3])
+
+        colours = {"a": QColor("#e8674f"), "b": QColor("#7bc96f"),
+                   "c": QColor("#5b9bd5")}
+        font = QFont(painter.font())
+        font.setPointSizeF(8.5)
+        font.setBold(True)
+        painter.setFont(font)
+
+        for name, dx, dy, dz in axes:
+            # foreshorten with depth so the gizmo reads as three dimensional
+            length = size * 0.78
+            x2 = cx + dx * length
+            y2 = cy + dy * length
+            colour = QColor(colours[name])
+            if dz < 0:
+                colour.setAlpha(120)          # pointing away from the viewer
+            painter.setPen(QPen(colour, 2.0, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(cx, cy), QPointF(x2, y2))
+            painter.setPen(colour)
+            self._draw_haloed(painter, name, x2 + 3, y2 + 4,
+                              colour, self._halo_color(), True)
+
+        painter.setPen(QPen(QColor(150, 155, 165, 120), 1.0))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(QPointF(cx, cy), 2.0, 2.0)
 
     def _halo_color(self) -> QColor:
         """A contrasting outline, so text reads over an atom, the background or
@@ -479,6 +539,9 @@ class StructureView(QOpenGLWidget):
             self.update()
         elif key == Qt.Key_O:
             self.set_projection(not self.camera.orthographic)
+        elif key == Qt.Key_G:
+            self.show_axis_gizmo = not self.show_axis_gizmo
+            self.update()
         elif key == Qt.Key_Escape:
             self.clear_measurement()
             self.select_atom(None)

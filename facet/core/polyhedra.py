@@ -49,9 +49,8 @@ def gap_split(distances) -> tuple[int, float]:
     Returns ``(n_primary, ratio)``. This is Brunner's maximum-gap rule: the
     cutoff is placed where ``d[k+1]/d[k]`` is largest, leaving at least two
     contacts inside. It is the most common informal way a coordination number is
-    decided, and FACET reports it so that it can be compared against the others
-    rather than trusted alone -- on a lone-pair cation with a smooth distance
-    distribution the largest step is often not significant.
+    decided, and is reported here alongside the others; the returned ratio says
+    how pronounced the chosen step actually is.
     """
     d = np.asarray(distances, float)
     if d.size < 3:

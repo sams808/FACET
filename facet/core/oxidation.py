@@ -17,9 +17,9 @@ Four routes, tried in order, and **the route used is always recorded**:
 
 Route 2 is what separates mixed-valence sites. It is not circular: each
 candidate charge is tested with its *own* parameter, and the candidate that
-reproduces itself is selected. Where two candidates fit almost equally well the
-site is marked ambiguous rather than assigned, because for a site like that the
-answer really is "the data do not say".
+reproduces itself is selected. Where two candidates fit nearly as well as each
+other the margin is reported alongside the choice, so the closeness of the call
+is visible.
 """
 from __future__ import annotations
 
@@ -145,13 +145,12 @@ def _record(structure: Structure, verdicts: list[OxidationVerdict]) -> None:
     for v in ambiguous:
         pair = sorted(v.candidates.items(), key=lambda kv: abs(kv[1] - kv[0]))[:2]
         structure.notes.append(
-            f"oxidation state of {v.label} is ambiguous: "
+            f"{v.label}: "
             + " and ".join(f"{c:+d} gives BVS {b:.2f}" for c, b in pair)
-            + " -- both are defensible, and the bond-valence sum reported "
-              "depends on which is chosen")
+            + f"; {v.ox:+d} selected")
     if guessed:
         structure.notes.append(
-            "oxidation state assumed from the usual value for the element for: "
+            "oxidation state taken from the usual value for the element for: "
             + ", ".join(guessed))
 
     mixed = {}

@@ -8,8 +8,9 @@ answered with the honest shape of the answer.
 Four things are on one axis:
 
 * **the staircase**, CN against threshold, on a logarithmic valence axis
-* **the plateaus**, shaded by how wide they are. A wide plateau is a property
-  of the structure; a narrow one is a property of whoever chose the cutoff.
+* **the plateaus**, shaded in proportion to their width. The shading encodes
+  the measured width and nothing else -- no threshold is marked as good or
+  bad, because what counts as a wide plateau depends on the question.
 * **the contacts themselves**, each a tick at its own bond valence, so the
   steps are visibly the contacts and not an abstraction
 * **reference marks**: the tabulation threshold, the conventional distance
@@ -46,10 +47,9 @@ from ..core.coordination import SiteResult
 
 V_MIN, V_MAX = 0.004, 0.6
 
-# A plateau at least this wide in decades is called stable. Half a decade is
-# 0.43 b, i.e. a distance gap of about 0.16 A at b = 0.37 -- below that, a
-# different but equally defensible threshold gives a different answer.
-STABLE_DECADES = 0.5
+# Shading saturates at this width, so the darkest band is not "good" -- it is
+# simply the widest that the scale distinguishes.
+SHADE_FULL_DECADES = 1.0
 
 
 class CutoffExplorer(QWidget):
@@ -164,7 +164,7 @@ class CutoffExplorer(QWidget):
         self._paint_contact_rail(p)
         self._paint_references(p)
         self._paint_threshold(p)
-        self._paint_verdict(p)
+        self._paint_readout(p)
         p.end()
 
     def _paint_empty(self, p: QPainter) -> None:
@@ -182,7 +182,13 @@ class CutoffExplorer(QWidget):
 
     # -- layers ------------------------------------------------------------
     def _paint_plateaus(self, p: QPainter) -> None:
-        """Shade each plateau by how much of an answer it really is."""
+        """Shade each plateau in proportion to its width.
+
+        One neutral colour whose opacity tracks the measured width, rather than
+        a green/amber split. A two-colour scheme encodes a verdict -- this
+        threshold is sound, that one is not -- and that is the reader's call,
+        not the application's.
+        """
         r = self.result
         cns = [q.cn for q in r.plateaus] or [0]
         cn_max = max(cns + [1])
@@ -191,13 +197,10 @@ class CutoffExplorer(QWidget):
             x0, x1 = self._v_to_x(q.v_low), self._v_to_x(q.v_high)
             if x1 - x0 < 0.6:
                 continue
-            stable = q.width_decades >= STABLE_DECADES
             current = q.contains(self.v_bond)
-
-            if stable:
-                col = QColor(90, 170, 110, 95 if current else 45)
-            else:
-                col = QColor(190, 150, 70, 75 if current else 26)
+            weight = min(q.width_decades / SHADE_FULL_DECADES, 1.0)
+            alpha = int((26 + 54 * weight) * (2.0 if current else 1.0))
+            col = QColor(120, 150, 190, min(alpha, 150))
             p.fillRect(QRectF(x0, self._plot.top(), x1 - x0, self._plot.height()),
                        col)
 
@@ -216,8 +219,8 @@ class CutoffExplorer(QWidget):
                 fnt.setBold(current)
                 p.setFont(fnt)
                 y = self._cn_to_y(q.cn, cn_max)
-                p.drawText(QRectF(x0, y - 20, x1 - x0, 18),
-                           Qt.AlignCenter, f"CN {q.cn}")
+                p.drawText(QRectF(x0, y - 20, x1 - x0, 18), Qt.AlignCenter,
+                           f"CN {q.cn}   {q.width_decades:.2f} dec")
                 p.setFont(self.font())
 
     def _cn_to_y(self, cn: float, cn_max: int) -> float:
@@ -384,26 +387,20 @@ class CutoffExplorer(QWidget):
             p.drawText(QRectF(left, 1, w, fm.height()), Qt.AlignCenter, text)
             p.setFont(self.font())
 
-    def _paint_verdict(self, p: QPainter) -> None:
-        """One sentence: is the number on screen a result or a choice?"""
+    def _paint_readout(self, p: QPainter) -> None:
+        """The measurement, stated. No conclusion drawn from it."""
         r = self.result
         plateau = next((q for q in r.plateaus if q.contains(self.v_bond)), None)
         cn = r.cn_at(self.v_bond)
 
         if plateau is None:
-            text = (f"CN {cn} sits on a step edge — the smallest change of "
-                    f"threshold changes it")
-            col = QColor("#e0a04a")
-        elif plateau.width_decades >= STABLE_DECADES:
-            text = (f"CN {cn} holds over {plateau.width_decades:.2f} decades of "
-                    f"threshold — a {plateau.width_angstrom:.3f} Å gap. "
-                    f"A property of the structure.")
-            col = QColor("#6fbf73")
+            text = f"CN {cn} at {self.v_bond:.4f} v.u.  ·  on a step edge"
         else:
-            text = (f"CN {cn} holds over only {plateau.width_decades:.2f} decades "
-                    f"({plateau.width_angstrom:.3f} Å) — this is a choice "
-                    f"of cutoff more than a property of the site.")
-            col = QColor("#e0a04a")
+            text = (f"CN {cn} at {self.v_bond:.4f} v.u.  ·  plateau "
+                    f"{plateau.v_low:.4f}–{plateau.v_high:.4f} v.u.  ·  "
+                    f"{plateau.width_decades:.2f} decades  ·  "
+                    f"{plateau.width_angstrom:.3f} Å gap")
+        col = self._ink
 
         fnt = QFont(self.font())
         fnt.setPointSizeF(max(7.5, fnt.pointSizeF() - 0.5))
@@ -434,10 +431,10 @@ class CutoffExplorer(QWidget):
         self._dragging = False
 
     def mouseDoubleClickEvent(self, event) -> None:
-        """Snap to the centre of the widest plateau under the pointer.
+        """Snap the threshold to the centre of the plateau under the pointer.
 
-        The useful gesture: rather than hunting for a defensible threshold by
-        hand, land on the middle of the most defensible one.
+        A convenience for landing exactly on a plateau midpoint rather than
+        near it. It makes no claim about that plateau.
         """
         if self.result is None:
             return
@@ -466,7 +463,8 @@ class CutoffExplorer(QWidget):
             self.contactHovered.emit(-1)
             return
         c = r.contacts[best]
-        state = "bond" if c.valence >= self.v_bond else "below the threshold"
+        state = ("above the threshold" if c.valence >= self.v_bond
+                 else "below the threshold")
         note = "" if (c.param and c.param.fitted) else "  (estimated parameter)"
         QToolTip.showText(
             event.globalPosition().toPoint(),

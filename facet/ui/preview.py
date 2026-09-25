@@ -418,8 +418,20 @@ class PreviewWindow(QMainWindow):
             f"{'' if (c.param and c.param.fitted) else 'est.'}</td></tr>"
             for c in r.contacts if c.has_valence)
 
-        warnings = "".join(
-            f"<p style='color:#e0a04a;margin:4px 0'>{w}</p>" for w in r.warnings)
+        plateau = r.current_plateau
+        plateau_row = (
+            f"<tr><td>Plateau at this threshold</td><td align='right'>"
+            f"{plateau.width_decades:.2f} decades &middot; "
+            f"{plateau.width_angstrom:.3f} &Aring;</td></tr>"
+            if plateau else
+            "<tr><td>Plateau at this threshold</td>"
+            "<td align='right'>on a step edge</td></tr>")
+
+        # statements of fact about how the numbers were produced, in the same
+        # muted voice as the rest of the provenance
+        notes = "".join(
+            f"<p style='color:#8a93a3;font-size:11px;margin:3px 0'>{n}</p>"
+            for n in r.notes)
 
         param = next((c.param for c in r.contacts if c.param), None)
         provenance = ""
@@ -454,8 +466,9 @@ class PreviewWindow(QMainWindow):
               <td align='right'>{r.shape.get('d_mean') or float('nan'):.4f} Å</td></tr>
           <tr><td>Spread within the polyhedron</td>
               <td align='right'>{r.shape.get('spread') or float('nan'):.4f} Å</td></tr>
+          {plateau_row}
         </table>
-        {warnings}
+        {notes}
         <h4 style='margin-bottom:2px'>Contacts</h4>
         <table width='100%' cellspacing='0' cellpadding='2' style='font-size:11px'>
           <tr style='color:#8a93a3'>

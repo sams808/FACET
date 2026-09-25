@@ -325,9 +325,8 @@ def _annotate_symmetry(struct: Structure) -> None:
     # split site looks like a full one to it and can legitimately break a
     # centring. Say so rather than implying the file is wrong.
     disordered = any(a.occupancy < 0.999 for a in struct.atoms)
-    because = (" -- but site occupancies are not passed to the symmetry search, "
-               "and this structure has partially occupied sites, which alone "
-               "can lower the apparent symmetry") if disordered else ""
+    because = (" (site occupancies are not used by the symmetry search; this "
+               "structure has partially occupied sites)") if disordered else ""
 
     stated_number = _spacegroup_number_of(struct.spacegroup_hm)
     if stated_number and number and stated_number != number:

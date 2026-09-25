@@ -14,11 +14,12 @@ log-valence is
 
     ln(v_k / v_(k+1)) = (d_(k+1) - d_k) / b
 
-so **the plateau width is exactly the distance gap, divided by b**. A wide
-plateau and a real gap in the distance distribution are the same statement. A
-coordination number sitting on a wide plateau is a property of the structure; a
-coordination number sitting on a narrow step is a property of whoever chose the
-cutoff.
+so **the plateau width is exactly the distance gap, divided by b**. A plateau
+width and a gap in the distance distribution are the same measurement written
+two ways.
+
+FACET reports that width. It does not say what width is enough, because that
+depends on the question being asked.
 """
 from __future__ import annotations
 
@@ -136,9 +137,11 @@ class SiteResult:
     # --- the staircase -----------------------------------------------------
     plateaus: list[Plateau] = field(default_factory=list)
 
-    # --- honesty -----------------------------------------------------------
+    # --- provenance ---------------------------------------------------------
     uses_estimated_params: bool = False
-    warnings: list[str] = field(default_factory=list)
+    # Statements of fact about how the numbers were produced. Never advice, and
+    # never a verdict on what they mean.
+    notes: list[str] = field(default_factory=list)
 
     # -- derived ------------------------------------------------------------
     @property
@@ -154,16 +157,21 @@ class SiteResult:
         return None
 
     @property
-    def cn_is_stable(self) -> bool:
-        """Whether the reported CN sits on a plateau wide enough to be a
-        property of the structure rather than of the threshold.
+    def plateau_decades(self) -> float:
+        """Width, in decades of threshold, of the plateau the current threshold
+        sits on. NaN when it sits exactly on a step edge.
 
-        Half a decade of threshold is 0.43 b, i.e. a distance gap of about
-        0.16 A at b = 0.37. Below that, a different but defensible choice of
-        threshold gives a different coordination number.
+        No judgement is attached to the value. What counts as a wide plateau
+        depends on the question being asked, and is the reader's call.
         """
         p = self.current_plateau
-        return bool(p and p.width_decades >= 0.5)
+        return p.width_decades if p else float("nan")
+
+    @property
+    def plateau_angstrom(self) -> float:
+        """The distance gap the current plateau corresponds to, in angstrom."""
+        p = self.current_plateau
+        return p.width_angstrom if p else float("nan")
 
     def cn_at(self, v: float) -> int:
         return sum(1 for c in self.contacts
@@ -174,13 +182,13 @@ class SiteResult:
 
     def summary(self) -> str:
         p = self.current_plateau
-        stable = ("stable over %.2f decades of threshold (a %.3f A gap)"
-                  % (p.width_decades, p.width_angstrom)) if p else "no plateau"
+        plateau = (f"plateau {p.width_decades:.2f} dec / {p.width_angstrom:.3f} A"
+                   if p else "on a step edge")
         return (f"{self.label} ({self.element}"
                 f"{'' if self.ox is None else f'{self.ox:+d}'}): "
                 f"CN {self.cn_valence} at {self.v_bond} v.u., "
                 f"ECoN {self.cn_ecoN:.2f}, BVS {self.bvs:.2f}, "
-                f"phi {self.phi:.3f} -- {stable}")
+                f"phi {self.phi:.3f}, {plateau}")
 
 
 # ---------------------------------------------------------------------------
@@ -245,25 +253,26 @@ def analyse_site(structure: Structure, contacts: Contacts,
         uses_estimated_params=used_estimate,
     )
 
+    # These are statements of fact about how the numbers were produced, not
+    # advice about what to conclude from them.
     if missing_pairs:
-        result.warnings.append(
+        result.notes.append(
             "no bond-valence parameter for " + ", ".join(sorted(missing_pairs))
-            + "; those contacts are listed but carry no valence")
+            + "; those contacts are listed without a valence")
     if used_estimate:
-        result.warnings.append(
+        result.notes.append(
             "some parameters are estimated from the O'Keeffe-Brese expression "
-            "rather than fitted; treat the bond-valence sum accordingly")
+            "rather than fitted")
     if site.ox_source in ("common", "unset"):
-        result.warnings.append(
-            f"oxidation state {site.ox} was assumed ({site.ox_source}), not "
-            "read from the file")
+        result.notes.append(
+            f"oxidation state {site.ox} taken from the usual value for the "
+            f"element, not from the file")
 
     _fill_valence_quantities(result)
     _fill_geometry(result)
     _fill_cation_contacts(structure, all_contacts, result)
-    _add_empty_coordination_warning(result)
+    _note_empty_coordination(result)
     result.plateaus = plateaus(result)
-    _add_stability_warning(result)
     return result
 
 
@@ -365,15 +374,12 @@ def _distance_at(r: SiteResult, v: float, fallback: float) -> float:
     return fallback
 
 
-def _add_empty_coordination_warning(r: SiteResult) -> None:
-    """Explain a site with no bonds rather than inventing one.
+def _note_empty_coordination(r: SiteResult) -> None:
+    """State the facts about a site with no bonds. Do not invent one.
 
-    Some engines floor the coordination number at one, on the grounds that a
-    site with none is not a useful report. FACET does not: zero is the correct
-    answer to the question asked, and it carries real information -- it says
-    the site's valence is not in bonds to anions at all. The Bi9(5+) cluster in
-    Bi12Cl14 is the standard example: every Bi-Cl contact is below 0.07 v.u.
-    because the valence sits in Bi-Bi bonds near 3.07 A.
+    Some engines floor the coordination number at one. FACET reports zero,
+    which is the answer to the question asked, and gives the numbers needed to
+    see why.
     """
     if r.cn_valence or not r.contacts:
         return
@@ -381,33 +387,12 @@ def _add_empty_coordination_warning(r: SiteResult) -> None:
                   key=lambda c: c.distance, default=None)
     msg = f"no contact reaches the bond threshold of {r.v_bond} v.u."
     if nearest is not None:
-        msg += (f"; the nearest is {nearest.label} at {nearest.distance:.3f} A "
+        msg += (f"; nearest anion {nearest.label} at {nearest.distance:.3f} A "
                 f"({nearest.valence:.3f} v.u.)")
     if r.nearest_cation is not None:
-        msg += (f". The nearest cation is {r.nearest_cation_label} at "
-                f"{r.nearest_cation:.3f} A -- in a subvalent or metallically "
-                "bonded site the valence is in cation-cation bonds, which a "
-                "cation-anion bond-valence sum does not capture")
-    r.warnings.append(msg)
-
-
-def _add_stability_warning(r: SiteResult) -> None:
-    p = r.current_plateau
-    if p is None:
-        if r.cn_valence:
-            r.warnings.append(
-                f"CN {r.cn_valence} sits exactly on a step edge; "
-                "a negligible change of threshold changes it")
-        return
-    if p.width_decades < 0.5:
-        alt = [q.cn for q in r.plateaus
-               if q is not p and q.width_decades > p.width_decades]
-        nearby = f" (CN {', '.join(str(a) for a in alt[:3])} sit on wider ones)" \
-            if alt else ""
-        r.warnings.append(
-            f"CN {r.cn_valence} is stable over only {p.width_decades:.2f} "
-            f"decades of threshold -- a gap of {p.width_angstrom:.3f} A -- so it "
-            f"is a choice of cutoff more than a property of the site{nearby}")
+        msg += (f"; nearest cation {r.nearest_cation_label} at "
+                f"{r.nearest_cation:.3f} A")
+    r.notes.append(msg)
 
 
 # ---------------------------------------------------------------------------
