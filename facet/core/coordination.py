@@ -106,6 +106,11 @@ class SiteResult:
     cn_gap: int = 0
     gap_ratio: float = float("nan")
     cn_listed: int = 0
+    # Contacts counted by occupancy rather than one each. For an ordered site
+    # this equals cn_valence. For a disordered average structure it is the
+    # number that means something: delta-Bi2O3 has 24 oxygen neighbours at one
+    # distance, each a quarter occupied, which is six oxygens in any one cell.
+    cn_occupancy: float = float("nan")
 
     # --- bond valence ------------------------------------------------------
     bvs: float = float("nan")
@@ -177,6 +182,21 @@ class SiteResult:
         return sum(1 for c in self.contacts
                    if c.has_valence and c.valence > v)
 
+    def cn_occupancy_at(self, v: float) -> float:
+        """Coordination number weighted by occupancy, at an arbitrary
+        threshold."""
+        return float(sum(c.occupancy for c in self.contacts
+                         if c.has_valence and c.valence > v))
+
+    @property
+    def is_disordered(self) -> bool:
+        """Whether any bonded neighbour is on a partially occupied site.
+
+        Reported so that the difference between cn_valence and cn_occupancy is
+        attributable rather than surprising.
+        """
+        return any(c.occupancy < 0.999 for c in self.bonds)
+
     def cn_within(self, d: float) -> int:
         return sum(1 for c in self.contacts if c.distance <= d)
 
@@ -186,7 +206,9 @@ class SiteResult:
                    if p else "on a step edge")
         return (f"{self.label} ({self.element}"
                 f"{'' if self.ox is None else f'{self.ox:+d}'}): "
-                f"CN {self.cn_valence} at {self.v_bond} v.u., "
+                f"CN {self.cn_valence}"
+                f"{f' ({self.cn_occupancy:.2f} by occupancy)' if self.is_disordered else ''}"
+                f" at {self.v_bond} v.u., "
                 f"ECoN {self.cn_ecoN:.2f}, BVS {self.bvs:.2f}, "
                 f"phi {self.phi:.3f}, {plateau}")
 
@@ -282,6 +304,7 @@ def _fill_valence_quantities(r: SiteResult) -> None:
 
     r.cn_valence = len(bonded)
     r.cn_listed = len(listed)
+    r.cn_occupancy = float(sum(c.occupancy for c in bonded))
 
     if listed:
         # The bond-valence sum is taken over everything above the *listing*
