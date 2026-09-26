@@ -142,6 +142,22 @@ py -3.11 -m pytest tests/ -q
 Tests that depend on the author's structure library skip cleanly when it is
 absent.
 
+## Building the application
+
+```
+py -3.11 tools/build_exe.py
+```
+
+Produces the application folder, an installer to send to a collaborator, and a
+zip for anyone who would rather not run one. **`BUILDING.md`** covers what comes
+out, what the installer does, the SmartScreen warning worth mentioning in the
+message that carries it, and the checklist to work through before passing a build
+on.
+
+The output lands in `dist/`, which is not in the repository: the installer is over
+GitHub's 100 MB per-file limit, and a repository carrying its own binaries is slow
+to clone for no benefit. Binaries belong in a GitHub Release.
+
 ## Licence
 
 MIT for FACET's own source. The built application bundles Qt under the LGPL,

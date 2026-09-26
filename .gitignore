@@ -2,12 +2,11 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 build/
+# The build output. Nothing under here is in the repository: the installer is
+# over GitHub's 100 MB per-file limit, and a repository carrying its own binaries
+# is slow to clone for no benefit. Binaries go in a Release; BUILDING.md at the
+# root explains the build and how to distribute it.
 dist/
-# ...but its README explains where the binaries went, and a collaborator who
-# clones the repository needs to be able to read that.
-!dist/
-dist/*
-!dist/README.md
 .pytest_cache/
 .venv/
 venv/
