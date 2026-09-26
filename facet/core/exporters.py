@@ -151,10 +151,19 @@ def write_cif(structure: Structure, path: str | Path,
     out.write(f"_cell_angle_beta        {cell.beta:.4f}\n")
     out.write(f"_cell_angle_gamma       {cell.gamma:.4f}\n")
     out.write(f"_cell_volume            {cell.volume:.4f}\n")
+    # The coordinates below are the expanded cell, so the file IS P1 and must say
+    # so. Declaring the original space group beside a P1 operation list makes a
+    # file that contradicts itself: a reader that believes the symbol expands the
+    # already-expanded coordinates again and ends up with four times the atoms.
+    # The original symbol is kept as a comment, where it informs without
+    # instructing.
     if structure.spacegroup_hm:
-        out.write(f"_space_group_name_H-M_alt  '{structure.spacegroup_hm}'\n")
-    if structure.spacegroup_number:
-        out.write(f"_space_group_IT_number  {structure.spacegroup_number}\n")
+        out.write(f"# the source structure was {structure.spacegroup_hm}"
+                  + (f" (No. {structure.spacegroup_number})"
+                     if structure.spacegroup_number else "")
+                  + "; the coordinates below are its full cell\n")
+    out.write("_space_group_name_H-M_alt  'P 1'\n")
+    out.write("_space_group_IT_number  1\n")
     out.write("\n")
 
     # Expanded coordinates with P1 symmetry. Writing the asymmetric unit

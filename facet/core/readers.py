@@ -131,13 +131,23 @@ def _assemble(name: str, cell: Cell, rows, source: str | None = None,
 
 
 def _annotate(structure: Structure) -> None:
-    """Let spglib say what the symmetry is, as for a CIF."""
+    """Let spglib say what the symmetry is, as for a CIF.
+
+    A failure here is not fatal -- the structure is complete without it -- but it
+    is not invisible either. Swallowing it silently would mean a missing spglib
+    removed the symmetry cross-check from every non-CIF file with nothing to show
+    that it had, which is the kind of quiet downgrade this program is supposed to
+    make impossible.
+    """
     try:
         from .cif import _annotate_symmetry
 
         _annotate_symmetry(structure)
-    except Exception:
-        pass
+    except Exception as error:
+        structure.notes.append(
+            f"the symmetry could not be determined ({type(error).__name__}: "
+            f"{error}), so no space group is reported for this file and the "
+            "Wyckoff letters are absent")
 
 
 # ---------------------------------------------------------------------------

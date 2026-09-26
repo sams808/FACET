@@ -43,22 +43,53 @@ def effective_cn(distances, weights=None) -> tuple[float, float]:
     return float(w.sum()), d_av
 
 
-def gap_split(distances) -> tuple[int, float]:
+# Two gap ratios closer than this are treated as equal. Purely numerical: it is
+# there to make the rule a function of the distances rather than of the last bit
+# of a floating-point comparison, not to express any view about how large a step
+# has to be before it counts.
+GAP_TOLERANCE = 1e-9
+
+
+def gap_split(distances, tolerance: float = GAP_TOLERANCE) -> tuple[int, float]:
     """Split a sorted contact list at its largest relative step.
 
     Returns ``(n_primary, ratio)``. This is Brunner's maximum-gap rule: the
-    cutoff is placed where ``d[k+1]/d[k]`` is largest, leaving at least two
-    contacts inside. It is the most common informal way a coordination number is
-    decided, and is reported here alongside the others; the returned ratio says
-    how pronounced the chosen step actually is.
+    cutoff goes where ``d[k+1]/d[k]`` is largest, leaving at least two contacts
+    inside. It is the most common informal way a coordination number is decided,
+    and is reported here alongside the others; the returned ratio says how
+    pronounced the chosen step actually is.
+
+    Two cases the bare rule does not define, both found in this collection:
+
+    **No gap at all.** A site whose contacts are all the same distance -- a
+    regular octahedron of one symmetry-equivalent oxygen, which is common -- has
+    every ratio equal to 1. ``argmax`` over equal values returns whichever index
+    rounding favours, so the answer moved between 3, 4, 5 and 6 for the *same*
+    structure written with its origin somewhere else. There is no gap, so there is
+    nothing to truncate: the answer is every contact, and the ratio of 1 says the
+    rule found no step.
+
+    **A tie between two real gaps.** Resolved to the first, so the rule is a
+    function of the distances. The returned ratio is what tells the caller the
+    split was not decisive; a rule that quietly picked one and looked confident
+    would be worse.
     """
     d = np.asarray(distances, float)
     if d.size < 3:
         return int(d.size), 1.0
+
     ratio = d[1:] / d[:-1]
-    lo = 1
-    k = int(np.argmax(ratio[lo:])) + lo
-    return k + 1, float(ratio[k])
+    lo = 1                      # keep at least two contacts inside
+    candidates = ratio[lo:]
+    if not candidates.size:
+        return int(d.size), 1.0
+
+    best = float(candidates.max())
+    if best <= 1.0 + tolerance:
+        # every contact is the same distance: no step to cut at
+        return int(d.size), best
+    k = int(np.argmax(candidates >= best - tolerance)) + lo
+    return k + 1, best
 
 
 def _fibonacci_sphere(n: int = 12000) -> np.ndarray:

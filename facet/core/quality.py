@@ -50,6 +50,43 @@ class Finding:
 class HealthReport:
     findings: list[Finding] = field(default_factory=list)
 
+    def collapse(self) -> None:
+        """Fold findings that say the same thing into one, with a count.
+
+        A close pair of atoms is found once per symmetry copy, so a single
+        shared site in a cubic structure produced sixteen identical lines. That
+        is not more information than one line -- it is the same information made
+        hard to read, and a report nobody reads is a report that does not work.
+        The count is kept, because how many copies there are is worth knowing.
+        """
+        seen: dict[tuple, Finding] = {}
+        counts: dict[tuple, int] = {}
+        order: list[tuple] = []
+        for finding in self.findings:
+            key = (finding.level, finding.code, finding.message)
+            if key not in seen:
+                seen[key] = finding
+                counts[key] = 1
+                order.append(key)
+            else:
+                counts[key] += 1
+                # keep the first `where`, but remember there were others
+                if finding.where and finding.where not in seen[key].where:
+                    if seen[key].where.count(",") < 2:
+                        seen[key].where = (seen[key].where + ", "
+                                           + finding.where).strip(", ")
+
+        collapsed = []
+        for key in order:
+            finding = seen[key]
+            count = counts[key]
+            if count > 1:
+                finding.message = (
+                    f"{finding.message} \u2014 {count} symmetry-equivalent "
+                    "occurrences")
+            collapsed.append(finding)
+        self.findings = collapsed
+
     @property
     def worst(self) -> Level | None:
         return max((f.level for f in self.findings), default=None)
@@ -80,11 +117,108 @@ def check(structure, results=None, v_bond: float = 0.075) -> HealthReport:
     _check_occupancy(structure, report)
     _check_charge(structure, report)
     _check_esds(structure, report)
+    _check_formula(structure, report)
     if results:
         _check_valences(results, report, v_bond)
     for note in structure.notes:
         report.findings.append(Finding(Level.NOTE, "note", note))
+    report.collapse()
     return report
+
+
+def parse_formula(text) -> dict[str, float]:
+    """A CIF ``_chemical_formula_sum`` as element counts.
+
+    Handles the forms these files use: ``Bi2 O3``, ``Bi0.92 O1.54 Si0.08``,
+    ``Na3 Bi (P O4)2`` -- the last by expanding the bracketed group, because a
+    formula that cannot be read is not a formula that can be checked against.
+    """
+    import re
+
+    if not text:
+        return {}
+    text = str(text).strip().strip("'\"")
+    if not text:
+        return {}
+
+    def accumulate(body: str, factor: float, into: dict) -> None:
+        for symbol, count in re.findall(r"([A-Z][a-z]?)\s*([0-9]*\.?[0-9]*)",
+                                       body):
+            if not symbol:
+                continue
+            amount = float(count) if count else 1.0
+            into[symbol] = into.get(symbol, 0.0) + amount * factor
+
+    out: dict[str, float] = {}
+    # bracketed groups first, then whatever is left
+    remainder = text
+    for group, multiplier in re.findall(r"\(([^()]*)\)\s*([0-9]*\.?[0-9]*)",
+                                        text):
+        accumulate(group, float(multiplier) if multiplier else 1.0, out)
+        remainder = remainder.replace(f"({group}){multiplier}", " ", 1)
+        remainder = remainder.replace(f"({group})", " ", 1)
+    accumulate(remainder, 1.0, out)
+    return {k: v for k, v in out.items() if v > 0}
+
+
+def _check_formula(structure, report: HealthReport) -> None:
+    """Does the expanded cell contain what the file says it contains?
+
+    This is the check that catches a symmetry expansion going wrong, and it
+    caught one: an Fm-3m entry whose oxygen sits on the 32-fold position came out
+    with 8 oxygen atoms instead of 32, so the cell held a quarter of the oxygen
+    the formula states -- and therefore a quarter of the anion charge, with every
+    bond-valence sum and every diffraction intensity wrong in consequence. None
+    of the other checks noticed, because the structure was internally consistent.
+    The formula is the one statement in the file that is independent of the
+    coordinates and the symmetry, which is exactly what makes it useful here.
+
+    Compared as ratios, not absolute counts, because the formula is per formula
+    unit and the cell holds Z of them -- and Z is often absent or wrong.
+    """
+    declared = parse_formula(getattr(structure, "formula", None))
+    if not declared:
+        return
+    found = structure.composition()
+    if not found:
+        return
+
+    shared = sorted(set(declared) & set(found))
+    if len(shared) < 2:
+        # with one element in common there is no ratio to compare
+        missing = sorted(set(declared) - set(found))
+        if missing:
+            report.findings.append(Finding(
+                Level.CHECK, "formula-element",
+                f"the formula names {', '.join(missing)} but the expanded cell "
+                "contains none"))
+        return
+
+    reference = shared[0]
+    worst = (0.0, "")
+    for element in shared[1:]:
+        want = declared[element] / declared[reference]
+        got = found[element] / found[reference]
+        if want <= 0:
+            continue
+        error = abs(got - want) / want
+        if error > worst[0]:
+            worst = (error, f"{element}:{reference} is {got:.4g} where the "
+                            f"formula gives {want:.4g}")
+    # 2 per cent absorbs rounded occupancies and a formula quoted to two figures
+    if worst[0] > 0.02:
+        report.findings.append(Finding(
+            Level.CHECK, "formula-mismatch",
+            f"the expanded cell does not match the stated formula "
+            f"{structure.formula!r}: {worst[1]}",
+            value=worst[0]))
+
+    extra = sorted(set(found) - set(declared))
+    if extra:
+        report.findings.append(Finding(
+            Level.NOTE, "formula-extra",
+            f"the cell contains {', '.join(extra)}, which the stated formula "
+            f"{structure.formula!r} does not name"))
 
 
 def _check_coordinates(structure, report: HealthReport) -> None:

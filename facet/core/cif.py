@@ -78,7 +78,7 @@ def read(path: str | Path, block: str | None = None) -> Structure:
         raise ValueError(f"{path.name}: block {blk.name!r} has no atom sites "
                          "with coordinates")
 
-    atoms = _expand(st, cell, sites)
+    atoms, symmetry_note = _expand(st, cell, sites, blk)
 
     out = Structure(
         name=_text(blk, "_chemical_name_mineral")
@@ -95,6 +95,7 @@ def read(path: str | Path, block: str | None = None) -> Structure:
         reference=_text(blk, "_publ_author_name"),
         year=_int(blk, "_journal_year"),
     )
+    out.notes.append(f"symmetry expansion used {symmetry_note}")
     _annotate_symmetry(out)
     return out
 
@@ -297,38 +298,165 @@ def _already_there(frac, existing, cell: Cell, tolerance: float = 0.05) -> bool:
     return bool(np.any(np.linalg.norm(cart, axis=1) < tolerance))
 
 
-def _expand(st, cell: Cell, sites: list[Site]) -> list[Atom]:
+def symmetry_operations(st, blk):
+    """The operations to expand with, and a sentence saying where they came from.
+
+    The file's own ``_symmetry_equiv_pos_as_xyz`` loop takes precedence, because
+    that is what the file means whatever its space-group symbol happens to say.
+    Failing that, the operations of the named group; failing that, P1.
+    """
+    from .readers import parse_symop
+
+    for tag in ("_symmetry_equiv_pos_as_xyz",
+                "_space_group_symop_operation_xyz"):
+        try:
+            values = list(blk.find_values(tag))
+        except Exception:
+            continue
+        operations = []
+        for raw in values:
+            parsed = parse_symop(str(raw).strip().strip("'\""))
+            if parsed is not None:
+                operations.append(parsed)
+        if operations:
+            # Any length, including a single 'x, y, z'. That is not a degenerate
+            # case to be second-guessed: a file listing one operation is saying
+            # its coordinates are the whole cell, which is what FACET itself
+            # writes and what every P1 file means. Requiring more than one
+            # operation here made such a file fall through to its declared space
+            # group and be expanded a second time, quadrupling its atoms.
+            note = f"{len(operations)} operations from the file"
+            declared = _declared_operation_count(st, blk)
+            if declared and declared > len(operations):
+                note += (f"; the declared space group has {declared}, so the "
+                         "file's own list is shorter than its symbol implies")
+            return operations, note
+
+    # No operation loop, so the named group has to supply them. Looked up by
+    # number first and by symbol second: a number is unambiguous, while a symbol
+    # may be a non-standard setting, misspelled, or spaced in a way no lookup
+    # recognises.
+    import gemmi
+
+    group = None
+    number = _int(blk, "_symmetry_Int_Tables_number") or \
+        _int(blk, "_space_group_IT_number")
+    if number:
+        group = gemmi.find_spacegroup_by_number(int(number))
+    if group is None:
+        symbol = (_text(blk, "_symmetry_space_group_name_H-M")
+                  or _text(blk, "_space_group_name_H-M_alt")
+                  or getattr(st, "spacegroup_hm", None))
+        for candidate in _symbol_variants(symbol):
+            group = gemmi.find_spacegroup_by_name(candidate)
+            if group is not None:
+                break
+    if group is not None:
+        operations = []
+        for operation in group.operations():
+            parsed = parse_symop(operation.triplet())
+            if parsed is not None:
+                operations.append(parsed)
+        if operations:
+            return operations, f"{len(operations)} operations of {group.hm}"
+
+    return [(np.eye(3), np.zeros(3))], "no symmetry given, treated as P1"
+
+
+def _declared_operation_count(st, blk) -> int | None:
+    """How many operations the file's space-group symbol implies, if any.
+
+    Used only to notice that a file's operation loop is shorter than its symbol,
+    which is worth saying out loud: one of the two is wrong, and FACET follows
+    the loop.
+    """
+    import gemmi
+
+    number = _int(blk, "_symmetry_Int_Tables_number") or \
+        _int(blk, "_space_group_IT_number")
+    group = gemmi.find_spacegroup_by_number(int(number)) if number else None
+    if group is None:
+        symbol = (_text(blk, "_symmetry_space_group_name_H-M")
+                  or _text(blk, "_space_group_name_H-M_alt"))
+        for candidate in _symbol_variants(symbol):
+            group = gemmi.find_spacegroup_by_name(candidate)
+            if group is not None:
+                break
+    return len(group.operations()) if group is not None else None
+
+
+def _symbol_variants(symbol):
+    """The spellings of a space-group symbol worth trying, in order.
+
+    CIF files write the same group as ``Fm-3m``, ``F m -3 m``, ``F M -3 M`` and
+    occasionally ``Fm3m``. A lookup that only accepts one of those silently
+    falls back to P1, and a structure expanded as P1 is not wrong in any way a
+    reader would notice -- it simply has a quarter or a twelfth of its atoms.
+    """
+    if not symbol:
+        return []
+    text = str(symbol).strip().strip("'\"")
+    if not text:
+        return []
+    out = [text, text.replace(" ", ""), " ".join(text.split())]
+    # a trailing setting such as ':1' or ':H'
+    if ":" in text:
+        out.append(text.split(":")[0].strip())
+    seen = []
+    for candidate in out:
+        if candidate and candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
+def _expand(st, cell: Cell, sites: list[Site], blk=None) -> list[Atom]:
     """Apply the symmetry operations to fill the unit cell.
 
-    gemmi does the expansion; the work here is mapping each produced position
-    back to the Site it came from, which gemmi reports only by label.
+    FACET applies them itself rather than taking gemmi's
+    ``get_all_unit_cell_sites()``, and the reason is a structure in this very
+    collection. gemmi's small-structure expansion merges positions that are
+    close in *fractional* coordinates; in a small cell that discards real atoms.
+    For the ICDD entry for Bi0.92Si0.08O1.54 -- a = 5.542 A, Fm-3m, oxygen on the
+    32-fold (0.266, 0.266, 0.266) -- it returns 8 oxygen atoms where the file,
+    the Wyckoff letter and the 192 operations all say 32, because the F-centred
+    images land 0.032 in fractional coordinates away. That is 0.18 A, which is a
+    real separation. Three quarters of the oxygen, and of the anion charge, went
+    missing.
+
+    De-duplicating by distance in angstrom instead cannot make that mistake at
+    any cell size: 0.05 A is below every real interatomic distance whatever the
+    cell, while 0.03 in fractional coordinates is 0.18 A in this cell and 0.6 A
+    in a 20 A one.
     """
-    by_label = {s.label: i for i, s in enumerate(sites)}
     atoms: list[Atom] = []
     accepted: dict[int, list[np.ndarray]] = {}
 
-    for s in st.get_all_unit_cell_sites():
-        idx = by_label.get(s.label)
-        if idx is None:
-            continue
-        frac = np.array([s.fract.x, s.fract.y, s.fract.z], float) % 1.0
-        # De-duplicate positions that coincide after wrapping, which happens for
-        # atoms on special positions. The comparison is by minimum-image
-        # distance in angstrom, not by a rounded key: a coordinate of 0.99999
-        # and one of 0.0 are the same atom but round to different keys, and the
-        # pair would survive as two atoms a hair apart -- inflating the
-        # multiplicity, the structure factor and the neighbour list.
-        if _already_there(frac, accepted.setdefault(idx, []), cell):
-            continue
-        accepted[idx].append(frac)
-        atoms.append(Atom(
-            element=sites[idx].element,
-            frac=frac,
-            cart=cell.to_cartesian(frac),
-            site_index=idx,
-            label=s.label,
-            occupancy=float(s.occ) if s.occ else 1.0,
-        ))
+    if blk is not None:
+        operations, provenance = symmetry_operations(st, blk)
+    else:
+        operations, provenance = [(np.eye(3), np.zeros(3))], "no symmetry"
+
+    for index, site in enumerate(sites):
+        for rotation, translation in operations:
+            frac = (rotation @ site.frac + translation) % 1.0
+            # De-duplicate positions that coincide after wrapping, which is what
+            # happens for an atom on a special position. Compared by
+            # minimum-image distance in angstrom, not by a rounded key: a
+            # coordinate of 0.99999 and one of 0.0 are the same atom but round to
+            # different keys, and the pair would survive as two atoms a hair
+            # apart -- inflating the multiplicity, the structure factor and the
+            # neighbour list.
+            if _already_there(frac, accepted.setdefault(index, []), cell):
+                continue
+            accepted[index].append(frac)
+            atoms.append(Atom(
+                element=site.element,
+                frac=frac,
+                cart=cell.to_cartesian(frac),
+                site_index=index,
+                label=site.label,
+                occupancy=float(site.occupancy),
+            ))
 
     # multiplicity follows from how many positions each site generated
     counts: dict[int, int] = {}
@@ -336,7 +464,7 @@ def _expand(st, cell: Cell, sites: list[Site]) -> list[Atom]:
         counts[a.site_index] = counts.get(a.site_index, 0) + 1
     for i, site in enumerate(sites):
         site.multiplicity = counts.get(i, 0)
-    return atoms
+    return atoms, provenance
 
 
 def _annotate_symmetry(struct: Structure) -> None:
