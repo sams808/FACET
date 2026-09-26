@@ -71,9 +71,47 @@ Oxidation states are resolved by bond-valence self-consistency where the file
 does not state them, which is what separates the sites of a mixed-valence
 structure. The route used is recorded per site.
 
+## What else it does
+
+The coordination analysis is the argument; these are the tools that go with it.
+
+**Structures.** Reads CIF, VASP POSCAR/CONTCAR, XYZ, VESTA, SHELX .res/.ins, PDB
+and CrystalMaker .cmtx. Several at once, shown together or one at a time. Writes
+CIF, POSCAR, XYZ, VESTA, FEFF, CSV and XLSX.
+
+**The 3D view.** Ball-and-stick, space-filling, stick and wireframe; coordination
+polyhedra; lattice planes and slabs by Miller indices; per-atom, per-site and
+per-element colour, size and visibility; labels for atoms, bonds, distances and
+bond valences; stereo pairs and red-cyan anaglyph. It runs on a machine with no
+graphics card — there are three render tiers, and the lowest is pure Qt.
+
+**Bond valence, beyond one site.** The cutoff table: the distance each pair gets
+from a stated valence threshold, which is this program's argument as numbers. A
+threshold scan, showing how far the threshold can move before each coordination
+number changes. Anion bond-valence sums, from their own neighbour search. A
+charge balance that checks the two against each other. Bond-valence maps and
+energy landscapes in 3D, and 2D sections through them.
+
+**Diffraction.** Powder patterns with real scattering factors — X-ray, neutron and
+electron — and a measured pattern overlaid, scaled by one least-squares factor
+and nothing else.
+
+**Figures.** SVG and PDF for the 3D view, the diffraction pattern and the
+sections. Vector, so they stay sharp at any size.
+
+**Disorder.** Where a file describes alternative configurations, FACET reads the
+assembly and group tags, reports how far apart the alternatives sit, and shows
+one configuration rather than all of them at once — because drawing them together
+puts atoms a fraction of an angstrom apart and makes every coordination number in
+the structure wrong.
+
+Nothing in the program states a verdict. It reports measurements, says where each
+number came from, and leaves the reading of them to you.
+
 ## Status
 
-Engine complete and under test. Interface in progress; see `PLAN.md`.
+Complete and verified. `FEATURES.md` tracks all 120 features against CrystalMaker
+and VESTA: 99 done, 10 deliberately out of scope, 11 remaining and listed.
 
 The engine is a generalisation of the validated code behind a 2026 survey of
 105 bismuth sites across 74 structures, which was itself checked by an
@@ -81,6 +119,19 @@ independent recomputation sharing no code. That survey's results are kept as a
 regression fixture: FACET reproduces its bond distances, coordination numbers,
 bond-valence sums and `phi` across 92 sites, with one deliberate and documented
 departure.
+
+## How it is checked
+
+A program arguing that published numbers are unreliable has to be held to a
+higher standard than the numbers it criticises, and "the tests pass" is not that
+standard. Every quantity is verified against something outside the code that
+produces it: independent implementations (gemmi, spglib, pymatgen), closed forms,
+physical laws, invariance under every way of rewriting the same crystal, and the
+file's own statement of what it contains.
+
+That last check found an expansion fault that had been losing three quarters of
+one structure's oxygen while every test passed. **`VERIFICATION.md`** records what
+was checked, what the agreement was, and what was found.
 
 ## Running the tests
 

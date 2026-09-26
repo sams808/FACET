@@ -3,6 +3,11 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+# ...but its README explains where the binaries went, and a collaborator who
+# clones the repository needs to be able to read that.
+!dist/
+dist/*
+!dist/README.md
 .pytest_cache/
 .venv/
 venv/

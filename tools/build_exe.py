@@ -89,7 +89,14 @@ EXCLUDES = [
 # when a pair is uncovered.
 EXCLUDES.append("pymatgen")
 
-HIDDEN = ["gemmi", "spglib", "scipy.spatial.transform._rotation_groups"]
+HIDDEN = [
+    "gemmi", "spglib", "scipy.spatial.transform._rotation_groups",
+    # The SVG and PDF exports draw through QSvgGenerator and QPdfWriter. Qt's
+    # own hook does not always pull QtSvg in, and a missing one shows up only
+    # when a user clicks Export in the built application, which is the worst
+    # place to find out.
+    "PySide6.QtSvg", "PySide6.QtPrintSupport",
+]
 
 # PyInstaller 6.11's numpy hook does not fully cover numpy 2.4: the frozen
 # application fails at import with "No module named numpy._core._exceptions".
