@@ -85,6 +85,20 @@ per-element colour, size and visibility; labels for atoms, bonds, distances and
 bond valences; stereo pairs and red-cyan anaglyph. It runs on a machine with no
 graphics card — there are three render tiers, and the lowest is pure Qt.
 
+The window opens on a white ground, and *View ▸ Theme* switches the whole
+application — viewport, menus, panels and tables — between six presets, from a
+greyscale one for print to two darker grounds for working at night.
+
+**The bond-valence vector.** On request, a lobe on each cation along
+−**V**/|**V**|, where **V** = Σ v_i **û**_i over the bonded contacts. That
+direction is where the cation is *not* bonded, and for a cation with an ns²
+configuration it is where a lone pair is conventionally described as pointing —
+so this is what people mean when they ask to see the lone pair. FACET draws it as
+the vector sum, because that is the thing that can be measured: its length is
+φ × the mean bond length × a display scale, so a centrosymmetric site draws
+nothing rather than being given an arbitrary direction. The measured void cone can
+be drawn beside it.
+
 **Bond valence, beyond one site.** The cutoff table: the distance each pair gets
 from a stated valence threshold, which is this program's argument as numbers. A
 threshold scan, showing how far the threshold can move before each coordination
@@ -96,6 +110,31 @@ energy landscapes in 3D, and 2D sections through them.
 electron — and a measured pattern overlaid, scaled by one least-squares factor
 and nothing else.
 
+**Pair distribution function.** G(r), g(r) and R(r) from every interatomic
+distance in the structure. The area under a peak of R(r) is the
+scattering-weighted coordination number of that shell, and it is reported for the
+peak you select. Finite-Q effects are offered and are off until you set them:
+truncating at Qmax is a convolution in r, applied over the odd extension so the
+termination ripple appears below the first peak where a measurement shows it, and
+the Q-resolution damping is its dual. The element-pair weight table is on screen,
+because the useful fact about the PDF of a heavy-element compound is how little of
+it is the light atoms — three quarters of the X-ray PDF of Bi₂O₃ is Bi–Bi, and
+half of its neutron PDF is Bi–O.
+
+**EXAFS.** The shell list a fit starts from: N, the occupancy-weighted N, R, the
+spread inside each shell, the contributing sites, and σ² from two separately
+labelled sources — the file's own displacement parameters, and an Einstein model
+at a temperature you set. Beside it, what a k range can do with that list:
+ΔR = π/(2Δk), the number of independent points, which shells are closer together
+than ΔR, and how many parameters the list would need against how many the range
+supports. FACET writes a FEFF input, does not bundle FEFF, and reads a
+calculation back — FEFF's own degeneracies, path lengths and amplitude ratios
+beside FACET's shells, and χ(k) assembled from FEFF's amplitudes with FACET's
+geometry.
+
+χ(k) is not computed from the structure alone, and XANES is not computed at all.
+Both refusals are stated in the program, with the reason.
+
 **Figures.** SVG and PDF for the 3D view, the diffraction pattern and the
 sections. Vector, so they stay sharp at any size.
 
@@ -105,13 +144,17 @@ one configuration rather than all of them at once — because drawing them toget
 puts atoms a fraction of an angstrom apart and makes every coordination number in
 the structure wrong.
 
+**Documentation.** A manual of fourteen sections under *Help*, compiled into the
+program rather than read from a file beside the executable, so it cannot go
+missing from a shared folder. One of its sections is what FACET does not do.
+
 Nothing in the program states a verdict. It reports measurements, says where each
 number came from, and leaves the reading of them to you.
 
 ## Status
 
-Complete and verified. `FEATURES.md` tracks all 120 features against CrystalMaker
-and VESTA: 99 done, 10 deliberately out of scope, 11 remaining and listed.
+Complete and verified. `FEATURES.md` tracks all 141 features against CrystalMaker
+and VESTA: 118 done, 14 deliberately out of scope, 9 remaining and listed.
 
 The engine is a generalisation of the validated code behind a 2026 survey of
 105 bismuth sites across 74 structures, which was itself checked by an

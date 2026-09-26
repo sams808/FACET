@@ -9,8 +9,10 @@ out of scope — so that what is missing is visible rather than discovered.
 Legend: **done** · **partial** — usable but incomplete · **planned** — accepted,
 not started · **out of scope** — with a reason.
 
-Last updated after the whole-application verification. Every feature
-selected for implementation is done; what remains planned is listed as such.
+Last updated after adding the pair distribution function, the EXAFS shell
+and resolution report, the bond-valence vector overlay, the white default theme
+and the in-application manual. Every feature selected for implementation is
+done; what remains planned is listed as such.
 
 ---
 
@@ -56,6 +58,9 @@ selected for implementation is done; what remains planned is listed as such.
 | Pinned colour scales across structures | – | – | **done** | what makes two figures comparable |
 | Save and share a theme | ✓ | ✓ | **done** | JSON |
 | Per-site colour overrides | ✓ | ✓ | **done** | element, then site, then atom; only the fields actually set apply |
+
+| Application-wide theming | ✓ | ✓ | **done** | menus, docks, panels and tables follow the theme; the interface roles are derived from it, so a custom background themes the whole window |
+| White default, VESTA-like | – | ✓ | **done** | the shipped default; six presets under *View ▸ Theme* |
 
 ## 4. Structure display
 
@@ -106,6 +111,8 @@ selected for implementation is done; what remains planned is listed as such.
 | φ, the scale-free stereoactivity index | – | – | **done** |
 | Oxidation state by bond-valence self-consistency | – | – | **done** |
 | Parameter-set switching with citations | – | – | **done** | reads the IUCr bvparm distribution, softBV-style tables and its own JSON; per-pair b is kept, and every value carries its provenance |
+| **Bond-valence vector drawn (the "lone pair")** | – | – | **done** | a lobe along −V/\|V\| with V = Σ v_i û_i, length φ × mean bond length × a display scale; φ = 0 draws nothing. Presented as the vector sum, which is what can be measured |
+| **Void cone drawn** | – | – | **done** | the measured half-angle about the void axis, on the sites whose polyhedra are shown; the degeneracy of the axis is stated |
 
 ## 7. Symmetry
 
@@ -138,13 +145,23 @@ verified against an analytic sphere, planar sections, and bond-valence maps.
 | Bond-valence energy landscapes | – | ✓ | **done** | the V=3 surface passes within 0.07 Å of the real Bi sites |
 | Hirshfeld surfaces | – | – | out of scope | CrystalExplorer does this well |
 
-## 9. Diffraction
+## 9. Diffraction, PDF and EXAFS
 
 | Feature | CM | VESTA | FACET |
 |---|:--:|:--:|---|
 | Powder pattern simulation | ✓ (CrystalDiffract) | ✓ | **done** | real form factors for X-rays, neutrons and electrons; pseudo-Voigt profile |
 | d-spacing and hkl table | ✓ | ✓ | **done** (see §7) |
 | Overlay on a measured pattern | ✓ | – | **done** | one least-squares scale factor and a difference curve; no fit quality is reported |
+| **Pair distribution function G(r)** | – | – | **done** | R(r), G(r) and g(r) for X-rays, neutrons or electrons; peak areas as scattering-weighted coordination numbers; the element-pair weight table |
+| **Finite-Q effects on the PDF** | – | – | **done** | Qmax truncation as a convolution in r over the odd extension, so the termination ripple appears where a measurement shows it; Qdamp as its dual; a Lorch window |
+| **Correlated-motion peak widths** | – | – | **done** | σ² = U_i + U_j from the file, with the PDFgui δ₁/δ₂ parameterisation as explicit inputs defaulting to zero |
+| **EXAFS shell table** | – | – | **done** | per shell: N, occupancy-weighted N, R, internal spread, contributing sites, and σ² from the file's U and from an Einstein model, labelled separately |
+| **EXAFS resolution report** | – | – | **done** | ΔR = π/(2Δk), N_idp, which shells a k range cannot separate, and the parameter count against N_idp |
+| **FEFF input** | – | – | **done** | runs in FEFF8L; the absorber's element gets its own scatterer potential, the cluster is larger than RPATH, and partial occupancy is stated rather than passed over |
+| **FEFF output read back** | – | – | **done** | `files.dat` and `feffNNNN.dat` parsed; FEFF's degeneracies, path lengths, leg counts and amplitude ratios shown beside FACET's shells |
+| **χ(k) from FEFF paths** | – | – | **done** | assembled from FEFF's amplitudes and phases with FACET's degeneracies and σ²; reproduces FEFF's own `chi.dat` to 2.5 % |
+| χ(k) from geometry alone | – | – | out of scope | without phase shifts its transform peaks land ≈0.4 Å from the distances that produced them |
+| XANES simulation | – | – | out of scope | needs full multiple scattering or DFT; FACET writes the input and does not substitute for it |
 | Single-crystal / reciprocal lattice | ✓ (SingleCrystal) | – | out of scope |
 | Electron diffraction | ✓ | – | out of scope |
 
@@ -194,10 +211,20 @@ that already exist. Revisit only if it is actually wanted.
 
 ---
 
+## 13. Documentation and provenance
+
+| Feature | CM | VESTA | FACET |
+|---|:--:|:--:|---|
+| In-application manual | ✓ | ✓ | **done** | fourteen sections under *Help ▸ Manual*, compiled into the program so it cannot go missing from a shared folder; the thresholds and b in the text come from the code |
+| About, with the running configuration | ✓ | ✓ | **done** | version, renderer tier actually in use, parameter set and its citation |
+| Keyboard and mouse reference | ✓ | – | **done** | *Help ▸ Keyboard and mouse* |
+| Licences and redistribution terms | – | – | **done** | *Help ▸ Licences*, including what the Qt LGPL requires of a build that is passed on |
+| A written statement of what the program does not do | – | – | **done** | a manual section of its own, and `VERIFICATION.md` in the repository |
+
 ## What is left
 
-99 of the 120 tracked features are done, 10 are deliberately out of scope, and
-11 remain. Every feature selected for this round is implemented; the rest are
+118 of the 141 tracked features are done, 14 are deliberately out of scope,
+and 9 remain. Every feature selected for this round is implemented; the rest are
 listed so that what is missing stays visible rather than being discovered.
 
 **Partial — usable, incomplete**
@@ -205,8 +232,8 @@ listed so that what is missing stays visible rather than being discovered.
 - *Wireframe* draws as thin sticks rather than as true lines. Cosmetic.
 - *Boundary modes*: periodic images are drawn where they close a bond, but there
   is no whole-molecule or whole-polyhedron completion mode.
-- *Void analysis* reports the void cone half-angle, which is what a lone pair
-  needs, but does not map cavities.
+- *Void analysis* reports and now draws the void cone half-angle, which is what
+  a lone pair needs, but does not map cavities.
 - *CrystalMaker files*: `.cmtx` text is read. `.cmdf` is an undocumented binary
   and is refused with an explanation rather than guessed at.
 

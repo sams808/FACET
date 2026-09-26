@@ -176,9 +176,93 @@ gives O:Bi = 1.5000 exactly for Bi₂O₃. The file is wrong there, and FACET sa
 
 ---
 
+## The later features, and what checking them found
+
+The pair distribution function, the EXAFS shell table and the bond-valence
+vector overlay were added after the five passes above, and each was checked the
+same way. Three of the four faults below were invisible from inside the program:
+the code ran, produced numbers, and the numbers were wrong.
+
+### The bond-valence vector, against the analysis that never sees it
+
+The drawn lobe's direction and length come from φ and the vector sum computed
+from the scene's cached bond arrays. `coordination.analyse_structure` reaches the
+same φ through its own neighbour search and `bv.phi_index`. Comparing the two
+over the collection:
+
+| | Before | After |
+|---|---|---|
+| Worst \|Δφ\| over 67 sites | **0.130** | 8 × 10⁻⁸ |
+
+The 0.130 was on a partially occupied phosphorus site: the analysis weights every
+valence by its ligand's occupancy and the drawn sum did not. Two further checks
+now hold — every atom of one site gets the same φ to 5 × 10⁻⁷, which is what
+would fail if directions were propagated between symmetry copies by translation,
+and the drawn axis is exactly antiparallel to the weighted sum.
+
+### The PDF, against closed forms and a second transform route
+
+| Check | Result |
+|---|---|
+| NaCl first-peak area against 6·b(Na)·b(Cl)/⟨b⟩² | agrees to 2 × 10⁻⁷ |
+| Second peak against 6(b(Na)²+b(Cl)²)/⟨b⟩² | agrees to 2 × 10⁻⁵ |
+| Shell degeneracies against `utilities.radial_shells` | 6 at 2.8201 Å, 12 at 3.9882 Å |
+| Truncation kernel against an explicit forward-and-back sine transform | 0.16 % of the peak height |
+| Origin shift | exactly zero |
+| 2×2×2 supercell of the same crystal | 3 × 10⁻¹³ |
+| Element-pair weights, X-ray / neutron / electron | 76.3 / 24.5 / 66.4 % Bi–Bi, computed twice independently |
+
+Two faults came out of it. The odd extension G(−r) = −G(r) was built by gluing
+`-r[::-1]` onto `r`, which leaves a gap of 2·dr across the origin — so the array
+was not a uniform sampling and the convolution over it meant nothing. Including
+r = 0, where an odd function is zero, fixes it. And binning each distance to its
+nearest grid point shifted every peak by up to dr/2; the error scaled exactly
+linearly with dr (0.58, 0.30, 0.16, 0.070 as dr halved). Depositing each distance
+linearly between its two neighbouring points cut it 38-fold at dr = 0.01 Å and
+made the peak position independent of where the grid falls — which matters
+because someone reads a bond length off that plot.
+
+### EXAFS, against FEFF itself
+
+The exported `feff.inp` was **refused by FEFF8L**. No internal check could have
+found that: the file was well formed, self-consistent, and rejected. Two separate
+reasons, both fixed and both now asserted by tests.
+
+- An atom of the absorber's element that was not the absorber was given potential
+  index 0, which FEFF reserves for the absorber alone.
+- Annotations were written as extra columns in `POTENTIALS` and `ATOMS`, which
+  FEFF reads positionally: a trailing word is parsed as the next number.
+
+With those fixed FEFF8L runs FACET's output end to end, producing 50 path files,
+`files.dat`, `chi.dat` and `xmu.dat`. Then:
+
+| Check | Result |
+|---|---|
+| FEFF's single-scattering path lengths against FACET's shell radii | every one within 0.06 Å, most exact to 4 decimals |
+| FACET's path sum against FEFF's own `chi.dat` | 2.5 % of the peak, correlation 0.99982 |
+| ΔR against π/(2Δk), N_idp against 2ΔkΔR/π | exact |
+| Einstein σ² at T → 0 and T → ∞ | the zero-point and classical limits, to 1 % |
+| The Einstein and k↔E constants | recomputed from ℏ, k_B, m_e and u |
+
+Both FEFF readers were also wrong at first, and silently: `files.dat` has a
+`sig2` column between the file name and the amplitude ratio, and counting past it
+reported paths with a hundred legs at a uniform 2.0 Å. In `feffNNNN.dat` the
+nleg/deg/reff line is not a header followed by data — it *is* the data, with its
+column names written after the numbers.
+
+### What is still not computed
+
+χ(k) from the structure alone, and XANES. Both are declined in the module
+docstring, in the manual and in `FEATURES.md`, with the reason: a
+single-scattering χ(k) without phase shifts puts the peaks of its Fourier
+transform about 0.4 Å from the distances that generated it, which is the one
+quantity anyone would read off such a curve.
+
+---
+
 ## Reproducing it
 
-The permanent tests live in `tests/`, 1031 of them. Those that correspond
+The permanent tests live in `tests/`. Those that correspond
 directly to the faults above are in `tests/test_expansion_verification.py` and
 `tests/test_robustness.py`, each naming what was wrong and how it was found.
 

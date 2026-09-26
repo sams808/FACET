@@ -54,6 +54,8 @@ from .theme_panel import ThemePanel
 from .diffraction_panel import DiffractionPanel
 from .disorder_panel import DisorderPanel
 from .overrides_panel import OverridesPanel
+from .exafs_panel import ExafsPanel
+from .pdf_panel import PDFPanel
 from .planes_panel import PlanesPanel
 from .utilities_panel import UtilitiesPanel
 from .volume_panel import VolumePanel
@@ -119,6 +121,16 @@ class PreviewWindow(QMainWindow):
         self.diffraction = DiffractionPanel()
         self.diffraction.apply_theme(self.theme)
         self.diffraction.reflection_selected.connect(self._on_reflection)
+
+        self.exafs_panel = ExafsPanel()
+        self.exafs_panel.apply_theme(self.theme)
+        self.exafs_panel.statusMessage.connect(
+            lambda text: self.statusBar().showMessage(text, 12000))
+
+        self.pdf_panel = PDFPanel()
+        self.pdf_panel.apply_theme(self.theme)
+        self.pdf_panel.statusMessage.connect(
+            lambda text: self.statusBar().showMessage(text, 12000))
 
         self.planes_panel = PlanesPanel()
         self.planes_panel.changed.connect(self._on_presentation_change)
@@ -198,6 +210,8 @@ class PreviewWindow(QMainWindow):
         tabs.addTab(self.analysis, "Site")
         tabs.addTab(self.utilities, "Utilities")
         tabs.addTab(self.diffraction, "Diffraction")
+        tabs.addTab(self.pdf_panel, "PDF")
+        tabs.addTab(self.exafs_panel, "EXAFS")
         tabs.addTab(self.planes_panel, "Planes")
         tabs.addTab(self.overrides_panel, "Overrides")
         tabs.addTab(self.volume_panel, "Volume")
@@ -733,6 +747,10 @@ class PreviewWindow(QMainWindow):
             self._current_result(), self.project.v_bond,
             params=self.project.params, v_list=self.project.v_list)
         self.diffraction.set_structure(active.structure if active else None)
+        self.pdf_panel.set_structure(active.structure if active else None)
+        self.exafs_panel.set_context(
+            active.structure if active else None,
+            active.selected_site if active else None)
         self.planes_panel.set_structure(active.structure if active else None)
         self.overrides_panel.set_context(
             active.structure if active else None,
@@ -840,6 +858,8 @@ class PreviewWindow(QMainWindow):
         self.explorer.set_theme(theme)
         self.diffraction.apply_theme(theme)
         self.volume_panel.apply_theme(theme)
+        self.pdf_panel.apply_theme(theme)
+        self.exafs_panel.apply_theme(theme)
         self.utilities.apply_theme(theme)
         app = QApplication.instance()
         if app is not None:

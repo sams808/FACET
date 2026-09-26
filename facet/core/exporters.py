@@ -365,13 +365,34 @@ def write_vesta(structure: Structure, path: str | Path,
 
 
 def write_feff(structure: Structure, site_index: int, path: str | Path,
-               rmax: float = 6.0, edge: str = "L3") -> Path:
+               rmax: float = 6.0, edge: str = "L3",
+               r_path: float | None = None,
+               paths: bool = True) -> Path:
     """A FEFF input for one absorbing site.
 
-    The clusters are written in the order FEFF expects, absorber first with
-    potential index 0. Distances come from the same neighbour search the
-    coordination analysis uses, so the input and the reported shells cannot
-    disagree.
+    Distances come from the same neighbour search the coordination analysis
+    uses, so the input and the reported shells cannot disagree.
+
+    Three details that decide whether FEFF will run the file at all, each
+    learned by running FEFF8L on it.
+
+    *The absorber is the only atom with potential index 0.* An atom of the same
+    element that is not the absorber needs a potential of its own -- so a
+    bismuth cluster about a bismuth absorber gets ``0 83 Bi`` and ``2 83 Bi``.
+    Giving both ipot 0 is refused.
+
+    *``PRINT 0 0 0 0 0 3`` writes the path files.* With ``PRINT 1 0 0 0 0 0``
+    FEFF writes ``chi.dat`` and an empty ``files.dat`` and no ``feffNNNN.dat``,
+    which is exactly what a fit in Artemis or Larch needs.
+
+    *The cluster is larger than RPATH.* An atom at the edge of the cluster has
+    the worst potential in it, so the paths asked for stop short of the
+    boundary. ``r_path`` defaults to ``rmax - 1 A``.
+
+    FEFF has no notion of partial occupancy. Where a site is partly occupied the
+    atom is written in full -- that is the only thing FEFF can read -- with its
+    occupancy as a comment on the line and a statement of the fact in the
+    header, rather than passing over it silently.
     """
     from .neighbors import NeighborFinder
 
@@ -379,29 +400,68 @@ def write_feff(structure: Structure, site_index: int, path: str | Path,
     site = structure.sites[site_index]
     finder = NeighborFinder(structure, rmax=rmax)
     contacts = finder.contacts_for_site(site_index)
+    if r_path is None:
+        r_path = max(rmax - 1.0, 2.0)
 
-    present = [site.element]
+    # ipot 0 is the absorber alone. Every element gets a potential, and the
+    # absorber's element gets a second one for the atoms of it that are not the
+    # absorber -- without which FEFF refuses the file.
+    potential: dict[str, int] = {}
+    next_ipot = 1
     for element in contacts.elements:
-        if element not in present:
-            present.append(element)
-    potential = {element: i for i, element in enumerate(present)}
+        if element not in potential:
+            potential[element] = next_ipot
+            next_ipot += 1
+
+    fractional = [(structure.sites[int(contacts.neighbor_site[i])].label,
+                   float(contacts.occupancy[i]))
+                  for i in range(len(contacts))
+                  if float(contacts.occupancy[i]) < 0.999]
 
     out = io.StringIO()
     out.write(f"* FEFF input written by FACET for {site.label} "
               f"in {structure.name or 'structure'}\n")
     for line in provenance_lines():
         out.write(f"* {line}\n")
+    out.write(f"* Cluster radius {rmax:.2f} A, RPATH {r_path:.2f} A. The "
+              "cluster is larger than RPATH on purpose: an atom at its edge\n"
+              "* has the worst potential in it.\n")
+    if fractional:
+        out.write("* PARTIAL OCCUPANCY: FEFF has no way to represent it, so "
+                  "every atom below is written in full.\n")
+        seen = {}
+        for label, occupancy in fractional:
+            seen[label] = occupancy
+        for label, occupancy in sorted(seen.items()):
+            out.write(f"*   {label} is {occupancy:.4f} occupied in the file "
+                      "and appears here as a whole atom.\n")
     out.write(f"\nTITLE {structure.name or 'structure'} {site.label}\n\n")
     out.write(f"EDGE      {edge}\nS02       1.0\n\n")
-    out.write("CONTROL   1 1 1 1 1 1\nPRINT     1 0 0 0 0 0\n\n")
-    out.write(f"RPATH     {rmax:.1f}\nEXCHANGE  0 0 0\n\n")
+    out.write("CONTROL   1 1 1 1 1 1\n")
+    # 0 0 0 0 0 3 writes files.dat and feffNNNN.dat, which is what a fit needs
+    out.write(f"PRINT     {'0 0 0 0 0 3' if paths else '1 0 0 0 0 0'}\n\n")
+    out.write(f"RPATH     {r_path:.2f}\nEXCHANGE  0 0 0\n\n")
 
+    # FEFF reads both blocks below positionally, so nothing may follow the
+    # fields it expects -- a trailing word is read as the next number and the
+    # file is rejected. Every annotation therefore goes in a comment line above.
+    out.write(f"* ipot 0 is the absorber, {site.label}. ")
+    same = [e for e in potential if e == site.element]
+    if same:
+        out.write(f"ipot {potential[site.element]} is the other {site.element} "
+                  "atoms,\n*   which need a potential of their own because "
+                  "ipot 0 is the absorber alone.\n")
+    else:
+        out.write("The others are the scatterers.\n")
     out.write("POTENTIALS\n*    ipot   Z  element\n")
+    z_absorber = elements.info(site.element).z or 0
+    out.write(f"     {0:<5d} {z_absorber:<3d} {site.element}\n")
     for element, ipot in potential.items():
         z = elements.info(element).z or 0
         out.write(f"     {ipot:<5d} {z:<3d} {element}\n")
 
-    out.write("\nATOMS\n*    x          y          z      ipot  label  distance\n")
+    out.write("\nATOMS\n*    x          y          z      ipot  label"
+              "  distance\n")
     out.write(f"  {0.0:10.5f} {0.0:10.5f} {0.0:10.5f}   0     "
               f"{site.element:<4s} 0.00000\n")
     order = np.argsort(contacts.distance)
