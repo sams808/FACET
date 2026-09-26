@@ -13,6 +13,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence
 from PySide6.QtWidgets import (
@@ -52,6 +54,7 @@ from .disorder_panel import DisorderPanel
 from .overrides_panel import OverridesPanel
 from .planes_panel import PlanesPanel
 from .utilities_panel import UtilitiesPanel
+from .volume_panel import VolumePanel
 
 
 class PolyhedraMode:
@@ -119,6 +122,12 @@ class PreviewWindow(QMainWindow):
         self.overrides_panel.changed.connect(self._on_presentation_change)
         self.overrides_panel.focusAtom.connect(self._focus_atom)
 
+        self.volume_panel = VolumePanel()
+        self.volume_panel.apply_theme(self.theme)
+        self.volume_panel.isosurfaceChanged.connect(self._on_isosurface)
+        self.volume_panel.statusMessage.connect(
+            lambda text: self.statusBar().showMessage(text, 9000))
+
         self.history = history_mod.History()
         self.view.contextRequested.connect(self._on_context_menu)
 
@@ -183,6 +192,7 @@ class PreviewWindow(QMainWindow):
         tabs.addTab(self.diffraction, "Diffraction")
         tabs.addTab(self.planes_panel, "Planes")
         tabs.addTab(self.overrides_panel, "Overrides")
+        tabs.addTab(self.volume_panel, "Volume")
         tabs.addTab(self.disorder_panel, "Disorder")
         tabs.addTab(self.theme_panel, "Appearance")
         tabs.setMinimumWidth(400)
@@ -572,6 +582,8 @@ class PreviewWindow(QMainWindow):
             active.structure if active else None,
             active.overrides if active else None)
         self.disorder_panel.set_entry(active)
+        self.volume_panel.set_context(
+            active.structure if active else None, self.project.params)
 
     def _current_result(self):
         entry = self.project.current
@@ -666,12 +678,14 @@ class PreviewWindow(QMainWindow):
         self.view.set_theme(theme)
         self.explorer.set_theme(theme)
         self.diffraction.apply_theme(theme)
+        self.volume_panel.apply_theme(theme)
 
     def _on_theme_structural(self, theme) -> None:
         """Colour mode, palette, sizes: the vertex arrays must be rebuilt."""
         self.theme = theme
         self.explorer.set_theme(theme)
         self.diffraction.apply_theme(theme)
+        self.volume_panel.apply_theme(theme)
         self._rebuild()
 
     def _on_reflection(self, h: int, k: int, l: int) -> None:
@@ -751,6 +765,42 @@ class PreviewWindow(QMainWindow):
             entry.overrides if entry else None)
         self._rebuild()
         self._refresh_history_actions()
+
+    def _on_isosurface(self, grid, level: float) -> None:
+        """Put a level set of a volumetric field into the 3D scene, or take it out.
+
+        Triangulated here rather than in the panel because the scene is the
+        window's, and because a level set is geometry: it belongs with the atoms
+        and the polyhedra, ordered against them for transparency, not drawn as a
+        separate layer on top.
+        """
+        if self.scene is None:
+            return
+        if grid is None:
+            self.scene.set_isosurface(np.zeros((0, 3)), np.zeros((0, 3), int),
+                                      np.zeros((0, 3)))
+            self.view.set_scene(self.scene, reframe=False)
+            return
+        from ..core import volume as volume_mod
+
+        try:
+            vertices, faces, normals = volume_mod.isosurface(
+                grid, level, step=self.volume_panel.iso_step_value())
+        except (ValueError, MemoryError) as error:
+            self.statusBar().showMessage(str(error), 9000)
+            return
+        if not len(faces):
+            self.statusBar().showMessage(
+                f"no surface at {level:g}: the field does not cross that level",
+                9000)
+        self.scene.set_isosurface(
+            vertices, faces, normals,
+            color=self.theme.polyhedron_color, alpha=0.55,
+            label=f"{grid.name or 'field'} = {level:g} {grid.units}".strip())
+        self.view.set_scene(self.scene, reframe=False)
+        self.statusBar().showMessage(
+            f"{len(faces)} triangles at {grid.name or 'field'} = {level:g} "
+            f"{grid.units}".rstrip(), 9000)
 
     def _on_disorder(self, description: str = "") -> None:
         """A different disorder configuration is a different structure.

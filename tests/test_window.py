@@ -74,8 +74,12 @@ def test_every_tab_is_present(window):
 
     tabs = window.findChild(QTabWidget)
     titles = [tabs.tabText(i) for i in range(tabs.count())]
+    # A deliberate inventory rather than a subset check: it catches a tab
+    # accidentally removed as well as one added, and the order is the reading
+    # order of the workflow.
     assert titles == ["Site", "Utilities", "Diffraction", "Planes",
-                      "Overrides", "Disorder", "Appearance"]
+                      "Overrides", "Volume", "Disorder", "Appearance"]
+    assert len(set(titles)) == len(titles)
 
 
 # ---------------------------------------------------------------------------

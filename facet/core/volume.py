@@ -697,3 +697,147 @@ def read_volume(path):
             f"{path.name}: not a volumetric format FACET reads. It reads "
             "CHGCAR, LOCPOT, ELFCAR, Gaussian CUBE and XCrySDen XSF.")
     return reader(path)
+
+
+# ---------------------------------------------------------------------------
+# contouring a section
+# ---------------------------------------------------------------------------
+# Marching squares, the two-dimensional relative of the marching tetrahedra used
+# for the isosurfaces. Sixteen cases, of which two are empty; the two saddle
+# cases are resolved by the average of the four corners, which is the standard
+# disambiguation and the reason a contour map never shows crossing lines.
+
+# For each of the 16 corner sign patterns, the pairs of edges a contour crosses.
+# Corners are numbered 0 bottom-left, 1 bottom-right, 2 top-right, 3 top-left;
+# edges 0 bottom, 1 right, 2 top, 3 left.
+_SQUARE_CASES = {
+    0b0000: (), 0b1111: (),
+    0b0001: ((3, 0),), 0b1110: ((3, 0),),
+    0b0010: ((0, 1),), 0b1101: ((0, 1),),
+    0b0100: ((1, 2),), 0b1011: ((1, 2),),
+    0b1000: ((2, 3),), 0b0111: ((2, 3),),
+    0b0011: ((3, 1),), 0b1100: ((3, 1),),
+    0b0110: ((0, 2),), 0b1001: ((0, 2),),
+}
+
+
+def contour_lines(values, extent, levels):
+    """Contour line segments through a 2D field.
+
+    ``values`` is the array :func:`section` returns and ``extent`` its
+    ``(umin, umax, vmin, vmax)``. Returns ``{level: array of (n, 2, 2)
+    segments}`` in the same units as the extent, so the caller draws them
+    directly without knowing the grid.
+
+    Segments rather than joined polylines: a contour of a periodic field can
+    enter and leave the sampled square many times, and stitching them into
+    closed loops would mean deciding which ends belong together -- a decision
+    that is wrong exactly where the field is interesting. Drawn as segments the
+    picture is identical and nothing is guessed.
+    """
+    values = np.asarray(values, float)
+    if values.ndim != 2 or min(values.shape) < 2:
+        return {float(level): np.zeros((0, 2, 2)) for level in np.atleast_1d(levels)}
+
+    umin, umax, vmin, vmax = (float(x) for x in extent)
+    rows, cols = values.shape
+    # section() builds its grid with indexing="xy", so the first index runs over
+    # v and the second over u
+    u_axis = np.linspace(umin, umax, cols)
+    v_axis = np.linspace(vmin, vmax, rows)
+
+    out = {}
+    for level in np.atleast_1d(np.asarray(levels, float)):
+        segments = []
+        # the four corners of every cell at once
+        bl = values[:-1, :-1]
+        br = values[:-1, 1:]
+        tr = values[1:, 1:]
+        tl = values[1:, :-1]
+        code = (((bl > level).astype(np.uint8))
+                | ((br > level).astype(np.uint8) << 1)
+                | ((tr > level).astype(np.uint8) << 2)
+                | ((tl > level).astype(np.uint8) << 3))
+
+        for pattern, edges in _SQUARE_CASES.items():
+            if not edges:
+                continue
+            rows_i, cols_i = np.nonzero(code == pattern)
+            if not len(rows_i):
+                continue
+            for j, i in zip(rows_i, cols_i):
+                corners = (values[j, i], values[j, i + 1],
+                           values[j + 1, i + 1], values[j + 1, i])
+                for first, second in edges:
+                    a = _edge_point(first, corners, level, u_axis, v_axis, i, j)
+                    b = _edge_point(second, corners, level, u_axis, v_axis, i, j)
+                    if a is not None and b is not None:
+                        segments.append((a, b))
+
+        # the two saddles, resolved by the centre value
+        for pattern, alternatives in ((0b0101, ((0, 1), (2, 3))),
+                                      (0b1010, ((3, 0), (1, 2)))):
+            rows_i, cols_i = np.nonzero(code == pattern)
+            for j, i in zip(rows_i, cols_i):
+                corners = (values[j, i], values[j, i + 1],
+                           values[j + 1, i + 1], values[j + 1, i])
+                centre = sum(corners) / 4.0
+                if (centre > level) == (pattern == 0b0101):
+                    pairs = alternatives
+                else:
+                    pairs = (((3, 0), (1, 2)) if pattern == 0b0101
+                             else ((0, 1), (2, 3)))
+                for first, second in pairs:
+                    a = _edge_point(first, corners, level, u_axis, v_axis, i, j)
+                    b = _edge_point(second, corners, level, u_axis, v_axis, i, j)
+                    if a is not None and b is not None:
+                        segments.append((a, b))
+
+        out[float(level)] = (np.array(segments, float) if segments
+                             else np.zeros((0, 2, 2)))
+    return out
+
+
+def _edge_point(edge: int, corners, level: float, u_axis, v_axis,
+                i: int, j: int):
+    """Where a contour crosses one edge of a cell, by linear interpolation."""
+    # (corner a, corner b) for each edge, in the numbering above
+    ends = {0: (0, 1), 1: (1, 2), 2: (2, 3), 3: (3, 0)}[edge]
+    va, vb = corners[ends[0]], corners[ends[1]]
+    if va == vb:
+        return None
+    t = (level - va) / (vb - va)
+    if not -1e-9 <= t <= 1 + 1e-9:
+        return None
+    t = min(max(t, 0.0), 1.0)
+
+    # cell corner coordinates
+    u0, u1 = u_axis[i], u_axis[i + 1]
+    v0, v1 = v_axis[j], v_axis[j + 1]
+    positions = {0: (u0, v0), 1: (u1, v0), 2: (u1, v1), 3: (u0, v1)}
+    ua, wa = positions[ends[0]]
+    ub, wb = positions[ends[1]]
+    return (ua + t * (ub - ua), wa + t * (wb - wa))
+
+
+def nice_levels(values, count: int = 8, log: bool = False):
+    """A set of contour levels spanning the data, for a first look.
+
+    Linear by default; logarithmic where the field spans decades, which a
+    bond-valence sum or a charge density usually does. Only a starting point --
+    the interesting level is rarely a round number.
+    """
+    values = np.asarray(values, float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return np.zeros(0)
+    low, high = float(finite.min()), float(finite.max())
+    if high <= low:
+        return np.array([low])
+    count = max(int(count), 1)
+    if log:
+        positive = finite[finite > 0]
+        if positive.size:
+            low = float(positive.min())
+            return np.exp(np.linspace(np.log(low), np.log(high), count + 2))[1:-1]
+    return np.linspace(low, high, count + 2)[1:-1]
