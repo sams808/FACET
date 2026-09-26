@@ -1764,6 +1764,9 @@ def main(argv: list[str] | None = None) -> int:
     QSurfaceFormat.setDefaultFormat(caps_mod.request_format())
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName(NAME)
+    # the same chrome the real entry point applies, so running this module
+    # directly does not give a differently coloured window
+    chrome.apply(app, theme_mod.Theme())
 
     window = PreviewWindow(argv[1] if len(argv) > 1 else None)
     window.show()

@@ -212,12 +212,13 @@ drives the Site tab, the polyhedron and the cutoff explorer.</p>
 how many cells to tile, the unit cell, the projection, what to label atoms and
 bonds with, and the tabulation threshold.</p>
 <h2>Right</h2>
-<p>Eight tabs. <b>Site</b> is the analysis of the selected site.
+<p>Ten tabs. <b>Site</b> is the analysis of the selected site.
 <b>Utilities</b> holds the whole-structure tables. <b>Diffraction</b> computes a
-powder pattern. <b>Planes</b> cuts lattice planes and slabs. <b>Overrides</b>
-lists per-atom and per-site styling. <b>Volume</b> maps bond-valence sum through
-space. <b>Disorder</b> handles partial occupancy and alternative
-configurations. <b>Appearance</b> is colour, sizing and themes.</p>
+powder pattern, <b>PDF</b> a pair distribution function, and <b>EXAFS</b> the
+shell list and resolution report. <b>Planes</b> cuts lattice planes and slabs.
+<b>Overrides</b> lists per-atom and per-site styling. <b>Volume</b> maps
+bond-valence sum through space. <b>Disorder</b> handles partial occupancy and
+alternative configurations. <b>Appearance</b> is colour, sizing and themes.</p>
 <h2>Bottom</h2>
 <p>The <b>cutoff explorer</b>. Each site is a staircase: coordination number
 against threshold, with the flat treads being the plateaux. Drag the vertical

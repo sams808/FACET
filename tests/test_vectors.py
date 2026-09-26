@@ -209,13 +209,36 @@ def test_the_lobe_is_a_surface_of_revolution_about_its_axis():
 
 
 def test_the_cone_has_the_half_angle_asked_for():
-    for degrees in (15.0, 35.0, 54.7356, 80.0):
-        cone = V.cone_meshes([[0, 0, 0]], [[0, 0, 1.0]], [degrees], [2.0])
+    """Measured as the angle between the axis and a generator.
+
+    Not as rim/height: that ratio is tan(alpha), which runs away at 90 degrees,
+    and a void half-angle approaches 90 degrees exactly when the environment is
+    one-sided -- the case the cone exists to show.
+    """
+    for degrees in (15.0, 35.0, 54.7356, 80.0, 90.0, 120.0, 175.0):
+        length = 2.0
+        cone = V.cone_meshes([[0, 0, 0]], [[0, 0, 1.0]], [degrees], [length])
         v = np.asarray(cone.vertices, float)
-        rim = v[np.abs(v[:, 2] - 2.0) < 1e-5]
+        rim = v[np.linalg.norm(v, axis=1) > 1e-6]
         assert len(rim)
-        ratio = np.linalg.norm(rim[:, :2], axis=1).max() / 2.0
-        assert ratio == pytest.approx(np.tan(np.radians(degrees)), rel=1e-5)
+        # every rim point is one generator length from the apex...
+        assert np.linalg.norm(rim, axis=1) == pytest.approx(length, abs=1e-5)
+        # ...at the angle asked for, from the axis
+        cosine = rim[:, 2] / np.linalg.norm(rim, axis=1)
+        assert np.degrees(np.arccos(np.clip(cosine, -1, 1))) == pytest.approx(
+            degrees, abs=1e-4)
+
+
+def test_a_wide_cone_stays_the_size_it_was_asked_for():
+    """A half-angle near 90 degrees must not produce a cone the size of a room.
+
+    Fixing the axial height puts the rim at L*tan(alpha): at 89.94 degrees that
+    is 954 times the length asked for, which filled the viewport and -- because
+    the framing includes the overlays -- pushed the structure out of the view.
+    """
+    for degrees in (89.0, 89.94, 90.0, 91.0):
+        cone = V.cone_meshes([[0, 0, 0]], [[0, 0, 1.0]], [degrees], [1.5])
+        assert np.abs(np.asarray(cone.vertices, float)).max() <= 1.5 + 1e-6
 
 
 def test_parts_survive_a_depth_sort():

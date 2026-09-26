@@ -204,9 +204,16 @@ class Scene:
                 direction = -sums.vector[live] / magnitude[:, None]
                 length = (float(self.vector_scale) * sums.phi[live]
                           * sums.mean_distance[live])
-                colour = getattr(theme, "vector_color", None) or (0.86, 0.72, 0.98)
+                colour = (getattr(theme, "vector_color", None)
+                          or vectors_mod.overlay_colors(theme)[0])
+                # Start at the drawn surface of the atom, not at its centre.
+                # The lobe's own length is still exactly what was computed; it
+                # is simply drawn where it can be seen, since a lobe shorter
+                # than the sphere it sits inside shows nothing at all.
+                start = (self.atom_position[live]
+                         + direction * self.atom_radius[live][:, None])
                 self.overlay_meshes.append(vectors_mod.lobe_meshes(
-                    self.atom_position[live], direction, length,
+                    start, direction, length,
                     atoms=np.nonzero(live)[0], color=colour))
 
         if self.show_void_cones and self.poly_sites:
@@ -238,7 +245,8 @@ class Scene:
             atoms.append(atom)
         if not origins:
             return
-        colour = getattr(theme, "cone_color", None) or (0.40, 0.78, 0.92)
+        colour = (getattr(theme, "cone_color", None)
+                  or vectors_mod.overlay_colors(theme)[1])
         self.overlay_meshes.append(vectors_mod.cone_meshes(
             origins, axes, angles, lengths, atoms=atoms, color=colour))
 

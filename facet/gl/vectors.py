@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+RGBTuple = tuple[float, float, float]
+
 # The lobe's waist, in angstrom. Deliberately thinner than any drawn atom so a
 # lobe cannot be mistaken for one, and so several lobes in a dense structure
 # stay separable.
@@ -51,6 +53,27 @@ LOBE_RADIUS = 0.22
 # drawn sphere on the FULL tier and still smooth at a metre from the screen.
 AROUND = 16
 ALONG = 12
+
+# The overlay colours, per ground. Amber for the vector sum and teal for the
+# void cone: both have to stay distinct from the element colours that matter
+# here -- violet cations and red oxygen -- and from the blue of a coordination
+# polyhedron, on a white ground and on a dark one.
+LOBE_COLOR_LIGHT = (0.88, 0.52, 0.02)
+LOBE_COLOR_DARK = (1.00, 0.78, 0.30)
+CONE_COLOR_LIGHT = (0.06, 0.55, 0.52)
+CONE_COLOR_DARK = (0.40, 0.86, 0.82)
+LOBE_ALPHA = 0.78
+CONE_ALPHA = 0.30
+
+
+def overlay_colors(theme=None) -> tuple[RGBTuple, RGBTuple]:
+    """(lobe, cone) for a theme, chosen by how light its background is."""
+    background = tuple(getattr(theme, "background", None) or (1.0, 1.0, 1.0))
+    luminance = (0.2126 * background[0] + 0.7152 * background[1]
+                 + 0.0722 * background[2])
+    if luminance > 0.5:
+        return LOBE_COLOR_LIGHT, CONE_COLOR_LIGHT
+    return LOBE_COLOR_DARK, CONE_COLOR_DARK
 
 
 @dataclass
@@ -279,7 +302,7 @@ def _quads_to_triangles(points, normals):
 
 def lobe_meshes(origins, directions, lengths, *, radius: float = LOBE_RADIUS,
                 around: int = AROUND, along: int = ALONG, atoms=None,
-                color=(0.86, 0.72, 0.98), alpha: float = 0.55,
+                color=LOBE_COLOR_LIGHT, alpha: float = LOBE_ALPHA,
                 label: str = "bond-valence vector") -> OverlayMesh:
     """A teardrop lobe per entry, anchored at ``origins``.
 
@@ -324,13 +347,24 @@ def lobe_meshes(origins, directions, lengths, *, radius: float = LOBE_RADIUS,
 
 
 def cone_meshes(origins, axes, half_angles, lengths, *, around: int = AROUND,
-                atoms=None, color=(0.40, 0.78, 0.92), alpha: float = 0.28,
+                atoms=None, color=CONE_COLOR_LIGHT,
+                alpha: float = CONE_ALPHA,
                 label: str = "void cone") -> OverlayMesh:
     """An open cone per entry: apex at the atom, the measured half-angle.
 
-    ``half_angles`` in degrees, as the analysis reports them. The lateral
-    surface only: a cone closed with a disc reads as a solid, and what is being
-    shown is an angle.
+    ``half_angles`` in degrees, as the analysis reports them, and ``lengths``
+    is the length of the cone's *generator* -- the slant -- not its axial
+    height. That distinction decides whether this is drawable at all: with the
+    height fixed the rim sits at L*tan(alpha), which runs away as the half-angle
+    approaches 90 degrees, and a void half-angle approaches 90 degrees exactly
+    when the environment is one-sided, which is the case the feature exists for.
+    With the slant fixed the rim is at L*sin(alpha) and the apex-to-rim height
+    is L*cos(alpha), both bounded by L at every angle -- including angles past
+    90 degrees, where the cone opens backwards, which is what a site with a
+    single ligand should draw.
+
+    The lateral surface only: a cone closed with a disc reads as a solid, and
+    what is being shown is an angle.
     """
     origins = np.atleast_2d(np.asarray(origins, np.float64))
     axes = np.atleast_2d(np.asarray(axes, np.float64))
@@ -341,14 +375,16 @@ def cone_meshes(origins, axes, half_angles, lengths, *, around: int = AROUND,
                            np.zeros((0, 3), np.float32), color, alpha,
                            label=label)
 
-    alpha_rad = np.clip(np.radians(half), 1e-3, np.pi / 2 - 1e-3)
+    alpha_rad = np.clip(np.radians(half), 1e-3, np.pi - 1e-3)
     # two rings: the apex and the rim, so the lateral surface is one quad band
     t = np.array([0.0, 1.0])
-    radii = (lengths * np.tan(alpha_rad))[:, None] * t[None, :]
-    heights = lengths[:, None] * t[None, :]
+    rim = lengths * np.sin(alpha_rad)
+    reach = lengths * np.cos(alpha_rad)
+    radii = rim[:, None] * t[None, :]
+    heights = reach[:, None] * t[None, :]
     # a straight generator: dr/dt and dz/dt are constant along it
-    dradii = np.repeat((lengths * np.tan(alpha_rad))[:, None], 2, axis=1)
-    dheights = np.repeat(lengths[:, None], 2, axis=1)
+    dradii = np.repeat(rim[:, None], 2, axis=1)
+    dheights = np.repeat(reach[:, None], 2, axis=1)
 
     points, normals = _revolve(origins, axes, radii, heights,
                                dradii, dheights, around)
