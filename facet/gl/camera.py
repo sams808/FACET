@@ -252,6 +252,47 @@ class Camera:
     def matrices(self, aspect: float) -> tuple[np.ndarray, np.ndarray]:
         return self.view_matrix(), self.projection_matrix(aspect)
 
+    # -- stereo -----------------------------------------------------------
+    # The separation is an angle, not a distance: half the angle the two eyes
+    # subtend at the target. Expressing it that way makes it independent of how
+    # far away the camera is, so the depth impression stays the same as you zoom
+    # -- with a fixed distance it would collapse on a small cell and become
+    # painful on a large one. About 1.2 degrees is the usual comfortable value
+    # for a screen at arm's length.
+    STEREO_SEPARATION = 1.2         # degrees, half-angle
+
+    def for_eye(self, eye: int, separation: float | None = None) -> "Camera":
+        """A copy of this camera displaced for one eye.
+
+        ``eye`` is -1 for the left, +1 for the right, 0 for the original. A whole
+        camera rather than just matrices, so every render path -- the GL tiers,
+        the QPainter fallback, the image export -- gets stereo by being handed a
+        different camera, with no stereo-specific code of its own.
+
+        Toe-in stereo: each eye is rotated about the target, so both still look
+        at the same point. It is not how human eyes work in detail -- it leaves a
+        small vertical parallax at the edges of a wide field -- but it needs no
+        off-axis projection, which is what keeps it identical on all three tiers,
+        and at these angles the error is far below what the eye notices.
+        """
+        if not eye:
+            return self
+        angle = math.radians(separation if separation is not None
+                             else self.STEREO_SEPARATION) * float(eye)
+        up = quat_to_matrix(self.orientation)[1, :3]
+        turn = quat_from_axis_angle(up, angle)
+        return Camera(
+            target=self.target.copy(), distance=self.distance,
+            orientation=quat_multiply(self.orientation, turn),
+            fov=self.fov, orthographic=self.orthographic,
+            scene_radius=self.scene_radius,
+            rotation_sense=self.rotation_sense)
+
+    def eye_matrices(self, aspect: float, eye: int,
+                     separation: float | None = None):
+        """View and projection for one eye. ``eye`` is -1 left, +1 right, 0 mono."""
+        return self.for_eye(eye, separation).matrices(aspect)
+
     # -- projection helpers -----------------------------------------------
     def project(self, points, width: int, height: int) -> np.ndarray:
         """World points to screen pixels, plus view depth.

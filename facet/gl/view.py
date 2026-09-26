@@ -20,6 +20,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
 
 from . import caps as caps_mod
+from . import stereo as stereo_mod
 from . import labels as labels_mod
 from .camera import Camera
 from .scene import Scene, Style
@@ -48,6 +49,10 @@ class StructureView(QOpenGLWidget):
 
         self.camera = Camera()
         self.scene: Scene | None = None
+        # Stereo is off by default and costs nothing while it is: the second
+        # eye is only rendered when a mode asks for it.
+        self.stereo = stereo_mod.Mode.OFF
+        self.stereo_separation = Camera.STEREO_SEPARATION
         self.caps: caps_mod.Capabilities | None = None
         self.theme = None
 
@@ -160,6 +165,53 @@ class StructureView(QOpenGLWidget):
         self._selected = index
         self.update()
 
+    def set_stereo(self, mode, separation: float | None = None) -> None:
+        """Choose a stereo mode. Off means one render, as before."""
+        self.stereo = mode
+        if separation is not None:
+            self.stereo_separation = float(separation)
+        self.update()
+
+    def stereo_pair(self, width: int, height: int, supersample: int = 1):
+        """Render both eyes and return ``(left, right)`` as QImages.
+
+        Nothing about stereo reaches the renderers: each eye is just a different
+        camera, which is why this works the same on all three tiers.
+        """
+        left = self.camera.for_eye(-1, self.stereo_separation)
+        right = self.camera.for_eye(+1, self.stereo_separation)
+        return (self._render_to_image(left, width, height, supersample),
+                self._render_to_image(right, width, height, supersample))
+
+    def _render_to_image(self, camera, width: int, height: int,
+                         supersample: int = 1):
+        """One camera to a QImage, on whichever tier is in use."""
+        from PySide6.QtGui import QImage, QPainter
+
+        if self._renderer is not None:
+            self.makeCurrent()
+            try:
+                previous = self._renderer.target_fbo
+                self._renderer.target_fbo = None
+                try:
+                    return self._renderer.to_image(camera, width, height,
+                                                   supersample)
+                finally:
+                    self._renderer.target_fbo = previous
+            finally:
+                self.doneCurrent()
+
+        image = QImage(width, height, QImage.Format_RGBA8888)
+        image.fill(0)
+        painter = QPainter(image)
+        try:
+            if self._fallback is not None and self.scene is not None:
+                self._fallback.render(painter, self.scene, camera,
+                                      width, height, selected=self._selected)
+        finally:
+            painter.end()
+        return image
+
     def clear_measurement(self) -> None:
         self._measure_chain.clear()
         self._status = ""
@@ -173,10 +225,20 @@ class StructureView(QOpenGLWidget):
         declines MSAA on the default framebuffer, and a 3x downsample is what a
         600 dpi figure wants regardless.
         """
-        if self._renderer is None:
-            return self.grab().toImage()
         w = int(width or self.width())
         h = int(height or self.height())
+        if self.stereo.needs_two_eyes and self.scene is not None:
+            left, right = self.stereo_pair(w, h, supersample)
+            return stereo_mod.combine(left, right, self.stereo)
+        if self._renderer is None:
+            # Render at the size asked for rather than grabbing the widget.
+            # Grabbing ignores width and height entirely, so on a machine with
+            # no graphics card "export at 2000 px" quietly produced a picture
+            # the size of the window -- the one tier where a user is most likely
+            # to need a bigger image than the screen.
+            if self.scene is not None:
+                return self._render_to_image(self.camera, w, h)
+            return self.grab().toImage()
         self.makeCurrent()
         try:
             previous, self._renderer.target_fbo = self._renderer.target_fbo, None
@@ -250,7 +312,15 @@ class StructureView(QOpenGLWidget):
         w = max(1, int(self.width() * ratio))
         h = max(1, int(self.height() * ratio))
 
-        if self._renderer is not None and self.scene is not None:
+        stereo_image = None
+        if self.stereo.needs_two_eyes and self.scene is not None:
+            # Both eyes are rendered offscreen and combined on the pixels, then
+            # the result is blitted with QPainter. Doing it that way rather than
+            # with colour masks in the shader is what lets the software tier and
+            # the image export use exactly the same stereo code.
+            left, right = self.stereo_pair(w, h)
+            stereo_image = stereo_mod.combine(left, right, self.stereo)
+        elif self._renderer is not None and self.scene is not None:
             self._renderer.target_fbo = self.defaultFramebufferObject()
             try:
                 self._renderer.render(self.camera, w, h)
@@ -269,8 +339,15 @@ class StructureView(QOpenGLWidget):
 
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
-        if self._renderer is None:
+        if stereo_image is not None:
+            painter.drawImage(0, 0, stereo_image.scaled(
+                w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        elif self._renderer is None:
             self._paint_fallback(painter)
+        # The overlay -- labels, the gizmo, a measurement -- is drawn once, from
+        # the centre view. Drawing it per eye would put the text at two different
+        # depths and it would not fuse; a single overlay reads as floating in
+        # front, which is where an annotation belongs.
         self._paint_overlay(painter)
         painter.end()
 

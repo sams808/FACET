@@ -89,6 +89,7 @@ class PreviewWindow(QMainWindow):
         self.theme_panel = ThemePanel(self.theme)
         self.theme_panel.themeChanged.connect(self._on_theme_cosmetic)
         self.theme_panel.rebuildNeeded.connect(self._on_theme_structural)
+        self.theme_panel.viewingChanged.connect(self._on_viewing)
 
         self.site_list = QListWidget()
         self.site_list.currentRowChanged.connect(self._on_site_row)
@@ -940,6 +941,26 @@ class PreviewWindow(QMainWindow):
         self.overrides_panel.refresh()
         self._on_presentation_change(
             "cleared the override on " + level + " " + str(target))
+
+    def _on_viewing(self, stereo_mode, separation: float, sort: bool) -> None:
+        """Stereo and transparency ordering: how you are looking, not the theme."""
+        self.view.set_stereo(stereo_mode, separation)
+        renderer = getattr(self.view, "_renderer", None)
+        if renderer is not None:
+            renderer.sort_transparency = bool(sort)
+            renderer._sort_key = None          # force one re-sort either way
+        fallback = getattr(self.view, "_fallback", None)
+        if fallback is not None:
+            # the software tier sorts everything by depth already, so there is
+            # nothing to switch off there
+            pass
+        self.view.update()
+        from ..gl import stereo as stereo_mod
+
+        if stereo_mode is not stereo_mod.Mode.OFF:
+            self.statusBar().showMessage(
+                f"stereo: {stereo_mode.value}, eye separation "
+                f"{separation:.1f} deg", 8000)
 
     def _view_along(self, axis) -> None:
         if self.structure is None:

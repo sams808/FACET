@@ -66,6 +66,7 @@ class ThemePanel(QWidget):
 
     themeChanged = Signal(object)          # cosmetic: no scene rebuild needed
     rebuildNeeded = Signal(object)         # colour mode or scale: rebuild
+    viewingChanged = Signal(object, float, bool)   # stereo mode, separation, sort
 
     def __init__(self, theme: theme_mod.Theme | None = None,
                  parent: QWidget | None = None):
@@ -93,6 +94,7 @@ class ThemePanel(QWidget):
         self._build_scene_colors()
         self._build_sizes()
         self._build_quality()
+        self._build_viewing()
         self._layout.addStretch(1)
         self._build_io()
         self._reload()
@@ -218,6 +220,55 @@ class ThemePanel(QWidget):
         self.outline = QCheckBox("Contact outlines")
         self.outline.toggled.connect(self._apply_quality)
         form.addRow(self.outline)
+
+    def _build_viewing(self) -> None:
+        """Stereo, and how transparency is ordered.
+
+        Not part of the theme: a theme is a palette and a set of sizes, and it is
+        meant to be saved and shared. How you happen to be looking at the screen
+        is not. So these emit their own signal and are not written to the theme
+        file.
+        """
+        from ..gl import stereo as stereo_mod
+
+        form = self._group("Viewing")
+        self.stereo_box = QComboBox()
+        for mode in stereo_mod.Mode:
+            self.stereo_box.addItem(mode.value, mode)
+        self.stereo_box.setToolTip(
+            "Renders the structure twice, once per eye. Red-cyan needs the "
+            "glasses; side by side needs a stereoscope or a knack for parallel "
+            "viewing, and the crossed pair is the same thing for people who "
+            "find crossing easier.")
+        self.stereo_box.activated.connect(self._apply_viewing)
+        form.addRow("Stereo", self.stereo_box)
+
+        self.stereo_separation = QSlider(Qt.Horizontal)
+        self.stereo_separation.setRange(2, 40)          # tenths of a degree
+        self.stereo_separation.setValue(12)
+        self.stereo_separation.setToolTip(
+            "The half-angle between the eyes, in tenths of a degree. An angle "
+            "rather than a distance, so the depth impression does not change as "
+            "you zoom. About 1.2 degrees suits a screen at arm's length.")
+        self.stereo_separation.valueChanged.connect(self._apply_viewing)
+        form.addRow("Eye separation", self.stereo_separation)
+
+        self.sort_transparency = QCheckBox("Order transparent surfaces by depth")
+        self.sort_transparency.setChecked(True)
+        self.sort_transparency.setToolTip(
+            "Alpha blending depends on the order it is done in, so without this "
+            "one of two overlapping polyhedra looks solid and the other looks "
+            "absent depending on which was uploaded last. Sorting costs nothing "
+            "while the camera is still.")
+        self.sort_transparency.toggled.connect(self._apply_viewing)
+        form.addRow(self.sort_transparency)
+
+    def _apply_viewing(self, *_) -> None:
+        if self._loading:
+            return
+        self.viewingChanged.emit(self.stereo_box.currentData(),
+                                 self.stereo_separation.value() / 10.0,
+                                 self.sort_transparency.isChecked())
 
     def _build_io(self) -> None:
         row = QHBoxLayout()

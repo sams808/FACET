@@ -93,6 +93,12 @@ class PainterRenderer:
         items: list[tuple[float, object]] = []
         self._collect_cell(items, scene, camera, width, height)
         self._collect_planes(items, scene, camera, width, height)
+        self._collect_mesh(items, scene.poly_vertices, scene.poly_normals,
+                           scene.poly_color, scene.poly_alpha, camera,
+                           width, height)
+        self._collect_mesh(items, scene.iso_vertices, scene.iso_normals,
+                           scene.iso_color, scene.iso_alpha, camera,
+                           width, height)
         self._collect_bonds(items, scene, camera, width, height)
         self._collect_atoms(items, scene, atoms, width, height)
 
@@ -203,6 +209,59 @@ class PainterRenderer:
             # the cell outline is a reference frame, not an object: always
             # behind, so it never cuts across an atom
             items.append((-np.inf, self._cell_drawer(seg)))
+
+    def _collect_mesh(self, items, vertices, normals, colour, alpha,
+                      camera: Camera, width: int, height: int) -> None:
+        """A transparent triangle mesh: coordination polyhedra, or a level set.
+
+        The software tier draws these too. A polyhedron is the point of the
+        program, so a machine with no graphics card must not simply be shown the
+        structure without them.
+
+        Transparency here is correct by construction rather than by a technique:
+        every triangle goes into the same back-to-front queue as the atoms and
+        bonds, so the blend happens in depth order without a sort of its own. The
+        GL tiers have to sort explicitly to get the same thing.
+        """
+        if vertices is None or not len(vertices):
+            return
+        triangles = np.asarray(vertices, float).reshape(-1, 3, 3)
+        if normals is not None and len(normals) == len(vertices):
+            face_normals = np.asarray(normals, float).reshape(-1, 3, 3)[:, 0, :]
+        else:
+            face_normals = np.cross(triangles[:, 1] - triangles[:, 0],
+                                    triangles[:, 2] - triangles[:, 0])
+
+        flat = camera.project(triangles.reshape(-1, 3), width, height)
+        projected = flat.reshape(-1, 3, 3)
+        for index in range(len(triangles)):
+            corners = projected[index]
+            if np.any(corners[:, 2] >= 0):
+                continue
+            depth = float(np.mean(corners[:, 2]))
+            items.append((depth, self._mesh_drawer(
+                corners, face_normals[index], colour, alpha)))
+
+    def _mesh_drawer(self, corners, normal, colour, alpha):
+        def draw(painter: QPainter):
+            polygon = QPolygonF([QPointF(float(x), float(y))
+                                 for x, y, _ in corners])
+            shade = _qcolor(colour, alpha)
+            length = float(np.linalg.norm(normal))
+            if length > 1e-12:
+                # the same light direction the GL path uses, so the two tiers
+                # shade a polyhedron the same way round
+                lit = abs(float(np.dot(normal / length,
+                                       np.array([0.42, 0.62, 0.66]))))
+                factor = 0.55 + 0.45 * min(lit / 0.99, 1.0)
+                shade = QColor(int(shade.red() * factor),
+                               int(shade.green() * factor),
+                               int(shade.blue() * factor), shade.alpha())
+            painter.setBrush(shade)
+            painter.setPen(Qt.NoPen)
+            painter.drawPolygon(polygon)
+            painter.setBrush(Qt.NoBrush)
+        return draw
 
     def _collect_planes(self, items, scene: Scene, camera: Camera,
                         width: int, height: int) -> None:

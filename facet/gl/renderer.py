@@ -86,6 +86,16 @@ class Renderer:
         # how many plane VAOs the last uploaded scene needed, so a scene with
         # fewer planes does not leave the extra ones being drawn
         self._n_plane_vaos = 0
+
+        # Depth-sorted transparency. Alpha blending is not commutative, so a
+        # transparent surface drawn in buffer order shows whichever triangle
+        # happened to be uploaded last in front -- which makes one polyhedron of
+        # a pair look solid and the other look absent, depending on nothing the
+        # user did. Sorting the triangles back to front before each draw removes
+        # that. The sort is cached against the view direction, so orbiting
+        # re-sorts and dragging the cutoff does not.
+        self.sort_transparency = True
+        self._sort_key: tuple | None = None
         self._gbuffer = None
         self._ao = None
         self._composite = None
@@ -195,6 +205,7 @@ class Renderer:
     def set_scene(self, scene: Scene) -> None:
         """Upload a scene. Call on load, on a style change, or after restyling."""
         self._scene = scene
+        self._sort_key = None          # the new geometry has not been ordered
         self._tube_sides = buffers.tube_sides_for(
             scene, budget=400_000 if self.caps.tier is Tier.FULL else 120_000)
 
@@ -295,6 +306,7 @@ class Renderer:
             self._draw_tubes(view, proj, light_view, picking)
             if not picking:
                 self._draw_lines(view, proj)
+                self._sort_transparent(view, scene)
                 self._draw_polyhedra(view, proj, light_view, scene)
                 self._draw_isosurface(view, proj, light_view, scene)
                 self._draw_planes(view, proj, light_view, scene)
@@ -387,6 +399,77 @@ class Renderer:
         gl.glDepthMask(True)
         gl.glDisable(GL_BLEND)
         self._draw_buffers(3)
+
+    # -- transparency ------------------------------------------------------
+    def _sort_transparent(self, view, scene: Scene) -> None:
+        """Order the transparent triangles back to front for this view.
+
+        Alpha blending depends on the order it is done in, so a transparent
+        surface drawn in upload order is drawn wrong: of two overlapping
+        polyhedra, whichever happens to sit later in the buffer appears in front.
+        Sorting by each triangle's centroid depth fixes it for surfaces that do
+        not intersect, which coordination polyhedra, a level set and a lattice
+        plane do not.
+
+        This is a sort and an upload, not a shader technique. Weighted-blended
+        or depth-peeled transparency would be less work per frame, but both need
+        features the COMPATIBLE tier does not have -- per-buffer blend functions
+        are OpenGL 4.0 -- and FACET has to look the same on a machine with no
+        graphics card at all. A sort costs nothing while the camera is still,
+        because of the cache below.
+        """
+        if not self.sort_transparency:
+            return
+        # Quantised so that a tiny camera nudge does not re-upload: an eighth of
+        # a degree of view direction is far below anything that changes the order.
+        direction = np.asarray(view, float)[2, :3]
+        key = (tuple(np.round(direction, 3)), scene.n_poly_triangles,
+               scene.n_iso_triangles, len(scene.plane_meshes))
+        if key == self._sort_key:
+            return
+        self._sort_key = key
+
+        forward = direction / (np.linalg.norm(direction) or 1.0)
+
+        def order(vertices):
+            """Farthest first. View z is negative in front of the camera, so the
+            farthest triangle is the one with the smallest dot with the forward
+            axis."""
+            triangles = np.asarray(vertices, np.float32).reshape(-1, 3, 3)
+            depth = triangles.mean(axis=1) @ forward
+            return triangles, np.argsort(depth)
+
+        if scene.n_poly_triangles:
+            triangles, index = order(scene.poly_vertices)
+            scene.poly_vertices = triangles[index].reshape(-1, 3)
+            scene.poly_normals = np.asarray(
+                scene.poly_normals, np.float32).reshape(-1, 3, 3)[
+                    index].reshape(-1, 3)
+            self._make_vao("poly", {"aPosition": scene.poly_vertices,
+                                    "aNormal": scene.poly_normals},
+                           len(scene.poly_vertices))
+
+        if scene.n_iso_triangles:
+            triangles, index = order(scene.iso_vertices)
+            scene.iso_vertices = triangles[index].reshape(-1, 3)
+            scene.iso_normals = np.asarray(
+                scene.iso_normals, np.float32).reshape(-1, 3, 3)[
+                    index].reshape(-1, 3)
+            self._make_vao("iso", {"aPosition": scene.iso_vertices,
+                                   "aNormal": scene.iso_normals},
+                           len(scene.iso_vertices))
+
+        if len(scene.plane_meshes) > 1:
+            # whole planes rather than their triangles: a plane is flat, so its
+            # own triangles cannot occlude each other
+            def plane_depth(mesh):
+                return float(np.mean(np.asarray(mesh[0], float) @ forward))
+
+            scene.plane_meshes = sorted(scene.plane_meshes, key=plane_depth)
+            for i, (vertices, normals, _, _) in enumerate(scene.plane_meshes):
+                self._make_vao(f"plane{i}", {"aPosition": vertices,
+                                             "aNormal": normals},
+                               len(vertices))
 
     def _draw_planes(self, view, proj, light, scene: Scene) -> None:
         """Lattice planes, blended over everything else.
