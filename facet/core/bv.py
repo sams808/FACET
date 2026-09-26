@@ -184,12 +184,22 @@ class ParameterSet:
     def __init__(self, name: str = "Brese & O'Keeffe 1991",
                  fitted: dict[tuple[str, int, str], float] | None = None,
                  source: str = _BO1991, b: float = B_DEFAULT,
-                 allow_estimated: bool = True):
+                 allow_estimated: bool = True,
+                 fitted_b: dict[tuple[str, int, str], float] | None = None,
+                 anion_ox: dict[str, int] | None = None,
+                 notes: list[str] | None = None):
         self.name = name
         self.source = source
         self.b = b
         self.allow_estimated = allow_estimated
         self._fitted = dict(_FITTED if fitted is None else fitted)
+        # Published sets give b per pair, not one universal value. Brese and
+        # O'Keeffe's 0.37 A is a fitted average, and using it where a compilation
+        # states something else changes every valence -- so a loaded set's own b
+        # is kept per pair and only falls back to self.b where the file gave none.
+        self._fitted_b = dict(fitted_b or {})
+        self._anion_ox = dict(anion_ox or {})
+        self.notes = list(notes or [])
         self._overrides: dict[tuple[str, int, str], BVParam] = {}
 
     # -- lookup ------------------------------------------------------------
@@ -207,8 +217,8 @@ class ParameterSet:
 
         r0 = self._fitted.get(key)
         if r0 is not None:
-            return BVParam(c, int(ox), a, _ANION_OX.get(a, -1), r0, self.b,
-                           self.source, True)
+            return BVParam(c, int(ox), a, self._anion_charge(a), r0,
+                           self._fitted_b.get(key, self.b), self.source, True)
 
         # The estimator has no oxidation-state dependence; it is a property of
         # the element pair. That is one of its limitations, and the reason a
@@ -218,15 +228,22 @@ class ParameterSet:
         est = estimate_r0(c, a)
         if est is None:
             return None
-        return BVParam(c, int(ox), a, _ANION_OX.get(a, -1), est, self.b,
+        return BVParam(c, int(ox), a, self._anion_charge(a), est, self.b,
                        _OKB_SOURCE, False)
+
+    def _anion_charge(self, anion: str) -> int:
+        return self._anion_ox.get(anion, _ANION_OX.get(anion, -1))
+
+    def pairs(self):
+        """Every fitted pair in the set, as ``(cation, ox, anion)`` keys."""
+        return sorted(set(self._fitted) | set(self._overrides))
 
     def override(self, cation: str, cation_ox: int, anion: str,
                  r0: float, b: float | None = None, source: str = "user") -> None:
         """Pin a parameter by hand. Recorded as such, and reported as such."""
         c, a = elements.normalise(cation), elements.normalise(anion)
         self._overrides[(c, int(cation_ox), a)] = BVParam(
-            c, int(cation_ox), a, _ANION_OX.get(a, -1), float(r0),
+            c, int(cation_ox), a, self._anion_charge(a), float(r0),
             float(b if b is not None else self.b), source, True)
 
     def clear_overrides(self) -> None:
@@ -237,8 +254,15 @@ class ParameterSet:
         return len(self._fitted)
 
     def with_b(self, b: float) -> "ParameterSet":
+        """The same set with one universal b, overriding any per-pair values.
+
+        For asking what difference b makes -- which is a fair question, because
+        the plateau width in log-valence is the distance gap divided by b, so b
+        sets the scale on which two shells are resolved at all.
+        """
         out = ParameterSet(self.name, self._fitted, self.source, b,
-                           self.allow_estimated)
+                           self.allow_estimated, fitted_b=None,
+                           anion_ox=self._anion_ox, notes=self.notes)
         out._overrides = {k: replace(v, b=b) for k, v in self._overrides.items()}
         return out
 

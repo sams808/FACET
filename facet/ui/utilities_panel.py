@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import cn_methods, utilities
+from ..core import bv_report, cn_methods, utilities
 
 
 def _table(headers: list[str]) -> QTableWidget:
@@ -144,6 +144,117 @@ class UtilitiesPanel(QWidget):
             "Polyhedra sharing one ligand, two, or three or more."),
             "Connectivity")
 
+        self.cutoffs = _table(["pair", "R0 / Å", "b / Å", "bond ≤ / Å",
+                               "listed ≤ / Å", "window / Å", "shortest / Å",
+                               "bonds", "listed", "R0 from"])
+        self.tabs.addTab(self._wrap(
+            self.cutoffs,
+            "The distance cutoff each pair gets from the valence thresholds. "
+            "A cutoff is not chosen here: d = R0 − b ln(v), so it follows from "
+            "the threshold and the pair's own R0. Two pairs with different R0 "
+            "get different distances, which is the point."),
+            "Cutoffs")
+
+        self.stability = _table(["site", "CN", "stable from", "stable to",
+                                 "width / v.u.", "CN over the whole scan"])
+        self.tabs.addTab(self._wrap(
+            self.stability,
+            "How far the threshold can move before a coordination number "
+            "changes. Reported as a width; no number is called reliable."),
+            "Stability")
+
+        self.valences = _table(["site", "element", "expected", "BVS",
+                                "difference", "contacts"])
+        self.balance = QLabel("")
+        self.balance.setWordWrap(True)
+        balance_font = QFont(self.balance.font())
+        balance_font.setPointSizeF(max(7.0, balance_font.pointSizeF() - 1.0))
+        self.balance.setFont(balance_font)
+        self.balance.setStyleSheet("color:#8a93a3;")
+        anion_holder = QWidget()
+        anion_box = QVBoxLayout(anion_holder)
+        anion_box.setContentsMargins(0, 0, 0, 0)
+        anion_box.addWidget(self.valences, 1)
+        anion_box.addWidget(self.balance)
+        self.tabs.addTab(self._wrap(
+            anion_holder,
+            "Bond-valence sums for the anions, from a search around each anion "
+            "rather than from the cation lists. The two totals below are the "
+            "same bonds counted from opposite ends."),
+            "Anions")
+
+    def _refresh_cutoffs(self) -> None:
+        """The cutoff table: this program's central claim, as numbers."""
+        from ..core import bv
+
+        params = getattr(self, "params", None) or bv.DEFAULT
+        try:
+            table = bv_report.cutoff_table(
+                self.structure, params, v_bond=self.v_bond,
+                v_list=getattr(self, "v_list", bv.V_LIST_DEFAULT),
+                results=self.results)
+        except ValueError:
+            self.cutoffs.setRowCount(0)
+            return
+        rows = []
+        for row in table.rows:
+            rows.append([row.label, row.r0, row.b, row.d_bond, row.d_list,
+                         row.window,
+                         row.shortest if row.shortest is not None else None,
+                         row.n_bonds, row.n_listed,
+                         "fitted" if row.fitted else "estimated"])
+        _fill(self.cutoffs, rows)
+
+    def _refresh_stability(self) -> None:
+        if not self.results:
+            self.stability.setRowCount(0)
+            return
+        scan = bv_report.threshold_scan(self.results)
+        rows = []
+        for result in self.results:
+            counts = scan.per_site.get(result.label)
+            if counts is None:
+                continue
+            span = scan.stable_range(result.label, self.v_bond)
+            low, high = span if span else (float("nan"), float("nan"))
+            rows.append([result.label, result.cn_valence, low, high,
+                         high - low,
+                         f"{int(counts.min())}–{int(counts.max())}"])
+        _fill(self.stability, rows)
+
+    def _refresh_anions(self) -> None:
+        from ..core import bv
+
+        params = getattr(self, "params", None) or bv.DEFAULT
+        try:
+            rows = bv_report.anion_sums(
+                self.structure, params, v_bond=self.v_bond,
+                v_list=getattr(self, "v_list", bv.V_LIST_DEFAULT))
+        except Exception:
+            self.valences.setRowCount(0)
+            self.balance.setText("")
+            return
+        _fill(self.valences, [
+            [row.label, row.element,
+             row.expected if row.expected is not None else None,
+             row.bvs,
+             row.discrepancy if row.discrepancy is not None else None,
+             row.n_contacts]
+            for row in rows])
+
+        if not self.results:
+            self.balance.setText("")
+            return
+        balance = bv_report.charge_balance(
+            self.structure, self.results, params, v_bond=self.v_bond,
+            v_list=getattr(self, "v_list", bv.V_LIST_DEFAULT))
+        self.balance.setText(
+            f"cations distribute {balance['cation_valence']:.4f} v.u. per cell; "
+            f"anions receive {balance['anion_valence']:.4f}; "
+            f"difference {balance['difference']:+.4f} "
+            f"({balance['relative_difference'] * 100:+.4f}%). "
+            + balance["note"])
+
     def _wrap(self, widget, hint: str, extra=None) -> QWidget:
         holder = QWidget()
         box = QVBoxLayout(holder)
@@ -161,16 +272,23 @@ class UtilitiesPanel(QWidget):
         return holder
 
     # -- content -----------------------------------------------------------
-    def update_for(self, structure, results, site_result, v_bond: float) -> None:
+    def update_for(self, structure, results, site_result, v_bond: float,
+                   params=None, v_list: float | None = None) -> None:
+        from ..core import bv
+
         self.structure = structure
         self.results = results
         self.site_result = site_result
         self.v_bond = v_bond
+        self.params = params or bv.DEFAULT
+        self.v_list = (v_list if v_list is not None else bv.V_LIST_DEFAULT)
         if structure is None:
             self.summary.setHtml("")
             for t in (self.angles, self.shells, self.reflections,
-                      self.connectivity):
+                      self.connectivity, self.cutoffs, self.stability,
+                      self.valences):
                 t.setRowCount(0)
+            self.balance.setText("")
             return
         self._refresh_summary()
         self._refresh_angles()
@@ -178,6 +296,9 @@ class UtilitiesPanel(QWidget):
         self._refresh_reflections()
         self._refresh_connectivity()
         self._refresh_methods()
+        self._refresh_cutoffs()
+        self._refresh_stability()
+        self._refresh_anions()
 
     def _refresh_summary(self) -> None:
         s = self.structure

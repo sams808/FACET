@@ -317,13 +317,31 @@ class PreviewWindow(QMainWindow):
                 ("Structure as X&YZ…", self._export_xyz),
                 ("Structure as &VESTA…", self._export_vesta),
                 (None, None),
-                ("FEFF input for this &site…", self._export_feff)):
+                ("FEFF input for this &site…", self._export_feff),
+                (None, None),
+                ("&Cutoff table…", self._export_cutoffs),
+                ("Threshold &scan…", self._export_scan)):
             if label is None:
                 export.addSeparator()
                 continue
             action = QAction(label, self)
             action.triggered.connect(handler)
             export.addAction(action)
+
+        m.addSeparator()
+        load_params = QAction("Load &bond-valence parameters…", self)
+        load_params.setToolTip(
+            "Read a published parameter set: the IUCr bvparm distribution, a "
+            "softBV-style table, or a FACET parameter file. FACET does not ship "
+            "the large compilations, because each comes with its own terms.")
+        load_params.triggered.connect(self._load_parameters)
+        reset_params = QAction("Use the built-in parameters", self)
+        reset_params.triggered.connect(self._reset_parameters)
+        save_params = QAction("Save the parameters in use…", self)
+        save_params.triggered.connect(self._save_parameters)
+        m.addAction(load_params)
+        m.addAction(save_params)
+        m.addAction(reset_params)
 
         m.addSeparator()
         session_save = QAction("Save sessio&n…", self)
@@ -546,7 +564,8 @@ class PreviewWindow(QMainWindow):
         self.utilities.update_for(
             active.structure if active else None,
             self.project.results_for(active) if active else None,
-            self._current_result(), self.project.v_bond)
+            self._current_result(), self.project.v_bond,
+            params=self.project.params, v_list=self.project.v_list)
         self.diffraction.set_structure(active.structure if active else None)
         self.planes_panel.set_structure(active.structure if active else None)
         self.overrides_panel.set_context(
@@ -638,7 +657,8 @@ class PreviewWindow(QMainWindow):
         self.utilities.update_for(
             entry.structure if entry else None,
             self.project.results_for(entry) if entry else None,
-            self._current_result(), self.project.v_bond)
+            self._current_result(), self.project.v_bond,
+            params=self.project.params, v_list=self.project.v_list)
 
     def _on_theme_cosmetic(self, theme) -> None:
         """Background, fog, ambient occlusion: no vertex data changes."""
@@ -1271,6 +1291,110 @@ class PreviewWindow(QMainWindow):
                 self, "Some files have moved",
                 "A session records where the files were, not their contents.\n\n"
                 + "\n".join(Path(p).name for p in missing))
+
+    # -- bond-valence parameters -------------------------------------------
+    def _load_parameters(self) -> None:
+        """Read a published parameter set from wherever the user obtained it.
+
+        FACET ships the small Brese and O'Keeffe table it needs and the
+        O'Keeffe-Brese estimator, and nothing larger: the IUCr bvparm file,
+        Gagne and Hawthorne's tables and the softBV set each come with their own
+        terms, and bundling them in an application that gets passed around a
+        research group is not something to do casually. Loading one instead keeps
+        the user's own copy the source, and every parameter used afterwards
+        carries that file's name as its provenance.
+        """
+        from ..core import bv_files
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load bond-valence parameters", "", bv_files.FILE_FILTER)
+        if not path:
+            return
+        try:
+            params, report = bv_files.load(path)
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, "Could not read the parameters",
+                                str(error))
+            return
+
+        self.project.set_parameters(params)
+        for entry in self.project.entries:
+            entry.invalidate()
+        self._fill_site_list()
+        self._rebuild()
+        QMessageBox.information(
+            self, "Parameters loaded",
+            f"{report.name}\n\n{report.describe()}\n\n"
+            "Every bond valence from here on uses these values, and every "
+            "table names them as the source.")
+        self.statusBar().showMessage(
+            f"bond-valence parameters: {report.name} ({report.pairs} pairs)",
+            12000)
+
+    def _reset_parameters(self) -> None:
+        self.project.set_parameters(bv.DEFAULT)
+        for entry in self.project.entries:
+            entry.invalidate()
+        self._fill_site_list()
+        self._rebuild()
+        self.statusBar().showMessage(
+            f"bond-valence parameters: {bv.DEFAULT.name}", 9000)
+
+    def _save_parameters(self) -> None:
+        """Write out the set in use, so an edited one can be passed on as data."""
+        from ..core import bv_files
+
+        path = self._ask("Save the parameters in use",
+                         "facet_bv_parameters.json",
+                         "FACET parameter set (*.json)")
+        if not path:
+            return
+        try:
+            bv_files.write_json(path, self.project.params)
+        except OSError as error:
+            QMessageBox.warning(self, "Could not save", str(error))
+            return
+        self._wrote(path)
+
+    def _export_cutoffs(self) -> None:
+        """The distance cutoffs the current thresholds imply, as a table."""
+        from ..core import bv_report
+
+        if self.structure is None:
+            return
+        path = self._ask("Save the cutoff table",
+                         f"{(self.structure.name or 'structure')}_cutoffs.csv",
+                         "CSV (*.csv)")
+        if not path:
+            return
+        table = bv_report.cutoff_table(
+            self.structure, self.project.params, v_bond=self.project.v_bond,
+            v_list=self.project.v_list, results=self.results)
+        try:
+            Path(path).write_text(table.as_csv(), encoding="utf-8")
+        except OSError as error:
+            QMessageBox.warning(self, "Could not save", str(error))
+            return
+        self._wrote(path)
+
+    def _export_scan(self) -> None:
+        """Coordination number against the threshold, for every site."""
+        from ..core import bv_report
+
+        if not self.results:
+            return
+        path = self._ask("Save the threshold scan",
+                         f"{(self.structure.name or 'structure')}_scan.csv",
+                         "CSV (*.csv)")
+        if not path:
+            return
+        scan = bv_report.threshold_scan(self.results)
+        try:
+            Path(path).write_text(scan.as_csv(), encoding="utf-8")
+        except OSError as error:
+            QMessageBox.warning(self, "Could not save", str(error))
+            return
+        self._wrote(path)
 
     # -- output ------------------------------------------------------------
     def _save_vector(self) -> None:
