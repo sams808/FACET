@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from . import bv, cif, coordination, readers
+from . import disorder as disorder_mod
 from . import overrides as overrides_mod
 from .structure import Structure
 
@@ -30,7 +31,9 @@ from .structure import Structure
 class Entry:
     """One structure in a project, with its own presentation state."""
 
-    structure: Structure
+    # The structure exactly as the file gave it, alternatives included. Read it
+    # to see what the file says; use `structure` to work with it.
+    source: Structure
     path: str | None = None
     visible: bool = True
     selected_site: int | None = None
@@ -44,8 +47,51 @@ class Entry:
     overrides: overrides_mod.StyleOverrides = field(
         default_factory=lambda: overrides_mod.StyleOverrides())
 
+    # Which disorder alternative is in use. Found from the file at construction.
+    disorder: disorder_mod.Disorder | None = field(default=None, repr=False)
+
     _results: list | None = field(default=None, repr=False)
     _results_key: tuple | None = field(default=None, repr=False)
+    _configuration: Structure | None = field(default=None, repr=False)
+    _configuration_key: tuple | None = field(default=None, repr=False)
+
+    def __post_init__(self):
+        if self.disorder is None:
+            self.disorder = disorder_mod.find(self.source)
+            # A file that describes alternatives is shown as one of them. Drawing
+            # them all at once puts atoms a fraction of an angstrom apart and
+            # makes every coordination number in the structure wrong, which is
+            # not a reasonable default for a program about coordination numbers.
+            # "Show everything" stays one click away.
+            if self.disorder.present:
+                self.disorder.choose_first()
+
+    @property
+    def structure(self) -> Structure:
+        """The structure to draw and analyse: one disorder configuration.
+
+        A real Structure with fewer sites rather than a flag, so the neighbour
+        search, the coordination numbers, the bond valences and the diffraction
+        pattern all work on something that could exist, with no special case for
+        disorder anywhere downstream.
+        """
+        if self.disorder is None or not self.disorder.present:
+            return self.source
+        key = tuple(sorted(self.disorder.selected.items()))
+        if self._configuration is None or self._configuration_key != key:
+            self._configuration = disorder_mod.configuration(self.source,
+                                                             self.disorder)
+            self._configuration_key = key
+        return self._configuration
+
+    def choose_disorder(self, assembly: str, group: str) -> None:
+        """Pick an alternative. Invalidates the analysis, which must be redone."""
+        if self.disorder is None:
+            return
+        self.disorder.choose(assembly, group)
+        self._configuration = None
+        self._configuration_key = None
+        self.invalidate()
 
     @property
     def name(self) -> str:
@@ -76,6 +122,8 @@ class Entry:
     def invalidate(self) -> None:
         self._results = None
         self._results_key = None
+        self._configuration = None
+        self._configuration_key = None
 
 
 class Project:
@@ -116,7 +164,7 @@ class Project:
         return [current] if current is not None else []
 
     def add(self, structure: Structure, path: str | None = None) -> Entry:
-        entry = Entry(structure=structure, path=path,
+        entry = Entry(source=structure, path=path,
                       color_key=len(self.entries))
         self.entries.append(entry)
         if self.active is None:

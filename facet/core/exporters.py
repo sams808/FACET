@@ -431,7 +431,9 @@ def save_session(project, path: str | Path, theme=None,
         "entries": [
             {"path": e.path, "visible": e.visible,
              "selected_site": e.selected_site,
-             "overrides": e.overrides.to_dict()}
+             "overrides": e.overrides.to_dict(),
+             "disorder": (e.disorder.to_dict() if e.disorder is not None
+                          else None)}
             for e in project.entries
         ],
     }

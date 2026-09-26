@@ -35,6 +35,12 @@ class Site:
     u_iso_esd: float | None = None
     frac_esd: np.ndarray | None = None   # esds on the coordinates, if given
 
+    # Disorder, as the file declares it: which region of the cell has
+    # alternatives, and which alternative this site belongs to. Empty means the
+    # site is present in every configuration.
+    disorder_assembly: str = ""
+    disorder_group: str = ""
+
     # Oxidation state, and -- always -- where it came from.
     ox: int | None = None
     ox_source: str = "unset"             # cif | charge-balance | common | user

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import disorder as disorder_mod
 from . import elements
 from .structure import Atom, Cell, Site, Structure
 
@@ -197,6 +198,37 @@ def _read_sites(blk, st) -> list[Site]:
     except Exception:
         pass
 
+    # Disorder tags. Read from the raw loop rather than from gemmi, because the
+    # two columns are optional and gemmi's SmallStructure exposes only the group.
+    # Without them, two alternative configurations are drawn on top of each other
+    # and counted as one impossibly crowded site.
+    disorder_by_label: dict[str, tuple[str, str]] = {}
+    for assembly_tag, group_tag in (
+            ("_atom_site_disorder_assembly", "_atom_site_disorder_group"),
+            ("_atom_site_disorder_assembly", "_atom_site_disorder_group_")):
+        try:
+            loop = blk.find(["_atom_site_label", assembly_tag, group_tag])
+            for row in loop:
+                label = row[0].strip("'\"")
+                disorder_by_label[label] = (
+                    disorder_mod.normalise_assembly(row[1]),
+                    disorder_mod.normalise_group(row[2]))
+            if disorder_by_label:
+                break
+        except Exception:
+            continue
+    if not disorder_by_label:
+        # a file may give the group without naming an assembly
+        try:
+            loop = blk.find(["_atom_site_label",
+                             "_atom_site_disorder_group"])
+            for row in loop:
+                label = row[0].strip("'\"")
+                disorder_by_label[label] = (
+                    "", disorder_mod.normalise_group(row[1]))
+        except Exception:
+            pass
+
     sites: list[Site] = []
     for s in st.sites:
         frac = np.array([s.fract.x, s.fract.y, s.fract.z], float)
@@ -211,6 +243,9 @@ def _read_sites(blk, st) -> list[Site]:
             u_iso=float(s.u_iso) if getattr(s, "u_iso", None) else None,
             frac_esd=esd_by_label.get(s.label),
         )
+        assembly, group = disorder_by_label.get(s.label, ("", ""))
+        site.disorder_assembly = assembly
+        site.disorder_group = group
         site.ox, site.ox_source = _oxidation_from_symbol(s.type_symbol, sym)
         sites.append(site)
     return sites
@@ -342,6 +377,15 @@ def _annotate_symmetry(struct: Structure) -> None:
     # spglib is given element identities only, so a partially occupied or
     # split site looks like a full one to it and can legitimately break a
     # centring. Say so rather than implying the file is wrong.
+    groups = {site.disorder_group for site in struct.sites
+              if site.disorder_group}
+    if len(groups) > 1:
+        struct.notes.append(
+            f"the file declares {len(groups)} disorder groups "
+            f"({', '.join(sorted(groups))}). They are alternatives: only one "
+            "exists in any unit cell, and drawing them together puts atoms "
+            "within a fraction of an angstrom of each other. Choose a "
+            "configuration under Disorder.")
     disordered = any(a.occupancy < 0.999 for a in struct.atoms)
     because = (" (site occupancies are not used by the symmetry search; this "
                "structure has partially occupied sites)") if disordered else ""

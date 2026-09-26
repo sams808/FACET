@@ -48,6 +48,7 @@ from .cutoff_explorer import CutoffExplorer
 from .structure_list import StructureList
 from .theme_panel import ThemePanel
 from .diffraction_panel import DiffractionPanel
+from .disorder_panel import DisorderPanel
 from .overrides_panel import OverridesPanel
 from .planes_panel import PlanesPanel
 from .utilities_panel import UtilitiesPanel
@@ -110,6 +111,9 @@ class PreviewWindow(QMainWindow):
 
         self.planes_panel = PlanesPanel()
         self.planes_panel.changed.connect(self._on_presentation_change)
+
+        self.disorder_panel = DisorderPanel()
+        self.disorder_panel.changed.connect(self._on_disorder)
 
         self.overrides_panel = OverridesPanel()
         self.overrides_panel.changed.connect(self._on_presentation_change)
@@ -179,6 +183,7 @@ class PreviewWindow(QMainWindow):
         tabs.addTab(self.diffraction, "Diffraction")
         tabs.addTab(self.planes_panel, "Planes")
         tabs.addTab(self.overrides_panel, "Overrides")
+        tabs.addTab(self.disorder_panel, "Disorder")
         tabs.addTab(self.theme_panel, "Appearance")
         tabs.setMinimumWidth(400)
 
@@ -547,6 +552,7 @@ class PreviewWindow(QMainWindow):
         self.overrides_panel.set_context(
             active.structure if active else None,
             active.overrides if active else None)
+        self.disorder_panel.set_entry(active)
 
     def _current_result(self):
         entry = self.project.current
@@ -725,6 +731,30 @@ class PreviewWindow(QMainWindow):
             entry.overrides if entry else None)
         self._rebuild()
         self._refresh_history_actions()
+
+    def _on_disorder(self, description: str = "") -> None:
+        """A different disorder configuration is a different structure.
+
+        Not a presentation change: the site list, every coordination number, the
+        bond valences and the diffraction pattern all change, so the entry is
+        re-analysed and the panels refilled rather than the scene merely rebuilt.
+        A configuration choice is therefore not undoable -- undo covers how a
+        structure is drawn, and this changes which structure it is.
+        """
+        entry = self.project.current
+        if entry is None:
+            return
+        entry.invalidate()
+        if entry.selected_site is not None and entry.selected_site >= len(
+                entry.structure.sites):
+            entry.selected_site = None
+        entry.overrides.prune(len(entry.structure.atoms),
+                              [site.label for site in entry.structure.sites])
+        self._fill_site_list()
+        self._rebuild(reframe=False)
+        self.history.reset(self._snapshot(), description or "chose a configuration")
+        self._refresh_history_actions()
+        self.statusBar().showMessage(description, 9000)
 
     def _on_presentation_change(self, description: str = "") -> None:
         """A panel changed something drawable: rebuild, then record it."""
@@ -1216,6 +1246,11 @@ class PreviewWindow(QMainWindow):
                    if e.get("path")}
         for entry in self.project.entries:
             saved = by_path.get(entry.path)
+            if saved and saved.get("disorder") and entry.disorder is not None:
+                # before the overrides, because the configuration decides how
+                # many atoms there are for an atom override to address
+                entry.disorder.apply_dict(saved["disorder"])
+                entry.invalidate()
             if saved and saved.get("overrides"):
                 entry.overrides = overrides_mod.StyleOverrides.from_dict(
                     saved["overrides"])

@@ -75,7 +75,7 @@ def test_every_tab_is_present(window):
     tabs = window.findChild(QTabWidget)
     titles = [tabs.tabText(i) for i in range(tabs.count())]
     assert titles == ["Site", "Utilities", "Diffraction", "Planes",
-                      "Overrides", "Appearance"]
+                      "Overrides", "Disorder", "Appearance"]
 
 
 # ---------------------------------------------------------------------------
