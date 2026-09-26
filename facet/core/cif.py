@@ -247,6 +247,21 @@ def _oxidation_from_symbol(type_symbol, element) -> tuple[int | None, str]:
     return (common, "common") if common is not None else (None, "unset")
 
 
+def _already_there(frac, existing, cell: Cell, tolerance: float = 0.05) -> bool:
+    """Is this fractional position already in the list, allowing for wrapping?
+
+    ``tolerance`` is in angstrom. 0.05 A is far below any real bond and far
+    above any rounding in a CIF, and it is the same threshold the bond builder
+    uses to recognise a repeated image.
+    """
+    if not existing:
+        return False
+    delta = np.asarray(existing, float) - np.asarray(frac, float)
+    delta -= np.round(delta)                      # minimum image
+    cart = delta @ cell.orth.T
+    return bool(np.any(np.linalg.norm(cart, axis=1) < tolerance))
+
+
 def _expand(st, cell: Cell, sites: list[Site]) -> list[Atom]:
     """Apply the symmetry operations to fill the unit cell.
 
@@ -255,19 +270,22 @@ def _expand(st, cell: Cell, sites: list[Site]) -> list[Atom]:
     """
     by_label = {s.label: i for i, s in enumerate(sites)}
     atoms: list[Atom] = []
-    seen: set[tuple[int, int, int, int]] = set()
+    accepted: dict[int, list[np.ndarray]] = {}
 
     for s in st.get_all_unit_cell_sites():
         idx = by_label.get(s.label)
         if idx is None:
             continue
         frac = np.array([s.fract.x, s.fract.y, s.fract.z], float) % 1.0
-        # de-duplicate positions that coincide after wrapping, which happens for
-        # atoms on special positions
-        key = (idx, *(int(round(x * 1e4)) for x in frac))
-        if key in seen:
+        # De-duplicate positions that coincide after wrapping, which happens for
+        # atoms on special positions. The comparison is by minimum-image
+        # distance in angstrom, not by a rounded key: a coordinate of 0.99999
+        # and one of 0.0 are the same atom but round to different keys, and the
+        # pair would survive as two atoms a hair apart -- inflating the
+        # multiplicity, the structure factor and the neighbour list.
+        if _already_there(frac, accepted.setdefault(idx, []), cell):
             continue
-        seen.add(key)
+        accepted[idx].append(frac)
         atoms.append(Atom(
             element=sites[idx].element,
             frac=frac,

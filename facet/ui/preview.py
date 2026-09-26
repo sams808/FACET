@@ -46,6 +46,7 @@ from ..version import NAME, __version__
 from .cutoff_explorer import CutoffExplorer
 from .structure_list import StructureList
 from .theme_panel import ThemePanel
+from .diffraction_panel import DiffractionPanel
 from .utilities_panel import UtilitiesPanel
 
 
@@ -98,6 +99,10 @@ class PreviewWindow(QMainWindow):
         self.structure_panel.removeRequested.connect(self._on_remove)
 
         self.utilities = UtilitiesPanel()
+
+        self.diffraction = DiffractionPanel()
+        self.diffraction.apply_theme(self.theme)
+        self.diffraction.reflection_selected.connect(self._on_reflection)
 
         self._build_layout()
         self._build_menu()
@@ -157,6 +162,7 @@ class PreviewWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self.analysis, "Site")
         tabs.addTab(self.utilities, "Utilities")
+        tabs.addTab(self.diffraction, "Diffraction")
         tabs.addTab(self.theme_panel, "Appearance")
         tabs.setMinimumWidth(400)
 
@@ -486,6 +492,7 @@ FACET reads CIF, POSCAR, "
             active.structure if active else None,
             self.project.results_for(active) if active else None,
             self._current_result(), self.project.v_bond)
+        self.diffraction.set_structure(active.structure if active else None)
 
     def _current_result(self):
         entry = self.project.current
@@ -578,12 +585,34 @@ FACET reads CIF, POSCAR, "
         self.theme = theme
         self.view.set_theme(theme)
         self.explorer.set_theme(theme)
+        self.diffraction.apply_theme(theme)
 
     def _on_theme_structural(self, theme) -> None:
         """Colour mode, palette, sizes: the vertex arrays must be rebuilt."""
         self.theme = theme
         self.explorer.set_theme(theme)
+        self.diffraction.apply_theme(theme)
         self._rebuild()
+
+    def _on_reflection(self, h: int, k: int, l: int) -> None:
+        """Look down the normal of the chosen reflection's planes.
+
+        The normal is h a* + k b* + l c*, in the reciprocal basis -- not
+        h a + k b + l c, which points somewhere else in any cell that is not
+        orthogonal. Choosing a line in the reflection list therefore turns the
+        structure to show the planes that produced it edge-on.
+        """
+        structure = self.structure
+        if structure is None:
+            return
+        import numpy as np
+
+        reciprocal = np.linalg.inv(structure.cell.orth).T
+        normal = reciprocal @ np.array([h, k, l], float)
+        if np.linalg.norm(normal) > 1e-9:
+            self.view.view_along(normal)
+            self.statusBar().showMessage(
+                f"viewing down the normal of ({h} {k} {l})", 6000)
 
     def _view_along(self, axis) -> None:
         if self.structure is None:
