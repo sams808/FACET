@@ -66,7 +66,7 @@ def _swatch(button: QPushButton, rgb) -> None:
 class PlanesPanel(QWidget):
     """Add, edit and remove lattice planes; define one slab."""
 
-    changed = Signal()                      # the scene must be rebuilt
+    changed = Signal(str)   # rebuild the scene; the text says what changed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -282,20 +282,20 @@ class PlanesPanel(QWidget):
                                                    color=colour))
         self._refresh_table()
         self.table.setCurrentCell(len(self.planes) - 1, 1)
-        self.changed.emit()
+        self.changed.emit(f"added the ({h} {k} {l}) plane")
         self._report()
 
     def _remove(self, plane) -> None:
         if plane in self.planes:
             self.planes.remove(plane)
         self._refresh_table()
-        self.changed.emit()
+        self.changed.emit(f"removed the ({plane.hkl}) plane")
         self._report()
 
     def _clear(self) -> None:
         self.planes = []
         self._refresh_table()
-        self.changed.emit()
+        self.changed.emit("removed every plane")
         self._report()
 
     # -- the table ---------------------------------------------------------
@@ -371,7 +371,7 @@ class PlanesPanel(QWidget):
         if self._loading:
             return
         setattr(plane, attribute, value)
-        self.changed.emit()
+        self.changed.emit(f"changed the {attribute} of ({plane.hkl})")
         self._report()
 
     def _pick_color(self, plane) -> None:
@@ -382,7 +382,32 @@ class PlanesPanel(QWidget):
             return
         plane.color = (chosen.redF(), chosen.greenF(), chosen.blueF())
         self._refresh_table()
-        self.changed.emit()
+        self.changed.emit(f"recoloured the ({plane.hkl}) plane")
+
+
+    def load_slab_controls(self) -> None:
+        """Push the slab model into its controls without emitting changes.
+
+        Used when undo restores a snapshot: the controls have to follow the
+        model, and each setValue would otherwise look like the user editing it
+        and record another history step.
+        """
+        self._loading = True
+        try:
+            self.slab_h.setValue(self.slab.h)
+            self.slab_k.setValue(self.slab.k)
+            self.slab_l.setValue(self.slab.l)
+            self.slab_centre.setValue(self.slab.centre)
+            self.slab_thickness.setValue(self.slab.thickness)
+            self.slab_on.setChecked(self.slab.enabled)
+        finally:
+            self._loading = False
+        self._describe_slab()
+
+    def reload(self) -> None:
+        """Rebuild the plane table and the report from the current model."""
+        self._refresh_table()
+        self._report()
 
     # -- the slab ----------------------------------------------------------
     def _slab_changed(self) -> None:
@@ -395,7 +420,10 @@ class PlanesPanel(QWidget):
         self.slab.centre = float(self.slab_centre.value())
         self.slab.thickness = float(self.slab_thickness.value())
         self._describe_slab()
-        self.changed.emit()
+        self.changed.emit(
+            f"set the slab to ({self.slab.hkl}), "
+            f"{self.slab.thickness:.2f} A"
+            + ("" if self.slab.enabled else ", off"))
 
     def _describe_slab(self) -> None:
         if self.structure is None:

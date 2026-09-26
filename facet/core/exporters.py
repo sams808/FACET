@@ -412,7 +412,7 @@ def write_feff(structure: Structure, site_index: int, path: str | Path,
 # ---------------------------------------------------------------------------
 
 def save_session(project, path: str | Path, theme=None,
-                 camera=None, labels=None) -> Path:
+                 camera=None, labels=None, presentation=None) -> Path:
     """Everything needed to reopen the same view.
 
     File paths rather than structures: a session is a pointer to the user's
@@ -430,10 +430,15 @@ def save_session(project, path: str | Path, theme=None,
         "active": project.active,
         "entries": [
             {"path": e.path, "visible": e.visible,
-             "selected_site": e.selected_site}
+             "selected_site": e.selected_site,
+             "overrides": e.overrides.to_dict()}
             for e in project.entries
         ],
     }
+    if presentation is not None:
+        # planes and the slab: presentation state that belongs to the view
+        # rather than to any one structure
+        data["presentation"] = presentation
     if theme is not None:
         data["theme"] = theme.to_dict()
     if camera is not None:

@@ -33,12 +33,18 @@ class StructureView(QOpenGLWidget):
     measured = Signal(str)              # human-readable measurement
     ready = Signal(object)              # Capabilities, once the context exists
     labelsChanged = Signal(object)      # LabelSettings, after a keyboard cycle
+    contextRequested = Signal(int, object)   # atom index or -1, and the position
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
+        # The right button pans, so Qt must not open a menu on press. The menu
+        # is raised from mouseReleaseEvent instead, and only when the pointer
+        # did not travel -- a pan and a context click are the same gesture up
+        # until the pointer moves.
+        self.setContextMenuPolicy(Qt.PreventContextMenu)
 
         self.camera = Camera()
         self.scene: Scene | None = None
@@ -51,6 +57,13 @@ class StructureView(QOpenGLWidget):
         self._fallback = None
 
         self._last_pos: QPoint | None = None
+        # Where the button went down, and how far the pointer has travelled
+        # since. Kept separately from _last_pos, which follows the pointer: a
+        # release compared against _last_pos is comparing a point with itself,
+        # so every drag looked like a click and rotating the view selected
+        # whatever atom happened to be under the cursor when the button came up.
+        self._press_pos: QPoint | None = None
+        self._travel = 0.0
         self._button = Qt.NoButton
         self._selected: int | None = None
         self._measure_chain: list[int] = []
@@ -487,6 +500,8 @@ class StructureView(QOpenGLWidget):
     # -- interaction -------------------------------------------------------
     def mousePressEvent(self, event) -> None:
         self._last_pos = event.position().toPoint()
+        self._press_pos = self._last_pos
+        self._travel = 0.0
         self._button = event.button()
         if event.button() == Qt.LeftButton and event.modifiers() & Qt.ShiftModifier:
             self._handle_measure_click(self._last_pos)
@@ -507,17 +522,32 @@ class StructureView(QOpenGLWidget):
         elif self._button in (Qt.MiddleButton, Qt.RightButton):
             self.camera.drag_pan(dx, dy, self.width(), self.height())
             self.update()
+        self._travel += (dx * dx + dy * dy) ** 0.5
         self._last_pos = pos
 
+    DRAG_TOLERANCE = 3.0        # pixels; beyond this a press was a drag
+
     def mouseReleaseEvent(self, event) -> None:
-        moved = False
-        if self._last_pos is not None:
-            start = event.position().toPoint()
-            moved = (abs(start.x() - self._last_pos.x()) > 2
-                     or abs(start.y() - self._last_pos.y()) > 2)
+        position = event.position().toPoint()
+        moved = self._travel > self.DRAG_TOLERANCE
+        if self._press_pos is not None:
+            straight = ((position.x() - self._press_pos.x()) ** 2
+                        + (position.y() - self._press_pos.y()) ** 2) ** 0.5
+            moved = moved or straight > self.DRAG_TOLERANCE
+
         if (event.button() == Qt.LeftButton and not moved
                 and not (event.modifiers() & Qt.ShiftModifier)):
-            self._handle_select_click(event.position().toPoint())
+            self._handle_select_click(position)
+        elif event.button() == Qt.RightButton and not moved:
+            # A right-click that did not pan asks for the context menu. The menu
+            # itself is the window's business: it acts on the project, not on
+            # the view.
+            picked = self.pick_at(position)
+            self.contextRequested.emit(-1 if picked is None else int(picked),
+                                       self.mapToGlobal(position))
+
+        self._travel = 0.0
+        self._press_pos = None
         self._button = Qt.NoButton
         super().mouseReleaseEvent(event)
 

@@ -251,7 +251,8 @@ def build_scene(structure: Structure,
                 theme=None,
                 params: bv.ParameterSet | None = None,
                 lattice_planes=None,
-                slab=None) -> Scene:
+                slab=None,
+                overrides=None) -> Scene:
     """Build a drawable scene for a structure.
 
     `results` is reused when supplied, so opening a structure does not analyse
@@ -298,6 +299,15 @@ def build_scene(structure: Structure,
     # what is left rather than what was removed.
     if slab is not None and getattr(slab, "enabled", False):
         apply_slab(structure, scene, slab)
+
+    # Overrides come after the slab so their atom indices address the atoms that
+    # are actually drawn, and after restyle so a per-atom colour is not undone by
+    # the threshold recolouring.
+    if overrides is not None:
+        from ..core import overrides as overrides_mod
+
+        overrides_mod.apply_to_scene(scene, overrides)
+
     if lattice_planes:
         _build_planes(structure, scene, lattice_planes)
 

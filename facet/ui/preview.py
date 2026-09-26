@@ -37,8 +37,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import (bv, cif, coordination, exporters, project as project_mod,
-                    readers, theme as theme_mod)
+from ..core import (bv, cif, coordination, exporters, history as history_mod,
+                    overrides as overrides_mod, planes as planes_mod,
+                    project as project_mod, readers, theme as theme_mod)
 from ..gl.labels import AtomLabel, BondLabel, LabelScope, LabelSettings
 from ..gl.scene import Style, build_scene, merge_scenes
 from ..gl.view import StructureView
@@ -47,6 +48,7 @@ from .cutoff_explorer import CutoffExplorer
 from .structure_list import StructureList
 from .theme_panel import ThemePanel
 from .diffraction_panel import DiffractionPanel
+from .overrides_panel import OverridesPanel
 from .planes_panel import PlanesPanel
 from .utilities_panel import UtilitiesPanel
 
@@ -106,7 +108,14 @@ class PreviewWindow(QMainWindow):
         self.diffraction.reflection_selected.connect(self._on_reflection)
 
         self.planes_panel = PlanesPanel()
-        self.planes_panel.changed.connect(self._rebuild)
+        self.planes_panel.changed.connect(self._on_presentation_change)
+
+        self.overrides_panel = OverridesPanel()
+        self.overrides_panel.changed.connect(self._on_presentation_change)
+        self.overrides_panel.focusAtom.connect(self._focus_atom)
+
+        self.history = history_mod.History()
+        self.view.contextRequested.connect(self._on_context_menu)
 
         self._build_layout()
         self._build_menu()
@@ -168,6 +177,7 @@ class PreviewWindow(QMainWindow):
         tabs.addTab(self.utilities, "Utilities")
         tabs.addTab(self.diffraction, "Diffraction")
         tabs.addTab(self.planes_panel, "Planes")
+        tabs.addTab(self.overrides_panel, "Overrides")
         tabs.addTab(self.theme_panel, "Appearance")
         tabs.setMinimumWidth(400)
 
@@ -315,6 +325,21 @@ class PreviewWindow(QMainWindow):
         m.addSeparator()
         m.addAction(quit_)
 
+        e = self.menuBar().addMenu("&Edit")
+        self.undo_action = QAction("&Undo", self)
+        self.undo_action.setShortcut(QKeySequence.Undo)
+        self.undo_action.triggered.connect(self._undo)
+        self.redo_action = QAction("&Redo", self)
+        self.redo_action.setShortcut(QKeySequence.Redo)
+        self.redo_action.triggered.connect(self._redo)
+        e.addAction(self.undo_action)
+        e.addAction(self.redo_action)
+        e.addSeparator()
+        clear_overrides = QAction("Clear all per-atom and per-site styles", self)
+        clear_overrides.triggered.connect(self._clear_overrides)
+        e.addAction(clear_overrides)
+        self._refresh_history_actions()
+
         v = self.menuBar().addMenu("&View")
         reset = QAction("&Reset view", self)
         reset.setShortcut("R")
@@ -429,12 +454,23 @@ class PreviewWindow(QMainWindow):
         self._fill_site_list()
         self.structure_panel.refresh()
         self._set_enabled(True)
+        # An atom override is keyed by index into the drawn scene, so a change of
+        # structure or cell range can leave it addressing a different atom. Drop
+        # the ones that no longer address anything rather than let them land
+        # somewhere arbitrary.
+        entry.overrides.prune(len(entry.structure.atoms),
+                              [site.label for site in entry.structure.sites])
         self._rebuild(reframe=reframe)
         self.setWindowTitle(
             f"{NAME} {__version__} — {entry.name}  ·  "
             f"{entry.structure.spacegroup_hm or 'unknown symmetry'}"
             + (f"   [{len(self.project)} structures]" if len(self.project) > 1
                else ""))
+        # A newly opened structure starts its own history. Undo covers how a
+        # structure is drawn, not which structure is open, so there is nothing
+        # sensible to step back to across a load.
+        self.history.reset(self._snapshot(), f"opened {entry.name}")
+        self._refresh_history_actions()
         if entry.structure.notes:
             self.statusBar().showMessage(entry.structure.notes[0], 14000)
 
@@ -484,7 +520,8 @@ class PreviewWindow(QMainWindow):
                 lattice_planes=(self.planes_panel.current_planes()
                                 if entry is active else None),
                 slab=(self.planes_panel.current_slab()
-                      if entry is active else None)))
+                      if entry is active else None),
+                overrides=entry.overrides))
 
         self.scene = (scenes[0] if len(scenes) == 1
                       else merge_scenes(scenes, [e.offset for e in entries]))
@@ -502,6 +539,9 @@ class PreviewWindow(QMainWindow):
             self._current_result(), self.project.v_bond)
         self.diffraction.set_structure(active.structure if active else None)
         self.planes_panel.set_structure(active.structure if active else None)
+        self.overrides_panel.set_context(
+            active.structure if active else None,
+            active.overrides if active else None)
 
     def _current_result(self):
         entry = self.project.current
@@ -622,6 +662,284 @@ class PreviewWindow(QMainWindow):
             self.view.view_along(normal)
             self.statusBar().showMessage(
                 f"viewing down the normal of ({h} {k} {l})", 6000)
+
+    # -- presentation state, undo and the context menu ----------------------
+    def _snapshot(self) -> dict:
+        """Everything undo restores. Deliberately not the structures.
+
+        Undo changes how a structure is drawn, never what it is: loading a file,
+        closing one, and anything written to disk are all outside it.
+        """
+        entry = self.project.current
+        slab = self.planes_panel.slab
+        return {
+            "overrides": (entry.overrides.to_dict() if entry is not None
+                          else None),
+            "planes": [
+                {"h": p.h, "k": p.k, "l": p.l, "offset": p.offset,
+                 "color": list(p.color), "alpha": p.alpha,
+                 "visible": p.visible, "repeat": p.repeat,
+                 "show_edges": p.show_edges}
+                for p in self.planes_panel.current_planes()],
+            "slab": {"h": slab.h, "k": slab.k, "l": slab.l,
+                     "centre": slab.centre, "thickness": slab.thickness,
+                     "enabled": slab.enabled},
+            "v_bond": self.project.v_bond,
+        }
+
+    def _restore(self, snapshot: dict) -> None:
+        if not snapshot:
+            return
+        entry = self.project.current
+        if entry is not None and snapshot.get("overrides") is not None:
+            entry.overrides = overrides_mod.StyleOverrides.from_dict(
+                snapshot["overrides"])
+
+        self.planes_panel.planes = [
+            planes_mod.LatticePlane(
+                raw["h"], raw["k"], raw["l"], offset=raw["offset"],
+                color=tuple(raw["color"]), alpha=raw["alpha"],
+                visible=raw["visible"], show_edges=raw.get("show_edges", True),
+                repeat=raw.get("repeat", 1))
+            for raw in snapshot.get("planes", [])]
+
+        raw = snapshot.get("slab") or {}
+        slab = self.planes_panel.slab
+        for name in ("h", "k", "l", "centre", "thickness", "enabled"):
+            if name in raw:
+                setattr(slab, name, raw[name])
+        self.planes_panel.load_slab_controls()
+        self.planes_panel.reload()
+
+        if "v_bond" in snapshot:
+            self.project.set_bond_threshold(float(snapshot["v_bond"]))
+            self.explorer.set_threshold(self.project.v_bond)
+
+        self.overrides_panel.set_context(
+            entry.structure if entry else None,
+            entry.overrides if entry else None)
+        self._rebuild()
+        self._refresh_history_actions()
+
+    def _on_presentation_change(self, description: str = "") -> None:
+        """A panel changed something drawable: rebuild, then record it."""
+        self._rebuild()
+        self.history.push(description or "changed the presentation",
+                          self._snapshot())
+        self._refresh_history_actions()
+
+    def _refresh_history_actions(self) -> None:
+        undo = getattr(self, "undo_action", None)
+        redo = getattr(self, "redo_action", None)
+        if undo is None or redo is None:
+            return
+        undo.setEnabled(self.history.can_undo)
+        redo.setEnabled(self.history.can_redo)
+        undo.setText(("&Undo " + self.history.undo_description).rstrip()
+                     if self.history.can_undo else "&Undo")
+        redo.setText(("&Redo " + self.history.redo_description).rstrip()
+                     if self.history.can_redo else "&Redo")
+
+    def _undo(self) -> None:
+        description = self.history.undo_description
+        snapshot = self.history.undo()
+        if snapshot is None:
+            return
+        self._restore(snapshot)
+        self.statusBar().showMessage("undid: " + description, 6000)
+
+    def _redo(self) -> None:
+        snapshot = self.history.redo()
+        if snapshot is None:
+            return
+        description = self.history.undo_description
+        self._restore(snapshot)
+        self.statusBar().showMessage("redid: " + description, 6000)
+
+    def _clear_overrides(self) -> None:
+        entry = self.project.current
+        if entry is None or entry.overrides.is_empty:
+            return
+        entry.overrides.clear()
+        self.overrides_panel.refresh()
+        self._on_presentation_change("removed every override")
+
+    def _focus_atom(self, index: int) -> None:
+        if self.scene is None or not (0 <= index < self.scene.n_atoms):
+            return
+        self.view.select_atom(index)
+        self.statusBar().showMessage(
+            self.scene.atom_label[index] + " ("
+            + self.scene.atom_element[index] + ")", 6000)
+
+    def _on_context_menu(self, atom_index: int, global_pos=None) -> None:
+        """Raise the right-click menu for whatever is under the pointer."""
+        from PySide6.QtGui import QCursor
+
+        menu = self._build_context_menu(atom_index)
+        if menu is None:
+            return
+        menu.exec(global_pos if global_pos is not None else QCursor.pos())
+
+    def _build_context_menu(self, atom_index: int):
+        """The right-click menu, built but not shown.
+
+        Kept separate from showing it so the menu's contents can be inspected
+        without entering a modal event loop -- the contents are the part worth
+        testing, and exec() would block a test forever.
+        """
+        from PySide6.QtWidgets import QMenu
+
+        entry = self.project.current
+        if entry is None:
+            return None
+        scene = self.scene
+        menu = QMenu(self)
+        # Submenus are constructed with `menu` as their parent rather than with
+        # menu.addMenu("title"): that form returns a submenu owned by Python, so
+        # the only reference keeping it alive would be a local in this method
+        # and it would be destroyed the moment this returns -- before the menu is
+        # shown.
+
+        if scene is not None and 0 <= atom_index < scene.n_atoms:
+            label = scene.atom_label[atom_index]
+            element = scene.atom_element[atom_index]
+            site_index = int(scene.atom_site[atom_index])
+            site_label = (entry.structure.sites[site_index].label
+                          if 0 <= site_index < len(entry.structure.sites)
+                          else label)
+
+            header = menu.addAction(label + "  (" + element + ")")
+            header.setEnabled(False)
+            menu.addSeparator()
+
+            menu.addAction("Select this site").triggered.connect(
+                lambda _=False, i=site_index: self._on_site_picked(i))
+            menu.addAction("Show this site's polyhedron").triggered.connect(
+                lambda _=False, i=site_index: self._show_polyhedron_for(i))
+            menu.addSeparator()
+
+            site_menu = QMenu("Site " + site_label, menu)
+            menu.addMenu(site_menu)
+            site_menu.addAction("Colour...").triggered.connect(
+                lambda _=False: self._pick_override_colour("site", site_label))
+            site_menu.addAction("Hide").triggered.connect(
+                lambda _=False: self._apply_override("site", site_label,
+                                                     "hid", visible=False))
+            site_menu.addAction("Show").triggered.connect(
+                lambda _=False: self._apply_override("site", site_label,
+                                                     "showed", visible=True))
+            site_menu.addAction("Bigger").triggered.connect(
+                lambda _=False: self._scale_override("site", site_label, 1.25))
+            site_menu.addAction("Smaller").triggered.connect(
+                lambda _=False: self._scale_override("site", site_label, 0.8))
+            site_menu.addSeparator()
+            site_menu.addAction("Clear this site").triggered.connect(
+                lambda _=False: self._clear_override("site", site_label))
+
+            atom_menu = QMenu("This atom only", menu)
+            menu.addMenu(atom_menu)
+            atom_menu.addAction("Colour...").triggered.connect(
+                lambda _=False: self._pick_override_colour("atom", atom_index))
+            atom_menu.addAction("Hide").triggered.connect(
+                lambda _=False: self._apply_override("atom", atom_index,
+                                                     "hid", visible=False))
+            atom_menu.addAction("Bigger").triggered.connect(
+                lambda _=False: self._scale_override("atom", atom_index, 1.25))
+            atom_menu.addAction("Smaller").triggered.connect(
+                lambda _=False: self._scale_override("atom", atom_index, 0.8))
+            atom_menu.addSeparator()
+            atom_menu.addAction("Clear this atom").triggered.connect(
+                lambda _=False: self._clear_override("atom", atom_index))
+
+            element_menu = QMenu("Every " + element, menu)
+            menu.addMenu(element_menu)
+            element_menu.addAction("Colour...").triggered.connect(
+                lambda _=False: self._pick_override_colour("element", element))
+            element_menu.addAction("Hide").triggered.connect(
+                lambda _=False: self._apply_override("element", element,
+                                                     "hid", visible=False))
+            element_menu.addSeparator()
+            element_menu.addAction("Clear").triggered.connect(
+                lambda _=False: self._clear_override("element", element))
+            menu.addSeparator()
+
+        menu.addAction("Reset the view").triggered.connect(self.view.reset_view)
+        for name, axis in (("Look along a", (1, 0, 0)),
+                           ("Look along b", (0, 1, 0)),
+                           ("Look along c", (0, 0, 1))):
+            menu.addAction(name).triggered.connect(
+                lambda _=False, ax=axis: self._view_along(ax))
+        menu.addSeparator()
+        if not entry.overrides.is_empty:
+            menu.addAction("Remove every override").triggered.connect(
+                self._clear_overrides)
+        if self.history.can_undo:
+            menu.addAction("Undo " + self.history.undo_description
+                           ).triggered.connect(self._undo)
+        return menu
+
+    def _show_polyhedron_for(self, site_index: int) -> None:
+        entry = self.project.current
+        if entry is None:
+            return
+        entry.selected_site = site_index
+        self._fill_site_list()
+        self._rebuild()
+
+    def _apply_override(self, level: str, target, verb: str, **fields) -> None:
+        entry = self.project.current
+        if entry is None:
+            return
+        if level == "site":
+            entry.overrides.set_site(target, **fields)
+        elif level == "atom":
+            entry.overrides.set_atom(int(target), **fields)
+        else:
+            entry.overrides.set_element(target, **fields)
+        self.overrides_panel.refresh()
+        self._on_presentation_change(verb + " " + level + " " + str(target))
+
+    def _scale_override(self, level: str, target, factor: float) -> None:
+        """Multiply the drawn size, compounding with any scale already set."""
+        entry = self.project.current
+        if entry is None:
+            return
+        if level == "site":
+            existing = entry.overrides.by_site.get(target)
+        elif level == "atom":
+            existing = entry.overrides.by_atom.get(int(target))
+        else:
+            existing = entry.overrides.by_element.get(target)
+        current = (1.0 if existing is None or existing.radius_scale is None
+                   else existing.radius_scale)
+        self._apply_override(level, target, "resized",
+                             radius_scale=current * factor)
+
+    def _pick_override_colour(self, level: str, target) -> None:
+        from PySide6.QtWidgets import QColorDialog
+
+        chosen = QColorDialog.getColor(Qt.white, self, "Colour for "
+                                       + str(target))
+        if not chosen.isValid():
+            return
+        self._apply_override(
+            level, target, "coloured",
+            color=(chosen.redF(), chosen.greenF(), chosen.blueF()))
+
+    def _clear_override(self, level: str, target) -> None:
+        entry = self.project.current
+        if entry is None:
+            return
+        if level == "site":
+            entry.overrides.clear_site(target)
+        elif level == "atom":
+            entry.overrides.clear_atom(int(target))
+        else:
+            entry.overrides.clear_element(target)
+        self.overrides_panel.refresh()
+        self._on_presentation_change(
+            "cleared the override on " + level + " " + str(target))
 
     def _view_along(self, axis) -> None:
         if self.structure is None:
@@ -825,7 +1143,8 @@ class PreviewWindow(QMainWindow):
                          "FACET session (*.json)")
         if path:
             exporters.save_session(self.project, path, theme=self.theme,
-                                   camera=self.view.camera, labels=self.labels)
+                                   camera=self.view.camera, labels=self.labels,
+                                   presentation=self._snapshot())
             self._wrote(path)
 
     def _open_session(self) -> None:
@@ -863,8 +1182,30 @@ class PreviewWindow(QMainWindow):
             self.view.camera.orthographic = cam["orthographic"]
         self.project.set_overlay(data.get("overlay", False),
                                  data.get("overlay_spacing", 0.0))
+
+        # Per-entry overrides, matched back to their files by path. Matching by
+        # path rather than by position means a session whose files have moved
+        # loses the overrides for the files that are gone and keeps the rest,
+        # instead of applying one structure's overrides to another.
+        by_path = {e.get("path"): e for e in data.get("entries", [])
+                   if e.get("path")}
+        for entry in self.project.entries:
+            saved = by_path.get(entry.path)
+            if saved and saved.get("overrides"):
+                entry.overrides = overrides_mod.StyleOverrides.from_dict(
+                    saved["overrides"])
+                entry.overrides.prune(
+                    len(entry.structure.atoms),
+                    [site.label for site in entry.structure.sites])
+
+        presentation = data.get("presentation")
         self.structure_panel.refresh()
+        if presentation:
+            self._restore(presentation)
         self._rebuild(reframe="camera" not in data)
+        active = self.project.current
+        self.history.reset(self._snapshot(), "opened the session")
+        self._refresh_history_actions()
         if missing:
             QMessageBox.information(
                 self, "Some files have moved",

@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from . import bv, cif, coordination, readers
+from . import overrides as overrides_mod
 from .structure import Structure
 
 
@@ -36,6 +37,12 @@ class Entry:
     # offset applied when several structures are shown at once, in angstrom
     offset: np.ndarray = field(default_factory=lambda: np.zeros(3))
     color_key: int = 0          # index into a qualitative cycle, for overlay mode
+    # Per-site and per-atom presentation overrides. They live with the entry
+    # rather than with the theme because a label like "Bi1" means something in
+    # one file and something else in another, while a palette is meant to be
+    # reusable across files.
+    overrides: overrides_mod.StyleOverrides = field(
+        default_factory=lambda: overrides_mod.StyleOverrides())
 
     _results: list | None = field(default=None, repr=False)
     _results_key: tuple | None = field(default=None, repr=False)
