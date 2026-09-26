@@ -23,7 +23,14 @@ from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QRadialGradient
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QPainter,
+    QPen,
+    QPolygonF,
+    QRadialGradient,
+)
 
 from .camera import Camera
 from .scene import Scene
@@ -85,6 +92,7 @@ class PainterRenderer:
 
         items: list[tuple[float, object]] = []
         self._collect_cell(items, scene, camera, width, height)
+        self._collect_planes(items, scene, camera, width, height)
         self._collect_bonds(items, scene, camera, width, height)
         self._collect_atoms(items, scene, atoms, width, height)
 
@@ -195,6 +203,48 @@ class PainterRenderer:
             # the cell outline is a reference frame, not an object: always
             # behind, so it never cuts across an atom
             items.append((-np.inf, self._cell_drawer(seg)))
+
+    def _collect_planes(self, items, scene: Scene, camera: Camera,
+                        width: int, height: int) -> None:
+        """Lattice planes, on the software tier.
+
+        Each plane is one convex polygon, so it can be drawn as a filled
+        polygon and sorted into the same back-to-front queue as everything
+        else -- there is no blending order problem to solve, because the queue
+        already solves it. The polygon's own centroid depth is what it sorts by,
+        which is exact for a planar face.
+        """
+        if not scene.plane_meshes:
+            return
+        for vertices, _, colour, alpha in scene.plane_meshes:
+            if not len(vertices):
+                continue
+            # back from the triangle fan to the polygon boundary: the fan's
+            # first vertex plus the second vertex of every triangle, then the
+            # last triangle's third
+            triangles = np.asarray(vertices, float).reshape(-1, 3, 3)
+            outline = [triangles[0, 0]]
+            outline.extend(triangles[:, 1])
+            outline.append(triangles[-1, 2])
+
+            projected = camera.project(np.asarray(outline, float),
+                                       width, height)
+            if np.any(projected[:, 2] >= 0):
+                continue
+            depth = float(np.mean(projected[:, 2]))
+            items.append((depth, self._plane_drawer(projected, colour, alpha,
+                                                    scene.plane_edge_color)))
+
+    def _plane_drawer(self, projected, colour, alpha, edge_color):
+        def draw(painter: QPainter):
+            polygon = QPolygonF([QPointF(float(x), float(y))
+                                 for x, y, _ in projected])
+            painter.setBrush(_qcolor(colour, alpha))
+            painter.setPen(QPen(_qcolor(edge_color, min(1.0, alpha + 0.45)),
+                                1.0))
+            painter.drawPolygon(polygon)
+            painter.setBrush(Qt.NoBrush)
+        return draw
 
     def _cell_drawer(self, seg):
         def draw(painter: QPainter):

@@ -88,6 +88,15 @@ class Scene:
     iso_alpha: float = 0.55
     iso_label: str = ""
 
+    # --- lattice planes ---------------------------------------------------
+    # One entry per drawn plane: (vertices, normals, colour, alpha). A list
+    # rather than one concatenated buffer because each plane carries its own
+    # colour and opacity, and a handful of draw calls costs nothing beside the
+    # atoms. Plane outlines are separate line segments.
+    plane_meshes: list = field(default_factory=list)
+    plane_edges: np.ndarray = field(default_factory=lambda: np.zeros((0, 2, 3), np.float32))
+    plane_edge_color: tuple[float, float, float] = (0.62, 0.80, 0.94)
+
     # --- unit cell --------------------------------------------------------
     cell_segments: np.ndarray = field(default_factory=lambda: np.zeros((0, 2, 3), np.float32))
 
@@ -127,6 +136,32 @@ class Scene:
     @property
     def n_iso_triangles(self) -> int:
         return len(self.iso_vertices) // 3
+
+    @property
+    def n_planes(self) -> int:
+        return len(self.plane_meshes)
+
+    def clear_planes(self) -> None:
+        self.plane_meshes = []
+        self.plane_edges = np.zeros((0, 2, 3), np.float32)
+
+    def add_plane(self, vertices, normals, color, alpha: float,
+                  edges=None) -> None:
+        """Adopt one drawn plane, as a triangle soup plus its outline."""
+        vertices = np.asarray(vertices, np.float32)
+        if not len(vertices):
+            return
+        normals = np.asarray(normals, np.float32)
+        if len(normals) != len(vertices):
+            normals = np.zeros_like(vertices)
+        self.plane_meshes.append((vertices, normals,
+                                  tuple(float(c) for c in color),
+                                  float(alpha)))
+        if edges is not None and len(edges):
+            edges = np.asarray(edges, np.float32).reshape(-1, 2, 3)
+            self.plane_edges = (edges if not len(self.plane_edges)
+                                else np.vstack([self.plane_edges, edges])
+                                ).astype(np.float32)
 
     def set_isosurface(self, vertices, faces, normals, *, color=None,
                        alpha: float | None = None, label: str = "") -> None:
@@ -214,7 +249,9 @@ def build_scene(structure: Structure,
                 show_cell: bool = True,
                 cell_range: tuple[int, int, int] = (1, 1, 1),
                 theme=None,
-                params: bv.ParameterSet | None = None) -> Scene:
+                params: bv.ParameterSet | None = None,
+                lattice_planes=None,
+                slab=None) -> Scene:
     """Build a drawable scene for a structure.
 
     `results` is reused when supplied, so opening a structure does not analyse
@@ -248,9 +285,149 @@ def build_scene(structure: Structure,
         scene.cell_segments = unit_cell_segments(structure, scene.cell_range)
     if scene.cell_range != (1, 1, 1):
         _replicate(structure, scene)
-    _frame(scene, structure)
+
+    # Restyle before the slab, not after. _replicate deliberately does not tile
+    # the bond colours -- restyle regenerates them from the base colours -- so
+    # until this runs, a replicated scene's colour arrays are still the length of
+    # one cell while every other bond array is n_copies longer. Filtering that
+    # inconsistent state is how the slab first met a shape mismatch.
     scene.restyle(v_bond)
+
+    # The slab comes before the planes, so a plane drawn to show where the slab
+    # was cut is not itself cut away; and before framing, so the view frames
+    # what is left rather than what was removed.
+    if slab is not None and getattr(slab, "enabled", False):
+        apply_slab(structure, scene, slab)
+    if lattice_planes:
+        _build_planes(structure, scene, lattice_planes)
+
+    _frame(scene, structure)
     return scene
+
+
+def _build_planes(structure: Structure, scene: Scene, lattice_planes) -> None:
+    """Cut each visible (hkl) plane against the drawn box."""
+    from ..core import planes as planes_mod
+
+    scene.clear_planes()
+    for plane in lattice_planes:
+        if not getattr(plane, "visible", True) or not plane.is_valid:
+            continue
+        try:
+            polygons = planes_mod.plane_polygons(structure, plane,
+                                                 scene.cell_range)
+        except ValueError:
+            continue
+        for polygon in polygons:
+            vertices, normals = planes_mod.triangulate(polygon)
+            edges = None
+            if getattr(plane, "show_edges", True) and len(polygon) >= 3:
+                edges = np.stack([polygon, np.roll(polygon, -1, axis=0)],
+                                 axis=1)
+            scene.add_plane(vertices, normals, plane.color, plane.alpha, edges)
+
+
+def apply_slab(structure: Structure, scene: Scene, slab) -> None:
+    """Keep only the atoms, bonds and polyhedra inside the slab.
+
+    Filtering the built scene rather than clipping in a shader, for two
+    reasons. It works identically on all three render tiers, including the
+    QPainter fallback that has no shaders at all -- and the promise is that
+    FACET runs on a machine with no graphics card. And it means what is on
+    screen is what the scene contains, so picking, labels and the atom counts
+    all agree with the picture instead of the shader quietly disagreeing with
+    the arrays behind it.
+
+    Atom indices are renumbered, so every array indexed by atom -- the bond
+    endpoints, the selection, the per-structure map -- is remapped with them.
+    """
+    from ..core import planes as planes_mod
+
+    if scene.n_atoms == 0:
+        return
+    keep = planes_mod.slab_mask(structure, scene.atom_position, slab)
+    if keep.all():
+        return
+
+    index = np.nonzero(keep)[0]
+    remap = np.full(scene.n_atoms, -1, np.int64)
+    remap[index] = np.arange(len(index))
+
+    # how many of the survivors were cell contents rather than bonded images
+    cell_atoms = int(np.count_nonzero(index < scene.n_cell_atoms))
+
+    scene.atom_position = scene.atom_position[index]
+    scene.atom_radius = scene.atom_radius[index]
+    scene.atom_color = scene.atom_color[index]
+    scene.atom_index = scene.atom_index[index]
+    scene.atom_site = scene.atom_site[index]
+    scene.atom_label = [scene.atom_label[i] for i in index]
+    scene.atom_element = [scene.atom_element[i] for i in index]
+    if len(scene.structure_of):
+        scene.structure_of = scene.structure_of[index]
+    scene.n_cell_atoms = cell_atoms
+
+    if scene.selected_atom is not None:
+        new_selection = int(remap[scene.selected_atom])             if 0 <= scene.selected_atom < len(remap) else -1
+        scene.selected_atom = None if new_selection < 0 else new_selection
+
+    if scene.n_bonds:
+        # A bond is kept or dropped by where it is DRAWN, not by which
+        # crystallographic atoms it names. The two differ: bond_a is exactly the
+        # first atom's position, but bond_b is the contact position, which for a
+        # bond crossing the cell edge is a periodic image -- and bond_atoms
+        # records the image's home-cell representative, sometimes ten angstrom
+        # away. Filtering on bond_atoms would keep bonds whose far end has been
+        # cut away, which is the trailing-bond fault again, and drop bonds that
+        # lie wholly inside the slab.
+        inside_a = planes_mod.slab_mask(structure, scene.bond_a, slab)
+        inside_b = planes_mod.slab_mask(structure, scene.bond_b, slab)
+        alive = inside_a & inside_b
+
+        for name in ("bond_a", "bond_b", "bond_radius", "bond_color_a",
+                     "bond_color_b", "bond_valence", "bond_distance",
+                     "_bond_base_a", "_bond_base_b"):
+            array = getattr(scene, name)
+            # Length-checked rather than filtered blind: a caller may hand in a
+            # scene whose colour arrays have not been regenerated yet, and
+            # silently indexing the wrong one with the right-sized mask would
+            # scramble the colours instead of failing.
+            if len(array) == len(alive):
+                setattr(scene, name, array[alive])
+
+        # Re-point the named atoms at atoms that are still drawn. The first is
+        # simply remapped, since bond_a is that atom and it survived. The second
+        # is found from the drawn endpoint, so it names the image actually at the
+        # end of the tube rather than a representative that may now be gone --
+        # and an image carries the same site, element and label as the atom it
+        # came from, so nothing downstream reads differently.
+        pairs = scene.bond_atoms[alive]
+        first = remap[pairs[:, 0]]
+        second = pairs[:, 1].astype(np.int64)
+        if len(scene.bond_b):
+            from scipy.spatial import cKDTree
+
+            tree = cKDTree(scene.atom_position)
+            distance, nearest = tree.query(np.asarray(scene.bond_b, float))
+            found = distance < 1.0e-4
+            second = np.where(found, nearest, remap[pairs[:, 1]])
+        scene.bond_atoms = np.stack([first, second], axis=1).astype(np.int32)
+
+    if scene.n_poly_triangles:
+        triangles = scene.poly_vertices.reshape(-1, 3, 3)
+        centroids = triangles.mean(axis=1)
+        inside = planes_mod.slab_mask(structure, centroids, slab)
+        scene.poly_vertices = triangles[inside].reshape(-1, 3).astype(
+            np.float32)
+        scene.poly_normals = scene.poly_normals.reshape(-1, 3, 3)[
+            inside].reshape(-1, 3).astype(np.float32)
+
+    if scene.n_iso_triangles:
+        triangles = scene.iso_vertices.reshape(-1, 3, 3)
+        inside = planes_mod.slab_mask(structure, triangles.mean(axis=1), slab)
+        scene.iso_vertices = triangles[inside].reshape(-1, 3).astype(np.float32)
+        scene.iso_normals = scene.iso_normals.reshape(-1, 3, 3)[
+            inside].reshape(-1, 3).astype(np.float32)
 
 
 def _replicate(structure: Structure, scene: Scene) -> None:
@@ -302,6 +479,9 @@ def _replicate(structure: Structure, scene: Scene) -> None:
         scene.iso_vertices = np.vstack(
             [scene.iso_vertices + sh for sh in shifts]).astype(np.float32)
         scene.iso_normals = np.tile(scene.iso_normals, (n_copies, 1))
+    # Lattice planes are deliberately NOT replicated. A plane is already cut to
+    # the whole drawn box, cell range included, so copying it per cell would lay
+    # several coincident sheets on top of each other and darken the blend.
 
 
 def _add_bonded_images(structure: Structure, scene: Scene) -> None:
@@ -617,6 +797,8 @@ def _frame(scene: Scene, structure: Structure) -> None:
         pts.append(scene.cell_segments.reshape(-1, 3))
     if len(scene.iso_vertices):
         pts.append(scene.iso_vertices)
+    for vertices, _, _, _ in scene.plane_meshes:
+        pts.append(vertices)
     if not pts:
         scene.center = np.zeros(3, np.float32)
         scene.radius = 1.0

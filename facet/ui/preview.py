@@ -47,6 +47,7 @@ from .cutoff_explorer import CutoffExplorer
 from .structure_list import StructureList
 from .theme_panel import ThemePanel
 from .diffraction_panel import DiffractionPanel
+from .planes_panel import PlanesPanel
 from .utilities_panel import UtilitiesPanel
 
 
@@ -103,6 +104,9 @@ class PreviewWindow(QMainWindow):
         self.diffraction = DiffractionPanel()
         self.diffraction.apply_theme(self.theme)
         self.diffraction.reflection_selected.connect(self._on_reflection)
+
+        self.planes_panel = PlanesPanel()
+        self.planes_panel.changed.connect(self._rebuild)
 
         self._build_layout()
         self._build_menu()
@@ -163,6 +167,7 @@ class PreviewWindow(QMainWindow):
         tabs.addTab(self.analysis, "Site")
         tabs.addTab(self.utilities, "Utilities")
         tabs.addTab(self.diffraction, "Diffraction")
+        tabs.addTab(self.planes_panel, "Planes")
         tabs.addTab(self.theme_panel, "Appearance")
         tabs.setMinimumWidth(400)
 
@@ -385,10 +390,9 @@ class PreviewWindow(QMainWindow):
         if not paths:
             QMessageBox.information(
                 self, "Nothing to open",
-                f"No structure files in {folder}.
-
-FACET reads CIF, POSCAR, "
-                "XYZ, .vesta, SHELX .res/.ins, PDB and CrystalMaker .cmtx.")
+                f"No structure files in {folder}. FACET reads CIF, POSCAR, XYZ, "
+                "VESTA .vesta, SHELX .res/.ins, PDB and CrystalMaker "
+                ".cmtx.")
             return
         self.load_many(paths)
 
@@ -476,7 +480,11 @@ FACET reads CIF, POSCAR, "
                 polyhedron_sites=sites,
                 show_cell=self.cell_check.isChecked(),
                 cell_range=cell_range, theme=self.theme,
-                params=self.project.params))
+                params=self.project.params,
+                lattice_planes=(self.planes_panel.current_planes()
+                                if entry is active else None),
+                slab=(self.planes_panel.current_slab()
+                      if entry is active else None)))
 
         self.scene = (scenes[0] if len(scenes) == 1
                       else merge_scenes(scenes, [e.offset for e in entries]))
@@ -493,6 +501,7 @@ FACET reads CIF, POSCAR, "
             self.project.results_for(active) if active else None,
             self._current_result(), self.project.v_bond)
         self.diffraction.set_structure(active.structure if active else None)
+        self.planes_panel.set_structure(active.structure if active else None)
 
     def _current_result(self):
         entry = self.project.current

@@ -83,6 +83,9 @@ class Renderer:
         self._vaos: dict[str, QOpenGLVertexArrayObject] = {}
         self._vbos: dict[str, dict[str, QOpenGLBuffer]] = {}
         self._counts: dict[str, int] = {}
+        # how many plane VAOs the last uploaded scene needed, so a scene with
+        # fewer planes does not leave the extra ones being drawn
+        self._n_plane_vaos = 0
         self._gbuffer = None
         self._ao = None
         self._composite = None
@@ -215,11 +218,26 @@ class Renderer:
         else:
             self._counts["iso"] = 0
 
+        # One VAO per drawn plane: each carries its own colour and opacity, and
+        # there are only ever a handful of them.
+        for i in range(self._n_plane_vaos):
+            self._counts.pop(f"plane{i}", None)
+        self._n_plane_vaos = len(scene.plane_meshes)
+        for i, (vertices, normals, _, _) in enumerate(scene.plane_meshes):
+            self._make_vao(f"plane{i}", {"aPosition": vertices,
+                                         "aNormal": normals}, len(vertices))
+
         lines = buffers.line_vertices(scene.cell_segments)
         if len(lines):
             self._make_vao("line", {"aPosition": lines}, len(lines))
         else:
             self._counts["line"] = 0
+
+        edges = buffers.line_vertices(scene.plane_edges)
+        if len(edges):
+            self._make_vao("plane_edge", {"aPosition": edges}, len(edges))
+        else:
+            self._counts["plane_edge"] = 0
 
     def update_bond_colors(self, scene: Scene) -> None:
         """Re-upload only what a threshold change touches.
@@ -279,6 +297,7 @@ class Renderer:
                 self._draw_lines(view, proj)
                 self._draw_polyhedra(view, proj, light_view, scene)
                 self._draw_isosurface(view, proj, light_view, scene)
+                self._draw_planes(view, proj, light_view, scene)
 
         self._gbuffer.release()
 
@@ -364,6 +383,57 @@ class Renderer:
         gl.glDrawArrays(GL_TRIANGLES, 0, self._counts["poly"])
         self._vaos["poly"].release()
         p.release()
+
+        gl.glDepthMask(True)
+        gl.glDisable(GL_BLEND)
+        self._draw_buffers(3)
+
+    def _draw_planes(self, view, proj, light, scene: Scene) -> None:
+        """Lattice planes, blended over everything else.
+
+        Drawn last of the transparent surfaces and with the depth buffer left
+        read-only, so a plane tints what is behind it instead of hiding it --
+        which is the whole point of drawing the plane rather than just stating
+        its indices. Culling is off because a plane is a single sheet and has to
+        be visible from both sides.
+        """
+        if not scene.plane_meshes:
+            return
+        gl = self.gl
+        self._draw_buffers(1)
+        gl.glEnable(GL_BLEND)
+        gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        gl.glDepthMask(False)
+        gl.glDisable(GL_CULL_FACE)
+
+        p = self._programs["poly"]
+        p.bind()
+        self._set_matrix(p, "uView", view)
+        self._set_matrix(p, "uProj", proj)
+        gl.glUniform3f(p.uniformLocation("uLight"), *light)
+        for i, (_, _, color, alpha) in enumerate(scene.plane_meshes):
+            key = f"plane{i}"
+            if not self._counts.get(key):
+                continue
+            gl.glUniform3f(p.uniformLocation("uColor"), *color)
+            gl.glUniform1f(p.uniformLocation("uAlpha"), alpha)
+            self._vaos[key].bind()
+            gl.glDrawArrays(GL_TRIANGLES, 0, self._counts[key])
+            self._vaos[key].release()
+        p.release()
+
+        if self._counts.get("plane_edge"):
+            line = self._programs["line"]
+            line.bind()
+            self._set_matrix(line, "uView", view)
+            self._set_matrix(line, "uProj", proj)
+            gl.glUniform3f(line.uniformLocation("uColor"),
+                           *scene.plane_edge_color)
+            gl.glUniform1f(line.uniformLocation("uAlpha"), 0.90)
+            self._vaos["plane_edge"].bind()
+            gl.glDrawArrays(GL_LINES, 0, self._counts["plane_edge"])
+            self._vaos["plane_edge"].release()
+            line.release()
 
         gl.glDepthMask(True)
         gl.glDisable(GL_BLEND)
