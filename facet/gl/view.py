@@ -165,6 +165,27 @@ class StructureView(QOpenGLWidget):
         self._selected = index
         self.update()
 
+    def save_vector(self, path, background=None, scale: float = 1.0,
+                    width_mm: float = 170.0, title: str = ""):
+        """Write the view as SVG or PDF, chosen from the file name.
+
+        Composed at the widget's own logical size and then scaled, so the figure
+        has the layout that is on screen -- the labels sit where they sit,
+        relative to the structure, instead of reflowing at a different size.
+        """
+        from . import vector_export
+
+        if self.scene is None:
+            raise ValueError("there is nothing to export")
+        if background is None:
+            background = vector_export.Background.THEME
+        return vector_export.save(
+            path, self.scene, self.camera,
+            max(self.width(), 1), max(self.height(), 1),
+            theme=self.theme, overlay=self._paint_overlay,
+            selected=self._selected, background=background,
+            scale=scale, width_mm=width_mm, title=title)
+
     def set_stereo(self, mode, separation: float | None = None) -> None:
         """Choose a stereo mode. Off means one render, as before."""
         self.stereo = mode

@@ -284,6 +284,9 @@ class PreviewWindow(QMainWindow):
         save.setShortcut(QKeySequence.Save)
         save.triggered.connect(self._save_image)
 
+        vector = QAction("Export as &vector (SVG or PDF)…", self)
+        vector.triggered.connect(self._save_vector)
+
         quit_ = QAction("&Quit", self)
         quit_.setShortcut(QKeySequence.Quit)
         quit_.triggered.connect(self.close)
@@ -296,6 +299,7 @@ class PreviewWindow(QMainWindow):
         m.addAction(openfolder)
         m.addSeparator()
         m.addAction(save)
+        m.addAction(vector)
 
         export = m.addMenu("&Export")
         for label, handler in (
@@ -1234,6 +1238,41 @@ class PreviewWindow(QMainWindow):
                 + "\n".join(Path(p).name for p in missing))
 
     # -- output ------------------------------------------------------------
+    def _save_vector(self) -> None:
+        """A resolution-free figure, drawn as shapes rather than pixels."""
+        from ..gl import vector_export
+
+        if self.scene is None:
+            return
+        name = (self.structure.name or "structure").replace(" ", "_")
+        path, chosen = QFileDialog.getSaveFileName(
+            self, "Export a vector figure", f"{name}.svg",
+            vector_export.FILE_FILTER)
+        if not path:
+            return
+        if not path.lower().endswith((".svg", ".pdf")):
+            path += ".pdf" if "PDF" in (chosen or "") else ".svg"
+
+        answer = QMessageBox.question(
+            self, "Background",
+            "Use a white background for the figure?\n\n"
+            "The screen background is kept otherwise. "
+            + " ".join(vector_export.describe_differences()),
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes)
+        if answer == QMessageBox.Cancel:
+            return
+        background = (vector_export.Background.WHITE
+                      if answer == QMessageBox.Yes
+                      else vector_export.Background.THEME)
+        try:
+            self.view.save_vector(path, background=background,
+                                  title=self.structure.name or "")
+        except Exception as error:
+            QMessageBox.warning(self, "Could not write the figure", str(error))
+            return
+        self._wrote(path)
+
     def _save_image(self) -> None:
         if self.scene is None:
             return
