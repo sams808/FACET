@@ -125,15 +125,30 @@ def read_all_blocks(path: str | Path) -> list[Structure]:
 # ---------------------------------------------------------------------------
 
 def _choose_block(doc, want: str | None):
+    """The block to read, or a reason there is none.
+
+    An empty file, or one with no data block, used to reach gemmi's
+    ``sole_block()`` and come back as ``IndexError: invalid vector subscript``.
+    Dropping an empty file on the window is an ordinary thing to do by accident,
+    and a bare subscript error from three layers down is not an answer.
+    """
+    blocks = list(doc)
     if want is not None:
-        for blk in doc:
+        for blk in blocks:
             if blk.name == want:
                 return blk
-        raise KeyError(f"no block named {want!r}")
-    for blk in doc:
+        raise KeyError(
+            f"no block named {want!r}; this file has "
+            + (", ".join(repr(b.name) for b in blocks) if blocks
+               else "no data blocks at all"))
+    if not blocks:
+        raise ValueError(
+            "the file contains no CIF data block. An empty file, or a text "
+            "file that is not a CIF, looks like this.")
+    for blk in blocks:
         if blk.find_value("_cell_length_a"):
             return blk
-    return doc.sole_block()
+    return blocks[0]
 
 
 def _text(blk, tag: str) -> str | None:

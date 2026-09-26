@@ -174,7 +174,13 @@ def read_bvparm_cif(path) -> tuple[dict, dict, dict, LoadReport]:
                 recommended.add(key)
 
             fitted[key] = r0
-            if b and b > 0:
+            if b is not None and b <= 0:
+                raise ValueError(
+                    f"{path.name}: {cation}{cation_ox:+d}-{anion} is given "
+                    f"b = {b:g}. The valence is exp((R0 - d)/b), so a b of zero "
+                    "or less has no meaning; substituting the default silently "
+                    "would change every valence in the file.")
+            if b:
                 fitted_b[key] = b
             if anion_charge is not None:
                 anion_ox[anion] = int(anion_charge)
@@ -237,6 +243,12 @@ def read_table(path) -> tuple[dict, dict, dict, LoadReport]:
         if key in fitted:
             duplicates += 1
             continue
+        if b is not None and b <= 0:
+            raise ValueError(
+                f"{path.name}: {cation}{cation_ox:+d}-{anion} is given "
+                f"b = {b:g}. The valence is exp((R0 - d)/b), so a b of zero or "
+                "less has no meaning; substituting the default silently would "
+                "change every valence in the file.")
         fitted[key] = r0
         if b:
             fitted_b[key] = b
@@ -288,7 +300,15 @@ def _parse_table_row(fields):
 def read_json(path) -> tuple[dict, dict, dict, LoadReport]:
     """A set written by :func:`write_json`, or edited by hand."""
     path = Path(path)
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        # a JSONDecodeError is a ValueError, but its message says nothing about
+        # which file, and a caller catching (ValueError, OSError) deserves a
+        # sentence it can show someone
+        raise ValueError(
+            f"{path.name}: this is not valid JSON ({error.msg} at line "
+            f"{error.lineno})") from error
     fitted: dict[tuple[str, int, str], float] = {}
     fitted_b: dict[tuple[str, int, str], float] = {}
     anion_ox = {str(k): int(v) for k, v in (data.get("anion_ox") or {}).items()}

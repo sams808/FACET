@@ -9,7 +9,8 @@ out of scope — so that what is missing is visible rather than discovered.
 Legend: **done** · **partial** — usable but incomplete · **planned** — accepted,
 not started · **out of scope** — with a reason.
 
-Last updated at the end of Phase 4.
+Last updated after the whole-application verification. Every feature
+selected for implementation is done; what remains planned is listed as such.
 
 ---
 
@@ -25,7 +26,7 @@ Last updated at the end of Phase 4.
 | Mixed polyhedral + ball-and-stick | ✓ | ✓ | **done** | the default when a site is selected |
 | Thermal ellipsoids | ✓ | ✓ | **planned** | ADPs are parsed; the ellipsoid geometry is not built |
 | Dot-surface / mesh | ✓ | ✓ | out of scope | superseded by ambient occlusion for depth reading |
-| Per-atom style overrides | ✓ | ✓ | **planned** | |
+| Per-atom style overrides | ✓ | ✓ | **done** | colour, size, visibility and label, per single atom; right-click it |
 
 ## 2. Rendering quality
 
@@ -37,8 +38,8 @@ Last updated at the end of Phase 4.
 | Ambient occlusion | – | – | **done** | neither reference application has it |
 | Silhouette outlines | – | – | **done** | |
 | Analytic sphere silhouettes | – | – | **done** | ray-traced impostors; exact at any zoom |
-| Order-independent transparency | – | – | **planned** | matters once many polyhedra overlap |
-| Stereo pairs / anaglyph | ✓ | ✓ | **planned** | |
+| Order-independent transparency | – | – | **done** | triangles sorted back to front per view and cached against the view direction; per-buffer blending would need OpenGL 4.0, and this has to work with no graphics card |
+| Stereo pairs / anaglyph | ✓ | ✓ | **done** | toe-in stereo; red-cyan, greyscale red-cyan, parallel and crossed pairs |
 | Software rendering fallback | – | – | **done** | three tiers, to GL 3.0 and to pure QPainter |
 
 ## 3. Colour
@@ -54,7 +55,7 @@ Last updated at the end of Phase 4.
 | **Colour by bond-valence sum, CN, φ, valence discrepancy** | – | – | **done** | puts the analysis onto the structure |
 | Pinned colour scales across structures | – | – | **done** | what makes two figures comparable |
 | Save and share a theme | ✓ | ✓ | **done** | JSON |
-| Per-site colour overrides | ✓ | ✓ | **planned** | |
+| Per-site colour overrides | ✓ | ✓ | **done** | element, then site, then atom; only the fields actually set apply |
 
 ## 4. Structure display
 
@@ -65,11 +66,11 @@ Last updated at the end of Phase 4.
 | Atom labels | ✓ | ✓ | **done** | 11 kinds, de-cluttered, haloed |
 | Bond labels / distances on screen | ✓ | ✓ | **done** | 6 kinds, including **bond valence per contact** |
 | View down a crystallographic axis | ✓ | ✓ | **done** | a, b, c |
-| Lattice planes, Miller planes | ✓ | ✓ | **planned** | |
-| Slab / clipping plane | ✓ | ✓ | **planned** | |
+| Lattice planes, Miller planes | ✓ | ✓ | **done** | normal is h a\* + k b\* + l c\*, which is 55° from h a + k b + l c for hexagonal (111) |
+| Slab / clipping plane | ✓ | ✓ | **done** | filters the built scene, so picking, labels and the counts agree with the picture |
 | Boundary modes (whole molecules, packing) | ✓ | ✓ | **partial** | periodic images that close a bond are drawn |
 | Show partial occupancy | – | ✓ | **done** | drawn as a smaller sphere |
-| Disorder groups | – | ✓ | **planned** | |
+| Disorder groups | – | ✓ | **done** | assembly and group read; one configuration chosen by default, and the overlap between alternatives reported |
 | Multiple structures at once | ✓ | ✓ | **done** | load many or a whole folder; tick to show; overlay superimposed or laid out in a row |
 
 ## 5. Measurement and geometry
@@ -84,7 +85,7 @@ Last updated at the end of Phase 4.
 | Polyhedral distortion indices | ✓ | ✓ | **done** | Baur, bond-angle variance, quadratic elongation, volume |
 | Effective coordination number | – | ✓ | **done** | Hoppe ECoN |
 | Bond-valence sum | – | ✓ | **done** | with parameter provenance |
-| Bond-valence map | – | ✓ | **partial** | the grid is computed; the isosurface that draws it is Phase 9 |
+| Bond-valence map | – | ✓ | **done** | grid, isosurface in the 3D view, and 2D sections; the V = 3 surface passes within 0.1 Å of the real Bi sites |
 | Uncertainty on the bond-valence sum | – | – | **done** | systematic (R0) and random (coordinates) reported separately |
 | Structure health checks | – | – | **done** | impossible contacts, split sites, charge, esds, valence |
 | Bond strain index | – | – | **done** | |
@@ -104,7 +105,7 @@ Last updated at the end of Phase 4.
 | Several CN definitions side by side | – | – | **done** | ten native rules plus eight pymatgen strategies, with the spread |
 | φ, the scale-free stereoactivity index | – | – | **done** |
 | Oxidation state by bond-valence self-consistency | – | – | **done** |
-| Parameter-set switching with citations | – | – | **partial** | one fitted set plus the estimator; more to ship |
+| Parameter-set switching with citations | – | – | **done** | reads the IUCr bvparm distribution, softBV-style tables and its own JSON; per-pair b is kept, and every value carries its provenance |
 
 ## 7. Symmetry
 
@@ -132,8 +133,8 @@ verified against an analytic sphere, planar sections, and bond-valence maps.
 |---|:--:|:--:|---|
 | Import charge density (CHGCAR, CUBE, XSF) | – | ✓ | **done** |
 | Isosurfaces | – | ✓ | **done** |
-| 2D sections and contour maps | – | ✓ | **partial** |
-| Fourier / difference maps | – | ✓ | **partial** |
+| 2D sections and contour maps | – | ✓ | **done** | marching squares with the saddle case resolved; colour map plus contours, on any Miller plane |
+| Fourier / difference maps | – | ✓ | **done** | any loaded field, and the difference between two grids |
 | Bond-valence energy landscapes | – | ✓ | **done** | the V=3 surface passes within 0.07 Å of the real Bi sites |
 | Hirshfeld surfaces | – | – | out of scope | CrystalExplorer does this well |
 
@@ -141,9 +142,9 @@ verified against an analytic sphere, planar sections, and bond-valence maps.
 
 | Feature | CM | VESTA | FACET |
 |---|:--:|:--:|---|
-| Powder pattern simulation | ✓ (CrystalDiffract) | ✓ | **planned** |
+| Powder pattern simulation | ✓ (CrystalDiffract) | ✓ | **done** | real form factors for X-rays, neutrons and electrons; pseudo-Voigt profile |
 | d-spacing and hkl table | ✓ | ✓ | **done** (see §7) |
-| Overlay on a measured pattern | ✓ | – | **planned** |
+| Overlay on a measured pattern | ✓ | – | **done** | one least-squares scale factor and a difference curve; no fit quality is reported |
 | Single-crystal / reciprocal lattice | ✓ (SingleCrystal) | – | out of scope |
 | Electron diffraction | ✓ | – | out of scope |
 
@@ -161,7 +162,7 @@ verified against an analytic sphere, planar sections, and bond-valence maps.
 | FEFF input | – | **done** | absorber first at the origin; distances asserted to match the analysis |
 | CSV / XLSX of results | – | **done** | every file carries the parameter set and both thresholds |
 | PNG image | – | **done** | supersampled, any resolution |
-| Vector (SVG / PDF) | – | **planned** | needed for a publication figure |
+| Vector (SVG / PDF) | – | **done** | the QPainter tier doubles as the vector exporter: the 3D view, the pattern and the sections |
 
 ## 11. Editing
 
@@ -185,27 +186,66 @@ that already exist. Revisit only if it is actually wanted.
 | Click to select an atom | ✓ | ✓ | **done** | exact, by id buffer |
 | Site list | ✓ | ✓ | **done** | |
 | Drag and drop a file | ✓ | ✓ | **done** | |
-| Right-click context menus | ✓ | ✓ | **planned** | |
-| Undo | ✓ | – | **planned** | |
+| Right-click context menus | ✓ | ✓ | **done** | on an atom: select, polyhedron, and per-atom, per-site and per-element style |
+| Undo | ✓ | – | **done** | snapshots of the presentation state rather than inverse operations |
 | Session save and restore | ✓ | ✓ | **done** | paths, thresholds, theme, camera, labels |
 | Animation, movies | ✓ | – | out of scope |
 | Scripting / batch | – | – | **planned** | the Library workspace |
 
 ---
 
-## Where this leaves Phase 4 and beyond
+## What is left
 
-Ordered by how much each would be used here, not by how hard it is:
+99 of the 120 tracked features are done, 10 are deliberately out of scope, and
+11 remain. Every feature selected for this round is implemented; the rest are
+listed so that what is missing stays visible rather than being discovered.
 
-1. **Export formats** — CIF, VASP, XYZ, VESTA, and CSV of results. Cheap, and it
-   is what makes FACET fit alongside everything else in the group.
-2. **The Library workspace** — batch analysis over a folder, structure health,
-   deduplication. The original Phase 4.
-3. **Remaining CN definitions** — Voronoi, CrystalNN, CHARDI, so the
-   multi-definition panel is complete rather than indicative.
-4. **Vector export** — SVG or PDF, for a figure that goes into a paper.
-5. **Powder diffraction** — simulation and overlay.
-6. **Lattice planes and slabs** — the main remaining display gap.
-7. **Thermal ellipsoids** — the data is already parsed.
-8. **Volumetric data and isosurfaces** — the largest gap, and the point at which
-   bond-valence energy landscapes become possible.
+**Partial — usable, incomplete**
+
+- *Wireframe* draws as thin sticks rather than as true lines. Cosmetic.
+- *Boundary modes*: periodic images are drawn where they close a bond, but there
+  is no whole-molecule or whole-polyhedron completion mode.
+- *Void analysis* reports the void cone half-angle, which is what a lone pair
+  needs, but does not map cavities.
+- *CrystalMaker files*: `.cmtx` text is read. `.cmdf` is an undocumented binary
+  and is refused with an explanation rather than guessed at.
+
+**Planned**
+
+- *Thermal ellipsoids*. The anisotropic displacement parameters are already
+  parsed, so this is the ellipsoid geometry and nothing else.
+- *Symmetry tools*: the operator list, transforming to another setting or cell,
+  and searching for higher symmetry. Not selected for this round.
+- *Scripting and batch*: the Library workspace, for running an analysis over a
+  folder and comparing the results.
+
+**Out of scope, with reasons**
+
+Structure editing, molecular dynamics, animation and movie export. FACET reads
+and measures structures; building and evolving them are different programs, and
+half of one of them is worse than none.
+
+---
+
+## How the numbers here were checked
+
+Every quantity is verified against something outside the code that computes it,
+because a program that only checks itself can be consistently wrong:
+
+- **against independent implementations** — gemmi, spglib and pymatgen, over the
+  whole Bi collection: cell volumes to 9e-16, d-spacings to 5e-16 by two routes,
+  structure factors to 2e-4 of the strongest intensity, neighbour distances to
+  exactly zero, and no disagreement with spglib on any space group;
+- **against closed forms** — rocksalt intensities as 16(f_Na ± f_Cl)², contour
+  circumferences as 2πr, cubic interplanar angles, the Debye-Waller identity;
+- **against physical laws** — the cation and anion bond-valence totals are the
+  same bonds counted from opposite ends by two separate searches, and agree to
+  machine precision on 23 of 26 structures;
+- **against invariance** — moving the origin, rotating the structure, relabelling
+  the axes, building a supercell and choosing a different symmetry copy all leave
+  every reported number unchanged to 2e-14;
+- **against the file's own statements** — computed site multiplicities against
+  `_atom_site_symmetry_multiplicity`, and the expanded cell against
+  `_chemical_formula_sum`. That last check is what caught an expansion fault
+  that had been losing three quarters of the oxygen in one structure while every
+  test passed.

@@ -137,7 +137,7 @@ def cutoff_table(structure: Structure, params: bv.ParameterSet | None = None,
         if param is None:
             missing.append(f"{cation}{ox}+–{anion}")
             continue
-        found = measured.get((cation, anion), {})
+        found = measured.get((cation, int(ox), anion), {})
         table.rows.append(PairCutoff(
             cation=cation, cation_ox=int(ox), anion=anion,
             r0=param.r0, b=param.b, fitted=param.fitted, source=param.source,
@@ -166,20 +166,32 @@ def cutoff_table(structure: Structure, params: bv.ParameterSet | None = None,
 
 
 def _measure(structure: Structure, results, v_bond: float, v_list: float):
-    """What each element pair actually looks like in this structure.
+    """What each pair actually looks like in this structure.
+
+    Keyed by the cation's oxidation state as well as the two elements, because
+    the table has a row per (cation, charge, anion) -- Bi(3+)-O and Bi(5+)-O are
+    different rows with different R0 and different cutoffs. Keying the
+    measurement by the element pair alone gave both rows the same counts, so
+    every column of measured data was doubled in exactly the structures where it
+    matters: Bi4O7, Bi2O4, BaBiO3 and Bi2212 are all mixed-valence, and Bi2212's
+    bond count came out 529 against an actual 378.
 
     A contact whose pair has no parameter has no valence either, and is counted
     in neither column -- its distance is still the shortest contact of that pair,
-    because the distance is a measurement and does not depend on a parameter.
+    because a distance is a measurement and does not depend on a parameter.
     """
-    out: dict[tuple[str, str], dict] = {}
+    out: dict[tuple[str, int, str], dict] = {}
     for result in results:
         site = structure.sites[result.site_index]
+        ox = site.ox if site.ox is not None else elements.COMMON_OX.get(
+            site.element)
+        if ox is None:
+            continue
         for contact in getattr(result, "contacts", []):
             anion = getattr(contact, "element", None)
             if anion is None:
                 continue
-            key = (site.element, elements.normalise(anion))
+            key = (site.element, int(ox), elements.normalise(anion))
             entry = out.setdefault(key, {"shortest": None, "n_bonds": 0,
                                          "n_listed": 0})
             distance = float(contact.distance)

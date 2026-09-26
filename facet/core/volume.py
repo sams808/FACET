@@ -27,6 +27,19 @@ from . import bv, elements
 from .structure import Structure
 
 
+# The most work this module will attempt, counted in distance evaluations: grid
+# points times anions times periodic images. Points alone is the wrong measure --
+# 2.9 million points on a twenty-atom cell is 6 billion evaluations, because each
+# point is measured against every anion in every image within rmax.
+#
+# Calibrated rather than guessed: 95 million evaluations took 2.3 s here, so about
+# 40 million a second, and the budget below is roughly a minute. The point is to
+# make a hang impossible, not to decide for the user how long they may wait -- the
+# panel asks before anything large, and the refusal names the spacing that fits.
+MAX_GRID_WORK = 2_000_000_000
+MAX_GRID_POINTS = 8_000_000
+
+
 @dataclass
 class Grid:
     """A scalar field on a regular mesh over one unit cell.
@@ -381,13 +394,55 @@ def bond_valence_grid(structure: Structure, element: str, ox: int,
     """
     params = params or bv.DEFAULT
     cell = structure.cell
+    if resolution <= 0:
+        raise ValueError("the grid spacing must be positive")
     steps = [max(4, int(round(length / resolution)))
              for length in cell.lengths]
+
+    # A grid costs the cube of the resolution, and the work per point scales with
+    # the number of anion images -- so an innocent-looking spacing can ask for
+    # something that will not finish. Refused with the numbers rather than
+    # attempted: a caller that means it can raise the ceiling, but nothing should
+    # be able to hang the program by typing a smaller number.
+    points = steps[0] * steps[1] * steps[2]
 
     anions = [a for a in structure.atoms
               if structure.sites[a.site_index].is_anion]
     if not anions:
         raise ValueError("the structure has no anions to bond to")
+
+    n_images = len(_images_within(cell.orth, rmax))
+
+    # Two ways to sum this, with very different costs, so the guard has to
+    # estimate the one that will actually run.
+    #
+    # The dense way evaluates every grid point against every anion image:
+    # points x anions x images. The tree way evaluates only the pairs that are
+    # within rmax, and how many that is depends on the cell's density rather
+    # than on the number of images -- a sphere of radius rmax holds
+    # (4/3) pi rmax^3 / V_cell of the cell's contents, so the count is
+    # points x anions x that. For a medium cell at the panel's default spacing
+    # the two differ by a factor of forty, which is the difference between
+    # refusing a request and answering it in under a second.
+    dense_work = points * len(anions) * n_images
+    sphere = 4.0 / 3.0 * math.pi * rmax ** 3
+    tree_work = points * len(anions) * max(sphere / cell.volume, 1.0)
+    use_tree = dense_work > 15_000_000
+    work = tree_work if use_tree else dense_work
+
+    if points > MAX_GRID_POINTS or work > MAX_GRID_WORK:
+        per_point = work / max(points, 1)
+        affordable = max(int(MAX_GRID_WORK / max(per_point, 1e-9)),
+                         1)
+        affordable = min(affordable, MAX_GRID_POINTS)
+        suggestion = ((cell.lengths[0] * cell.lengths[1] * cell.lengths[2])
+                      / affordable) ** (1.0 / 3.0)
+        raise ValueError(
+            f"a spacing of {resolution:g} A over this cell needs "
+            f"{steps[0]}x{steps[1]}x{steps[2]} = {points:,} points, and about "
+            f"{per_point:.0f} anion contacts each -- {int(work):,} terms, more "
+            f"than this will attempt. About {suggestion:.2g} A would fit. "
+            "Halving a spacing is eight times the work.")
 
     # group the anions by element, since each element has its own parameter
     by_element: dict[str, list] = {}
@@ -399,26 +454,61 @@ def bond_valence_grid(structure: Structure, element: str, ox: int,
     total = np.zeros(len(grid_points))
     missing: list[str] = []
 
+    # Only the anion images actually within rmax of a grid point contribute, and
+    # almost none of them are: at 6 A a Bi-O contact is worth 3e-5 v.u., so the
+    # cutoff loses nothing. A full points-by-images distance matrix spends nearly
+    # all its time on terms that are zero -- 175 images for a 6 A radius on a
+    # medium cell, of which about thirty are ever in range.
+    #
+    # The query runs from the anions, not from the grid: one tree over the grid
+    # points, then one ball query per anion image. That is about a thousand
+    # queries rather than one per grid point, so the Python loop does not grow
+    # with the resolution -- which is what made the obvious tree version slower
+    # than the dense one on small grids while being faster on large ones. The sum
+    # is the same sum over the same terms, with the zero terms left out.
+    from scipy.spatial import cKDTree
+
+    shifts = images @ cell.orth.T
+    # use_tree was decided above, where the cost of each path was estimated. The
+    # crossover was measured, not guessed: at 6 million dense terms the dense path
+    # wins, at 48 million the tree wins by ten.
+    tree = cKDTree(grid_points) if use_tree else None
+
     for anion_element, atoms in by_element.items():
         param = params.get(element, ox, anion_element)
         if param is None:
             missing.append(f"{element}-{anion_element}")
             continue
-        positions = np.array([a.cart for a in atoms])
-        occupancies = np.array([a.occupancy for a in atoms])
+        positions = np.array([a.cart for a in atoms], float)
+        occupancies = np.array([a.occupancy for a in atoms], float)
 
-        for shift in images @ cell.orth.T:
-            shifted = positions + shift
-            # (points, anions) distances, in blocks so memory stays bounded
-            for start in range(0, len(grid_points), 4096):
-                block = grid_points[start:start + 4096]
-                d = np.linalg.norm(block[:, None, :] - shifted[None, :, :],
-                                   axis=2)
-                within = d <= rmax
-                if not within.any():
-                    continue
-                v = np.where(within, np.exp((param.r0 - d) / param.b), 0.0)
-                total[start:start + 4096] += (v * occupancies).sum(axis=1)
+        if not use_tree:
+            for shift in shifts:
+                shifted = positions + shift
+                for start in range(0, len(grid_points), 4096):
+                    block = grid_points[start:start + 4096]
+                    d = np.linalg.norm(block[:, None, :] - shifted[None, :, :],
+                                       axis=2)
+                    within = d <= rmax
+                    if not within.any():
+                        continue
+                    v = np.where(within, np.exp((param.r0 - d) / param.b), 0.0)
+                    total[start:start + 4096] += (v * occupancies).sum(axis=1)
+            continue
+
+        # every image of every anion of this element, once
+        all_positions = (positions[None, :, :]
+                         + shifts[:, None, :]).reshape(-1, 3)
+        all_occupancies = np.tile(occupancies, len(shifts))
+
+        for index, centre in enumerate(all_positions):
+            hits = tree.query_ball_point(centre, rmax)
+            if not hits:
+                continue
+            hits = np.asarray(hits, int)
+            d = np.linalg.norm(grid_points[hits] - centre, axis=1)
+            np.add.at(total, hits,
+                      np.exp((param.r0 - d) / param.b) * all_occupancies[index])
 
     grid = Grid(total.reshape(steps), cell,
                 name=f"bond valence of {element}{ox:+d}", units="v.u.",

@@ -69,7 +69,18 @@ class BVParam:
         return np.exp((self.r0 - np.asarray(d, float)) / self.b)
 
     def distance_for(self, v: float) -> float:
-        """The distance at which the bond valence falls to v."""
+        """The distance at which the bond valence falls to v.
+
+        A valence of zero is reached only at infinite distance, so it is refused
+        rather than allowed to surface as ``math domain error`` from inside a
+        logarithm -- which is what a threshold of 0 used to produce, three calls
+        deep and with nothing in the message about thresholds.
+        """
+        v = float(v)
+        if v <= 0.0:
+            raise ValueError(
+                f"a bond valence of {v:g} is reached only at infinite "
+                "distance; the threshold must be greater than zero")
         return self.r0 - self.b * math.log(v)
 
 
@@ -289,6 +300,10 @@ def cutoff_for_valence(r0: float, v: float, b: float = B_DEFAULT) -> float:
     This is the function that replaces a distance cutoff. Feeding it the same v
     for every anion cuts every anion at the same bond strength.
     """
+    if v <= 0:
+        raise ValueError(
+            f"a bond valence of {v:g} is reached only at infinite "
+            "distance; the threshold must be greater than zero")
     return r0 - b * math.log(v)
 
 

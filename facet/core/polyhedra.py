@@ -156,7 +156,15 @@ def _trans_pairs(vectors, distances) -> tuple[tuple, ...]:
     ang = np.zeros((6, 6))
     for i in range(6):
         for j in range(i + 1, 6):
-            c = float(np.dot(vectors[i], vectors[j]) / (distances[i] * distances[j]))
+            # A ligand at zero distance from the centre has no direction, so
+            # there is no angle to it. Guarded rather than divided anyway: it
+            # produced a nan, a RuntimeWarning, and an angle variance that was
+            # neither a number nor an error.
+            scale = distances[i] * distances[j]
+            if scale <= 0:
+                ang[i, j] = ang[j, i] = float("nan")
+                continue
+            c = float(np.dot(vectors[i], vectors[j]) / scale)
             ang[i, j] = ang[j, i] = math.degrees(math.acos(np.clip(c, -1, 1)))
 
     best, best_sum = None, -1.0
@@ -190,6 +198,12 @@ def shape(vectors) -> dict:
         return out
 
     d = np.linalg.norm(v, axis=1)
+    if np.any(d <= 0):
+        # a ligand on top of the central atom: a fact about the file, not a
+        # shape. Reported as such rather than divided by.
+        out["note"] = ("a ligand lies on the central atom, so the shape "
+                       "measures are undefined")
+        return out
     d_mean = float(d.mean())
     out.update(d_min=float(d.min()), d_max=float(d.max()), d_mean=d_mean,
                spread=float(d.max() - d.min()),
