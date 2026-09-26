@@ -134,11 +134,15 @@ def test_scale_changes_the_svg_size_but_not_the_layout(scene_and_camera,
 def test_the_background_choice_is_honoured(scene_and_camera, tmp_path):
     from facet.gl import vector_export as V
 
+    from facet.core import theme as theme_mod
+
     scene, camera, _ = scene_and_camera
+    # a theme whose ground is not white, or THEME and WHITE are the same request
+    theme = theme_mod.dark()
     texts = {}
     for background in V.Background:
         path = V.save_svg(tmp_path / f"bg_{background.name}.svg", scene,
-                          camera, 300, 220, background=background)
+                          camera, 300, 220, background=background, theme=theme)
         texts[background] = Path(path).read_text(encoding="utf-8",
                                                  errors="replace")
 
@@ -146,6 +150,16 @@ def test_the_background_choice_is_honoured(scene_and_camera, tmp_path):
     assert "#ffffff" in texts[V.Background.WHITE].lower()
     assert texts[V.Background.NONE] != texts[V.Background.WHITE]
     assert texts[V.Background.THEME] != texts[V.Background.WHITE]
+    # the theme's own ground, not a guess at one
+    ground = "#%02x%02x%02x" % tuple(int(c * 255) for c in theme.background)
+    assert ground in texts[V.Background.THEME].lower()
+    # and with no theme at all the fallback is stated once, in core.theme
+    plain = V.save_svg(tmp_path / "bg_default.svg", scene, camera, 300, 220,
+                       background=V.Background.THEME)
+    fallback = "#%02x%02x%02x" % tuple(
+        int(c * 255) for c in theme_mod.FALLBACK_BACKGROUND)
+    assert fallback in Path(plain).read_text(encoding="utf-8",
+                                            errors="replace").lower()
 
 
 def test_save_chooses_the_format_from_the_name(scene_and_camera, tmp_path):

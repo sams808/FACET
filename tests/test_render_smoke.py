@@ -178,15 +178,31 @@ class TestPainterFallback:
         assert r.radius_at(0.5, -10.0) == pytest.approx(r.radius_at(0.5, -30.0))
 
     def test_depth_cue_fades_towards_the_background(self, app):
+        """The far colour must be nearer the background than the near one.
+
+        Not "darker": the background is a theme's choice and the shipped one is
+        white, so a test asserting that depth cueing darkens an atom is really
+        asserting that the application is dark.
+        """
         from PySide6.QtGui import QColor
         from facet.gl.painter import PainterRenderer
 
         r = PainterRenderer()
         r._near, r._far = 10.0, 20.0
-        white = QColor(255, 255, 255)
-        front = r._cue(white, -10.0)
-        back = r._cue(white, -20.0)
-        assert back.red() < front.red()
+        bg = r.background
+        # start from the colour furthest from the background, so the fade has
+        # somewhere to go whichever way round the theme is
+        ink = QColor(0, 0, 0) if bg.lightnessF() > 0.5 else QColor(255, 255, 255)
+
+        def distance(c):
+            return (abs(c.red() - bg.red()) + abs(c.green() - bg.green())
+                    + abs(c.blue() - bg.blue()))
+
+        front = r._cue(ink, -10.0)
+        back = r._cue(ink, -20.0)
+        assert distance(back) < distance(front)
+        # and it is a fade, not a jump to the background
+        assert distance(back) > 0
 
     def test_it_survives_an_empty_scene(self, app):
         from PySide6.QtGui import QImage, QPainter

@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import bv, elements, planes as planes_mod, volume as volume_mod
+from . import chrome
 from .section_view import COLORMAPS, SectionView
 
 
@@ -73,7 +74,7 @@ class VolumePanel(QWidget):
 
         self.section = SectionView()
         self.readout = QLabel("")
-        self.readout.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.readout)
         self.section.hovered.connect(self._on_hover)
 
         self.stats = QLabel("")
@@ -81,7 +82,7 @@ class VolumePanel(QWidget):
         tiny = QFont(self.stats.font())
         tiny.setPointSizeF(max(7.0, tiny.pointSizeF() - 1.0))
         self.stats.setFont(tiny)
-        self.stats.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.stats)
 
         self._build_layout()
 
@@ -100,7 +101,7 @@ class VolumePanel(QWidget):
         tiny = QFont(hint.font())
         tiny.setPointSizeF(max(7.0, tiny.pointSizeF() - 1.0))
         hint.setFont(tiny)
-        hint.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(hint)
         outer.addWidget(hint)
 
         outer.addWidget(self._source_group())

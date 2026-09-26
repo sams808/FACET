@@ -34,6 +34,7 @@ from PySide6.QtGui import (
 
 from .camera import Camera
 from .scene import Scene
+from ..core import theme as theme_mod
 
 
 def _qcolor(rgb, alpha: float = 1.0) -> QColor:
@@ -48,13 +49,13 @@ def _qcolor(rgb, alpha: float = 1.0) -> QColor:
 class PainterRenderer:
     """Draws a scene with QPainter. Holds no state between frames."""
 
-    background = QColor(22, 24, 28)
+    background = _qcolor(theme_mod.FALLBACK_BACKGROUND)
 
     def __init__(self):
-        self.depth_cue = True
-        self.fog_amount = 0.55
-        self.cell_color = QColor(110, 118, 134)
-        self.selection_color = QColor(255, 214, 92)
+        self.fog_amount = theme_mod.FALLBACK_FOG
+        self.depth_cue = self.fog_amount > 0.0
+        self.cell_color = _qcolor(theme_mod.FALLBACK_CELL_COLOR)
+        self.selection_color = _qcolor(theme_mod.FALLBACK_SELECTION_COLOR)
         self._scale = 1.0            # pixels per angstrom at the target plane
         self._distance = 1.0
         self._perspective = True
@@ -99,6 +100,12 @@ class PainterRenderer:
         self._collect_mesh(items, scene.iso_vertices, scene.iso_normals,
                            scene.iso_color, scene.iso_alpha, camera,
                            width, height)
+        # The analysis overlays go through the same queue, so the software tier
+        # draws the bond-valence vector and the void cone as well -- and so the
+        # SVG and PDF exporters get them for free, since both run this renderer.
+        for mesh in getattr(scene, "overlay_meshes", ()):
+            self._collect_mesh(items, mesh.vertices, mesh.normals,
+                               mesh.color, mesh.alpha, camera, width, height)
         self._collect_bonds(items, scene, camera, width, height)
         self._collect_atoms(items, scene, atoms, width, height)
 

@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import planes as planes_mod
+from . import chrome
 
 # Distinct starting colours, so a second plane never lands on the first one's.
 PALETTE = [
@@ -92,7 +93,7 @@ class PlanesPanel(QWidget):
         tiny = QFont(hint.font())
         tiny.setPointSizeF(max(7.0, tiny.pointSizeF() - 1.0))
         hint.setFont(tiny)
-        hint.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(hint)
         outer.addWidget(hint)
 
         outer.addWidget(self._planes_group(), 1)
@@ -201,7 +202,7 @@ class PlanesPanel(QWidget):
         small = QFont(self.slab_report.font())
         small.setPointSizeF(max(7.0, small.pointSizeF() - 1.0))
         self.slab_report.setFont(small)
-        self.slab_report.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.slab_report)
         row.addWidget(self.slab_report, 1)
         return group
 
@@ -240,7 +241,7 @@ class PlanesPanel(QWidget):
         small = QFont(self.summary.font())
         small.setPointSizeF(max(7.0, small.pointSizeF() - 1.0))
         self.summary.setFont(small)
-        self.summary.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.summary)
         box.addWidget(self.summary)
         return group
 

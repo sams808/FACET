@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import diffraction as dif
+from . import chrome
 from .plot import Plot, Series, Ticks
 
 CALCULATED = (120, 190, 240)
@@ -88,13 +89,13 @@ class DiffractionPanel(QWidget):
         self.table.itemSelectionChanged.connect(self._on_row)
 
         self.readout = QLabel("")
-        self.readout.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.readout)
         self.notes = QLabel("")
         self.notes.setWordWrap(True)
         small = QFont(self.notes.font())
         small.setPointSizeF(max(7.0, small.pointSizeF() - 1.0))
         self.notes.setFont(small)
-        self.notes.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.notes)
 
         self._build_layout()
         self._connect()
@@ -114,7 +115,7 @@ class DiffractionPanel(QWidget):
         tiny = QFont(hint.font())
         tiny.setPointSizeF(max(7.0, tiny.pointSizeF() - 1.0))
         hint.setFont(tiny)
-        hint.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(hint)
         outer.addWidget(hint)
 
         outer.addWidget(self._controls())

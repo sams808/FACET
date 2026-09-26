@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import overrides as overrides_mod
+from . import chrome
 
 
 class OverridesPanel(QWidget):
@@ -66,7 +67,7 @@ class OverridesPanel(QWidget):
         tiny = QFont(hint.font())
         tiny.setPointSizeF(max(7.0, tiny.pointSizeF() - 1.0))
         hint.setFont(tiny)
-        hint.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(hint)
         outer.addWidget(hint)
 
         outer.addWidget(self._editor())
@@ -152,7 +153,7 @@ class OverridesPanel(QWidget):
         small = QFont(self.count_label.font())
         small.setPointSizeF(max(7.0, small.pointSizeF() - 1.0))
         self.count_label.setFont(small)
-        self.count_label.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.count_label)
         row.addWidget(self.count_label, 1)
         clear_all = QPushButton("Remove all")
         clear_all.clicked.connect(self._clear_all)

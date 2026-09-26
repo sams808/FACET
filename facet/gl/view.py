@@ -24,6 +24,7 @@ from . import stereo as stereo_mod
 from . import labels as labels_mod
 from .camera import Camera
 from .scene import Scene, Style
+from ..core import theme as theme_mod
 
 
 class StructureView(QOpenGLWidget):
@@ -374,7 +375,9 @@ class StructureView(QOpenGLWidget):
 
     def _paint_fallback(self, painter: QPainter) -> None:
         if self._fallback is None or self.scene is None:
-            painter.fillRect(self.rect(), QColor(22, 24, 28))
+            painter.fillRect(self.rect(), self._ink(
+                self.theme.background if self.theme
+                else theme_mod.FALLBACK_BACKGROUND))
             return
         self._fallback.render(painter, self.scene, self.camera,
                               self.width(), self.height(),
@@ -396,10 +399,12 @@ class StructureView(QOpenGLWidget):
             self._paint_status(painter)
 
     def _paint_placeholder(self, painter: QPainter) -> None:
-        painter.fillRect(self.rect(), self._ink(self.theme.background
-                                                if self.theme
-                                                else (0.086, 0.094, 0.110)))
-        painter.setPen(QColor(150, 155, 165))
+        painter.fillRect(self.rect(), self._ink(
+            self.theme.background if self.theme
+            else theme_mod.FALLBACK_BACKGROUND))
+        painter.setPen(self._ink(
+            self.theme.contrasting_ink() if self.theme
+            else theme_mod.FALLBACK_LABEL_COLOR))
         f = QFont(painter.font())
         f.setPointSizeF(f.pointSizeF() + 1)
         painter.setFont(f)

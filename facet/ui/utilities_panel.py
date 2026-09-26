@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import bv_report, cn_methods, utilities
+from . import chrome
 
 
 def _table(headers: list[str]) -> QTableWidget:
@@ -66,6 +67,7 @@ class UtilitiesPanel(QWidget):
         self.results = None
         self.site_result = None
         self.v_bond = 0.075
+        self.theme = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -170,7 +172,7 @@ class UtilitiesPanel(QWidget):
         balance_font = QFont(self.balance.font())
         balance_font.setPointSizeF(max(7.0, balance_font.pointSizeF() - 1.0))
         self.balance.setFont(balance_font)
-        self.balance.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.balance)
         anion_holder = QWidget()
         anion_box = QVBoxLayout(anion_holder)
         anion_box.setContentsMargins(0, 0, 0, 0)
@@ -264,7 +266,7 @@ class UtilitiesPanel(QWidget):
         font = QFont(label.font())
         font.setPointSizeF(max(7.0, font.pointSizeF() - 1.0))
         label.setFont(font)
-        label.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(label)
         box.addWidget(label)
         if extra is not None:
             box.addLayout(extra)
@@ -272,6 +274,16 @@ class UtilitiesPanel(QWidget):
         return holder
 
     # -- content -----------------------------------------------------------
+    def apply_theme(self, theme) -> None:
+        """Adopt a theme, so the hand-built HTML follows it too.
+
+        The tables and labels are coloured by the application style sheet; the
+        summary is HTML this panel writes itself, so it has to be rewritten.
+        """
+        self.theme = theme
+        if self.structure is not None:
+            self._refresh_summary()
+
     def update_for(self, structure, results, site_result, v_bond: float,
                    params=None, v_list: float | None = None) -> None:
         from ..core import bv
@@ -341,7 +353,7 @@ class UtilitiesPanel(QWidget):
               {rec.get('beta*', float('nan')):.4f},
               {rec.get('gamma*', float('nan')):.4f}°</td></tr>
         </table>
-        <p style='color:#8a93a3;font-size:11px'>Crystallographic convention,
+        <p style='color:{chrome.muted_hex(self.theme)};font-size:11px'>Crystallographic convention,
         a* = (b × c)/V, without the 2π factor — the one d-spacings use.</p>
 
         <h4 style='margin-bottom:2px'>Composition</h4>

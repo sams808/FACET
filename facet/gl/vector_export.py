@@ -31,6 +31,7 @@ from PySide6.QtGui import QColor, QPageSize, QPainter, QPdfWriter
 from .camera import Camera
 from .painter import PainterRenderer
 from .scene import Scene
+from ..core import theme as theme_mod
 
 
 class Background(Enum):
@@ -78,7 +79,7 @@ def _fill(painter: QPainter, width: float, height: float, background: Background
     if background is Background.WHITE:
         colour = QColor(255, 255, 255)
     else:
-        rgb = getattr(theme, "background", (0.086, 0.094, 0.110))
+        rgb = getattr(theme, "background", theme_mod.FALLBACK_BACKGROUND)
         colour = QColor(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
     painter.fillRect(QRectF(0, 0, width, height), colour)
 

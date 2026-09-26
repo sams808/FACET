@@ -25,6 +25,7 @@ from enum import Enum
 
 import numpy as np
 
+from . import vectors as vectors_mod
 from ..core import bv, elements, theme as theme_mod
 from ..core.coordination import SiteResult
 from ..core.structure import Structure
@@ -66,6 +67,14 @@ class Scene:
     bond_distance: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
     # the two atoms, so a click on a bond can name them
     bond_atoms: np.ndarray = field(default_factory=lambda: np.zeros((0, 2), np.int32))
+    # which end of each bond is the cation: 0 for bond_atoms[:, 0], 1 for the
+    # other, -1 for a contact with no cation. Needed because a bond-valence
+    # vector points from the cation outwards, and either endpoint may be it.
+    bond_cation: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int8))
+    # the ligand's occupancy, which weights its contribution to a valence sum
+    # exactly as it does in coordination.analyse_structure
+    bond_occupancy: np.ndarray = field(
+        default_factory=lambda: np.ones(0, np.float32))
     # base colours, kept so restyling can re-fade from the original
     _bond_base_a: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), np.float32))
     _bond_base_b: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), np.float32))
@@ -96,6 +105,20 @@ class Scene:
     plane_meshes: list = field(default_factory=list)
     plane_edges: np.ndarray = field(default_factory=lambda: np.zeros((0, 2, 3), np.float32))
     plane_edge_color: tuple[float, float, float] = (0.62, 0.80, 0.94)
+
+    # --- overlays ---------------------------------------------------------
+    # Annotations drawn from the analysis rather than from the crystallography:
+    # the bond-valence vector sum on each cation, and the void cone. One entry
+    # per kind, each a triangle soup whose parts stay addressable so that a slab
+    # can drop a whole lobe instead of slicing one in half.
+    overlay_meshes: list = field(default_factory=list)
+    show_vectors: bool = False
+    show_void_cones: bool = False
+    # Length = vector_scale x phi x mean bond length. The only imported number
+    # in the construction, and it is a drawing scale rather than a distance to
+    # anything, which is why it is here and not in the analysis.
+    vector_scale: float = 0.6
+    vector_sums: object | None = None
 
     # --- unit cell --------------------------------------------------------
     cell_segments: np.ndarray = field(default_factory=lambda: np.zeros((0, 2, 3), np.float32))
@@ -140,6 +163,106 @@ class Scene:
     @property
     def n_planes(self) -> int:
         return len(self.plane_meshes)
+
+    @property
+    def n_overlay_triangles(self) -> int:
+        return sum(m.n_triangles for m in self.overlay_meshes)
+
+    def clear_overlays(self) -> None:
+        self.overlay_meshes = []
+
+    def rebuild_overlays(self, theme=None) -> None:
+        """Recompute the analysis overlays for the current threshold.
+
+        Called from ``restyle``, so the lobes follow the cutoff slider like
+        everything else does. Working from the cached bond arrays rather than
+        from a fresh neighbour search is what makes that affordable, and it is
+        also exact for the periodic images that were added to close a bond --
+        they carry no site of their own to look an answer up against.
+        """
+        self.overlay_meshes = []
+        theme = theme or self.theme
+        if self.n_bonds == 0 or self.n_atoms == 0:
+            self.vector_sums = None
+            return
+        if len(self.bond_cation) != self.n_bonds:
+            self.vector_sums = None
+            return
+
+        sums = vectors_mod.accumulate(
+            self.bond_a, self.bond_b, self.bond_atoms, self.bond_cation,
+            self.bond_valence, self.v_bond, self.n_atoms,
+            occupancy=self.bond_occupancy)
+        self.vector_sums = sums
+
+        if self.show_vectors:
+            # phi = 0 draws nothing: a centrosymmetric site has no direction to
+            # draw, and inventing one out of rounding noise would be a claim.
+            live = (sums.phi > 1e-6) & (sums.count > 0)
+            if live.any():
+                magnitude = np.linalg.norm(sums.vector[live], axis=1)
+                direction = -sums.vector[live] / magnitude[:, None]
+                length = (float(self.vector_scale) * sums.phi[live]
+                          * sums.mean_distance[live])
+                colour = getattr(theme, "vector_color", None) or (0.86, 0.72, 0.98)
+                self.overlay_meshes.append(vectors_mod.lobe_meshes(
+                    self.atom_position[live], direction, length,
+                    atoms=np.nonzero(live)[0], color=colour))
+
+        if self.show_void_cones and self.poly_sites:
+            self._add_void_cones(sums, theme)
+
+    def _add_void_cones(self, sums, theme) -> None:
+        """A cone of the measured void half-angle on each shown polyhedron.
+
+        Restricted to the sites whose polyhedra are drawn, because the cone is
+        found by a search over directions -- a few milliseconds per atom, which
+        is nothing for the handful of sites on screen and would be felt on every
+        cation of a large cell.
+        """
+        from ..core import polyhedra
+
+        wanted = set(int(i) for i in self.poly_sites)
+        origins, axes, angles, lengths, atoms = [], [], [], [], []
+        for atom in range(self.n_atoms):
+            if int(self.atom_site[atom]) not in wanted or sums.count[atom] < 2:
+                continue
+            here = self._ligand_directions(atom)
+            if len(here) < 2:
+                continue
+            angle, axis = polyhedra.void_cone(here)
+            origins.append(self.atom_position[atom])
+            axes.append(axis)
+            angles.append(angle)
+            lengths.append(max(float(sums.mean_distance[atom]) * 0.75, 0.3))
+            atoms.append(atom)
+        if not origins:
+            return
+        colour = getattr(theme, "cone_color", None) or (0.40, 0.78, 0.92)
+        self.overlay_meshes.append(vectors_mod.cone_meshes(
+            origins, axes, angles, lengths, atoms=atoms, color=colour))
+
+    def _ligand_directions(self, atom: int) -> np.ndarray:
+        """Unit vectors from one drawn atom to its bonded ligands.
+
+        Taken from the drawn bond endpoints, so an atom that is a periodic image
+        gets its own directions rather than a representative's.
+        """
+        if self.n_bonds == 0 or len(self.bond_cation) != self.n_bonds:
+            return np.zeros((0, 3))
+        pairs = np.asarray(self.bond_atoms, np.int64)
+        cation = np.asarray(self.bond_cation, np.int64)
+        above = np.asarray(self.bond_valence) >= self.v_bond
+        first = above & (cation == 0) & (pairs[:, 0] == atom)
+        second = above & (cation == 1) & (pairs[:, 1] == atom)
+        out = []
+        if first.any():
+            out.append(self.bond_b[first] - self.bond_a[first])
+        if second.any():
+            out.append(self.bond_a[second] - self.bond_b[second])
+        if not out:
+            return np.zeros((0, 3))
+        return np.vstack(out).astype(float)
 
     def clear_planes(self) -> None:
         self.plane_meshes = []
@@ -197,6 +320,7 @@ class Scene:
         """
         self.v_bond = float(v_bond)
         if self.n_bonds == 0:
+            self.rebuild_overlays()
             return
 
         v = self.bond_valence
@@ -218,6 +342,10 @@ class Scene:
                              + fade * (1.0 - weight)).astype(np.float32)
         self.bond_color_b = (self._bond_base_b * weight
                              + fade * (1.0 - weight)).astype(np.float32)
+
+        # The vector sum is over the contacts above the threshold, so it moves
+        # with the threshold -- which is the point of showing it here at all.
+        self.rebuild_overlays()
 
     def bonds_above_threshold(self) -> int:
         return int((self.bond_valence >= self.v_bond).sum())
@@ -252,7 +380,10 @@ def build_scene(structure: Structure,
                 params: bv.ParameterSet | None = None,
                 lattice_planes=None,
                 slab=None,
-                overrides=None) -> Scene:
+                overrides=None,
+                show_vectors: bool = False,
+                show_void_cones: bool = False,
+                vector_scale: float = 0.6) -> Scene:
     """Build a drawable scene for a structure.
 
     `results` is reused when supplied, so opening a structure does not analyse
@@ -270,6 +401,9 @@ def build_scene(structure: Structure,
     scene.poly_color = theme.polyhedron_color
     scene.poly_alpha = theme.polyhedron_alpha
     scene.cell_range = tuple(max(1, int(n)) for n in cell_range)
+    scene.show_vectors = bool(show_vectors)
+    scene.show_void_cones = bool(show_void_cones)
+    scene.vector_scale = float(vector_scale)
 
     _build_atoms(structure, scene, style, theme, results)
     _build_bonds(structure, scene, theme, params, v_list)
@@ -396,6 +530,7 @@ def apply_slab(structure: Structure, scene: Scene, slab) -> None:
 
         for name in ("bond_a", "bond_b", "bond_radius", "bond_color_a",
                      "bond_color_b", "bond_valence", "bond_distance",
+                     "bond_cation", "bond_occupancy",
                      "_bond_base_a", "_bond_base_b"):
             array = getattr(scene, name)
             # Length-checked rather than filtered blind: a caller may hand in a
@@ -439,6 +574,20 @@ def apply_slab(structure: Structure, scene: Scene, slab) -> None:
         scene.iso_normals = scene.iso_normals.reshape(-1, 3, 3)[
             inside].reshape(-1, 3).astype(np.float32)
 
+    # A lobe is kept or dropped whole, by the position of the atom it belongs
+    # to. Filtering its triangles by centroid would cut one in half at the slab
+    # face, which would read as a measurement about the lobe's length.
+    if scene.overlay_meshes:
+        kept = []
+        for mesh in scene.overlay_meshes:
+            if not mesh.n_parts:
+                continue
+            inside = planes_mod.slab_mask(structure, mesh.anchors, slab)
+            trimmed = mesh.keep_parts(inside)
+            if trimmed.n_triangles:
+                kept.append(trimmed)
+        scene.overlay_meshes = kept
+
 
 def _replicate(structure: Structure, scene: Scene) -> None:
     """Repeat the drawn contents across a block of unit cells.
@@ -477,6 +626,10 @@ def _replicate(structure: Structure, scene: Scene) -> None:
         scene._bond_base_a = np.tile(scene._bond_base_a, (n_copies, 1))
         scene._bond_base_b = np.tile(scene._bond_base_b, (n_copies, 1))
         scene.bond_radius = np.tile(scene.bond_radius, n_copies)
+        if len(scene.bond_cation) == base_bonds:
+            scene.bond_cation = np.tile(scene.bond_cation, n_copies)
+        if len(scene.bond_occupancy) == base_bonds:
+            scene.bond_occupancy = np.tile(scene.bond_occupancy, n_copies)
         offsets = np.repeat(np.arange(n_copies) * base_atoms, base_bonds)
         scene.bond_atoms = (np.tile(scene.bond_atoms, (n_copies, 1))
                             + offsets[:, None]).astype(np.int32)
@@ -656,7 +809,7 @@ def _build_bonds(structure: Structure, scene: Scene, theme,
 
     orth = structure.cell.orth
     a_pos, b_pos, col_a, col_b = [], [], [], []
-    valence, distance, pairs = [], [], []
+    valence, distance, pairs, cation_end, occupancy = [], [], [], [], []
     seen: set[tuple] = set()
 
     for i, j, d, image in finder.pairs_within(rmax):
@@ -694,6 +847,10 @@ def _build_bonds(structure: Structure, scene: Scene, theme,
         valence.append(v)
         distance.append(d)
         pairs.append((i, j))
+        # i is the cation unless i is the anion; recorded rather than recomputed
+        # later, where the sites would have to be looked up again
+        cation_end.append(1 if anion_i else 0)
+        occupancy.append(float(anion.occupancy))
 
     if not a_pos:
         return
@@ -706,6 +863,8 @@ def _build_bonds(structure: Structure, scene: Scene, theme,
     scene.bond_valence = np.array(valence, np.float32)
     scene.bond_distance = np.array(distance, np.float32)
     scene.bond_atoms = np.array(pairs, np.int32)
+    scene.bond_cation = np.array(cation_end, np.int8)
+    scene.bond_occupancy = np.array(occupancy, np.float32)
     scene.bond_radius = (bond_radius_for(scene.bond_valence, scene.v_bond)
                          * float(theme.bond_scale))
 
@@ -807,6 +966,9 @@ def _frame(scene: Scene, structure: Structure) -> None:
         pts.append(scene.cell_segments.reshape(-1, 3))
     if len(scene.iso_vertices):
         pts.append(scene.iso_vertices)
+    for mesh in scene.overlay_meshes:
+        if len(mesh.vertices):
+            pts.append(np.asarray(mesh.vertices, np.float32))
     for vertices, _, _, _ in scene.plane_meshes:
         pts.append(vertices)
     if not pts:
@@ -840,11 +1002,21 @@ def merge_scenes(scenes: list[Scene], offsets=None) -> Scene:
                 theme=scenes[0].theme)
     out.poly_color = scenes[0].poly_color
     out.poly_alpha = scenes[0].poly_alpha
+    # The overlays are not concatenated; they are rebuilt from the merged bond
+    # arrays by the restyle at the end, which is both simpler and correct for
+    # bonds that were shifted by an offset.
+    out.show_vectors = scenes[0].show_vectors
+    out.vector_scale = scenes[0].vector_scale
+    # Void cones are not drawn on a merged scene: they are selected by site
+    # index, and the merged atom_site arrays come from different structures, so
+    # an index no longer names one site.
+    out.show_void_cones = False
 
     atom_pos, atom_rad, atom_col, atom_site = [], [], [], []
     structure_of = []
     bond_a, bond_b, base_a, base_b = [], [], [], []
     bond_v, bond_d, bond_pairs = [], [], []
+    bond_cat, bond_occ = [], []
     poly_v, poly_n, cell_seg = [], [], []
     base = 0
 
@@ -866,6 +1038,12 @@ def merge_scenes(scenes: list[Scene], offsets=None) -> Scene:
             bond_v.append(scene.bond_valence)
             bond_d.append(scene.bond_distance)
             bond_pairs.append(scene.bond_atoms + base)
+            bond_cat.append(scene.bond_cation
+                            if len(scene.bond_cation) == scene.n_bonds
+                            else np.zeros(scene.n_bonds, np.int8) - 1)
+            bond_occ.append(scene.bond_occupancy
+                            if len(scene.bond_occupancy) == scene.n_bonds
+                            else np.ones(scene.n_bonds, np.float32))
         if len(scene.poly_vertices):
             poly_v.append(scene.poly_vertices + offset)
             poly_n.append(scene.poly_normals)
@@ -891,6 +1069,8 @@ def merge_scenes(scenes: list[Scene], offsets=None) -> Scene:
         out.bond_valence = np.concatenate(bond_v).astype(np.float32)
         out.bond_distance = np.concatenate(bond_d).astype(np.float32)
         out.bond_atoms = np.vstack(bond_pairs).astype(np.int32)
+        out.bond_cation = np.concatenate(bond_cat).astype(np.int8)
+        out.bond_occupancy = np.concatenate(bond_occ).astype(np.float32)
         # n_bonds reads the radius array, and restyle() returns early when it
         # is empty -- so it has to be filled before restyling, not by it
         out.bond_radius = bond_radius_for(out.bond_valence, out.v_bond)
@@ -910,6 +1090,9 @@ def _frame_points(scene: Scene) -> None:
     pts = [scene.atom_position] if scene.n_atoms else []
     if len(scene.cell_segments):
         pts.append(scene.cell_segments.reshape(-1, 3))
+    for mesh in scene.overlay_meshes:
+        if len(mesh.vertices):
+            pts.append(np.asarray(mesh.vertices, np.float32))
     if not pts:
         scene.center = np.zeros(3, np.float32)
         scene.radius = 1.0

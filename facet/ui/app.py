@@ -40,6 +40,16 @@ def main(argv: list[str] | None = None) -> int:
 
     app.setWindowIcon(app_icon())
 
+    # The window's colours come from the theme, and the default theme is a white
+    # ground. Applied to the application rather than to the window because menus
+    # and tool tips are top-level windows of their own and inherit nothing from
+    # it. Done before the window is built so that widgets measure themselves
+    # with the padding they will actually have.
+    from ..core import theme as theme_mod
+    from . import chrome
+
+    chrome.apply(app, theme_mod.Theme())
+
     started = time.perf_counter()
     splash = Splash()
     splash.show()

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import disorder as disorder_mod
+from . import chrome
 
 
 class DisorderPanel(QWidget):
@@ -57,7 +58,7 @@ class DisorderPanel(QWidget):
         tiny = QFont(self.hint.font())
         tiny.setPointSizeF(max(7.0, tiny.pointSizeF() - 1.0))
         self.hint.setFont(tiny)
-        self.hint.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.hint)
         outer.addWidget(self.hint)
 
         self.choosers_box = QGroupBox("Configuration")
@@ -94,14 +95,14 @@ class DisorderPanel(QWidget):
         self.overlap_note = QLabel("")
         self.overlap_note.setWordWrap(True)
         self.overlap_note.setFont(tiny)
-        self.overlap_note.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.overlap_note)
         box.addWidget(self.overlap_note)
         outer.addWidget(overlap, 1)
 
         self.summary = QLabel("")
         self.summary.setWordWrap(True)
         self.summary.setFont(tiny)
-        self.summary.setStyleSheet("color:#8a93a3;")
+        chrome.mark_hint(self.summary)
         outer.addWidget(self.summary)
 
     # -- content -----------------------------------------------------------

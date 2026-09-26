@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QDoubleSpinBox,
     QSpinBox,
@@ -46,6 +47,7 @@ from ..gl.labels import AtomLabel, BondLabel, LabelScope, LabelSettings
 from ..gl.scene import Style, build_scene, merge_scenes
 from ..gl.view import StructureView
 from ..version import NAME, __version__
+from . import chrome
 from .cutoff_explorer import CutoffExplorer
 from .structure_list import StructureList
 from .theme_panel import ThemePanel
@@ -74,6 +76,12 @@ class PreviewWindow(QMainWindow):
         self.theme = theme_mod.Theme()
         self.poly_mode = PolyhedraMode.SELECTED
         self.labels = LabelSettings()
+        # Analysis overlays, off until asked for: they are a statement about the
+        # bonding rather than a picture of the crystallography, so they should
+        # not be what a structure looks like when it is first opened.
+        self.show_vectors = False
+        self.show_void_cones = False
+        self.vector_scale = 0.6
 
         self.view = StructureView()
         self.view.set_theme(self.theme)
@@ -217,11 +225,40 @@ class PreviewWindow(QMainWindow):
         vertical.setSizes([640, 230])
         self.setCentralWidget(vertical)
 
+    @staticmethod
+    def _fit_combo(box: QComboBox) -> None:
+        """Stop a combo box and its popup from eliding their own items.
+
+        Call once, after the items are added. Two separate mechanisms are
+        needed. ``AdjustToContents`` makes the *popup* size itself from the
+        widest item rather than from the (possibly squeezed) closed combo, and
+        the popup's view elides in the middle under the Windows styles, which
+        is what turned "bond valence" into "bon…nce". ``setMinimumWidth`` is
+        then the only thing a layout that has been given less room than it
+        asked for still honours, so it is what keeps the *closed* combo
+        readable.
+        """
+        box.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        view = box.view()
+        if view is not None:
+            view.setTextElideMode(Qt.ElideNone)
+        box.setMinimumWidth(box.sizeHint().width())
+
     def _toolbar_row(self) -> QWidget:
+        # Two rows, not one. Everything below asks for about 1400 px, and on a
+        # laptop screen the centre column gets roughly 900; a QHBoxLayout given
+        # less than its minimum shrinks its children *below* their minimum size
+        # hint, which is what truncated the label combo boxes.
         bar = QWidget()
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(10, 6, 10, 6)
+        stack = QVBoxLayout(bar)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(0)
+
+        upper = QWidget()
+        row = QHBoxLayout(upper)
+        row.setContentsMargins(10, 6, 10, 3)
         row.setSpacing(10)
+        stack.addWidget(upper)
 
         self.style_box = QComboBox()
         for s in (Style.BALL_AND_STICK, Style.SPACE_FILLING,
@@ -253,6 +290,17 @@ class PreviewWindow(QMainWindow):
         self.cell_check.toggled.connect(lambda _=False: self._rebuild())
         row.addWidget(self.cell_check)
 
+        self.ortho_check = QCheckBox("Orthographic")
+        self.ortho_check.toggled.connect(self.view.set_projection)
+        row.addWidget(self.ortho_check)
+        row.addStretch(1)
+
+        lower = QWidget()
+        row = QHBoxLayout(lower)
+        row.setContentsMargins(10, 3, 10, 6)
+        row.setSpacing(10)
+        stack.addWidget(lower)
+
         row.addWidget(QLabel("Label atoms"))
         self.atom_label_box = QComboBox()
         for kind in AtomLabel:
@@ -267,9 +315,9 @@ class PreviewWindow(QMainWindow):
         self.bond_label_box.activated.connect(self._on_labels)
         row.addWidget(self.bond_label_box)
 
-        self.ortho_check = QCheckBox("Orthographic")
-        self.ortho_check.toggled.connect(self.view.set_projection)
-        row.addWidget(self.ortho_check)
+        for box in (self.style_box, self.poly_box,
+                    self.atom_label_box, self.bond_label_box):
+            self._fit_combo(box)
 
         row.addStretch(1)
         # The search radius, expressed as the valence below which a contact is
@@ -393,10 +441,115 @@ class PreviewWindow(QMainWindow):
             axes.addAction(act)
             v.addAction(act)
 
+        v.addSeparator()
+        self.vector_action = QAction("Show bond-&valence vector", self)
+        self.vector_action.setCheckable(True)
+        self.vector_action.setToolTip(
+            "A lobe on each cation along -V/|V|, where "
+            "V = sum of v_i u_i over the bonded contacts. Its length is "
+            "phi x the mean bond length x a display scale. This is the vector "
+            "sum, which is what can be measured; for an ns2 cation it is the "
+            "direction a lone pair is conventionally described as occupying.")
+        self.vector_action.toggled.connect(self._on_show_vectors)
+        v.addAction(self.vector_action)
+
+        self.cone_action = QAction("Show void &cone", self)
+        self.cone_action.setCheckable(True)
+        self.cone_action.setToolTip(
+            "A cone of the measured void half-angle about the void axis, on "
+            "the sites whose polyhedra are drawn. Where several equally wide "
+            "cones exist, one axis is returned.")
+        self.cone_action.toggled.connect(self._on_show_cones)
+        v.addAction(self.cone_action)
+
+        scale = QMenu("Vector &length", v)
+        scale_group = QActionGroup(self)
+        scale_group.setExclusive(True)
+        self._scale_actions = {}
+        for label, value in (("Short (0.4)", 0.4), ("Medium (0.6)", 0.6),
+                             ("Long (0.9)", 0.9), ("Very long (1.3)", 1.3)):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setChecked(abs(value - self.vector_scale) < 1e-9)
+            act.triggered.connect(
+                lambda _=False, x=value: self._on_vector_scale(x))
+            scale_group.addAction(act)
+            scale.addAction(act)
+            self._scale_actions[value] = act
+        v.addMenu(scale)
+
+        v.addSeparator()
+        # A QMenu built with addMenu("title") is owned by Python and is
+        # destroyed when this method returns; parenting it to the menu keeps it.
+        themes = QMenu("&Theme", v)
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        self._theme_actions = {}
+        for name in theme_mod.PRESETS:
+            act = QAction(name, self)
+            act.setCheckable(True)
+            act.triggered.connect(lambda _=False, n=name: self._choose_theme(n))
+            group.addAction(act)
+            themes.addAction(act)
+            self._theme_actions[name] = act
+        themes.addSeparator()
+        more = QAction("More colour settings…", self)
+        more.setToolTip("The Appearance tab: element colours, colour modes, "
+                        "sizes, and saving a theme to share with a group.")
+        more.triggered.connect(self._show_appearance_tab)
+        themes.addAction(more)
+        v.addMenu(themes)
+        self._sync_theme_menu(self.theme)
+
         h = self.menuBar().addMenu("&Help")
-        about = QAction("&About", self)
+        manual = QAction("&Manual", self)
+        manual.setShortcut(QKeySequence.HelpContents)
+        manual.triggered.connect(self._show_manual)
+        h.addAction(manual)
+        shortcuts = QAction("&Keyboard and mouse", self)
+        shortcuts.triggered.connect(lambda: self._show_manual("shortcuts"))
+        h.addAction(shortcuts)
+        h.addSeparator()
+        notices = QAction("&Licences and third-party notices", self)
+        notices.triggered.connect(lambda: self._show_manual("licences"))
+        h.addAction(notices)
+        h.addSeparator()
+        about = QAction("&About " + NAME, self)
         about.triggered.connect(self._about)
         h.addAction(about)
+
+    def _on_show_vectors(self, on: bool) -> None:
+        self.show_vectors = bool(on)
+        self._rebuild()
+        if on:
+            message = ("Bond-valence vector: a lobe along -V/|V|, with "
+                       "V = sum of v_i u_i over the bonded contacts; length = "
+                       f"phi x mean bond length x {self.vector_scale:g}")
+        else:
+            message = "Bond-valence vector hidden"
+        self.statusBar().showMessage(message, 9000)
+
+    def _on_show_cones(self, on: bool) -> None:
+        self.show_void_cones = bool(on)
+        self._rebuild()
+        if on and self.poly_mode == PolyhedraMode.NONE:
+            self.statusBar().showMessage(
+                "Void cones are drawn on the sites whose polyhedra are shown, "
+                "and polyhedra are set to none.", 9000)
+
+    def _on_vector_scale(self, value: float) -> None:
+        self.vector_scale = float(value)
+        for scale, action in getattr(self, "_scale_actions", {}).items():
+            action.setChecked(abs(scale - self.vector_scale) < 1e-9)
+        if self.show_vectors:
+            self._rebuild()
+
+    def _show_appearance_tab(self) -> None:
+        tabs = self.theme_panel.parentWidget()
+        while tabs is not None and not isinstance(tabs, QTabWidget):
+            tabs = tabs.parentWidget()
+        if tabs is not None:
+            tabs.setCurrentWidget(self.theme_panel)
 
     def _set_enabled(self, on: bool) -> None:
         for w in (self.style_box, self.poly_box, self.cell_check,
@@ -559,7 +712,10 @@ class PreviewWindow(QMainWindow):
                                 if entry is active else None),
                 slab=(self.planes_panel.current_slab()
                       if entry is active else None),
-                overrides=entry.overrides))
+                overrides=entry.overrides,
+                show_vectors=self.show_vectors,
+                show_void_cones=(self.show_void_cones and entry is active),
+                vector_scale=self.vector_scale))
 
         self.scene = (scenes[0] if len(scenes) == 1
                       else merge_scenes(scenes, [e.offset for e in entries]))
@@ -672,21 +828,62 @@ class PreviewWindow(QMainWindow):
             self._current_result(), self.project.v_bond,
             params=self.project.params, v_list=self.project.v_list)
 
-    def _on_theme_cosmetic(self, theme) -> None:
-        """Background, fog, ambient occlusion: no vertex data changes."""
+    def _apply_theme_everywhere(self, theme) -> None:
+        """Hand a theme to every part of the window, the frame included.
+
+        The viewport is not the only thing a theme decides. The menus, docks,
+        tables and the hand-written HTML take their colours from it too, or a
+        white picture would sit in a grey window and the dark preset would draw
+        a dark picture inside a light one.
+        """
         self.theme = theme
-        self.view.set_theme(theme)
         self.explorer.set_theme(theme)
         self.diffraction.apply_theme(theme)
         self.volume_panel.apply_theme(theme)
+        self.utilities.apply_theme(theme)
+        app = QApplication.instance()
+        if app is not None:
+            chrome.apply(app, theme)
+        # a style sheet changes a combo box's padding, so the widths measured
+        # when the boxes were built are no longer the widths they need
+        for box in (self.style_box, self.poly_box,
+                    self.atom_label_box, self.bond_label_box):
+            box.setMinimumWidth(0)
+            self._fit_combo(box)
+        self._sync_theme_menu(theme)
+        self._update_analysis()
+
+    def _on_theme_cosmetic(self, theme) -> None:
+        """Background, fog, ambient occlusion: no vertex data changes."""
+        self._apply_theme_everywhere(theme)
+        self.view.set_theme(theme)
 
     def _on_theme_structural(self, theme) -> None:
         """Colour mode, palette, sizes: the vertex arrays must be rebuilt."""
-        self.theme = theme
-        self.explorer.set_theme(theme)
-        self.diffraction.apply_theme(theme)
-        self.volume_panel.apply_theme(theme)
+        self._apply_theme_everywhere(theme)
         self._rebuild()
+
+    def _sync_theme_menu(self, theme) -> None:
+        """Tick the View > Theme entry matching the theme now in use.
+
+        A theme edited by hand in the Appearance tab matches no preset, and then
+        nothing is ticked -- which is the honest answer.
+        """
+        for name, action in getattr(self, "_theme_actions", {}).items():
+            action.setChecked(name == theme.name)
+
+    def _choose_theme(self, name: str) -> None:
+        """Switch to a named preset, from the menu rather than the panel.
+
+        Delegated to the Appearance panel so that there is one implementation:
+        the panel keeps the user's own element colours and colour mode across
+        the change, and re-reads its own widgets afterwards.
+        """
+        index = self.theme_panel.preset_box.findText(name)
+        if index < 0:
+            return
+        self.theme_panel.preset_box.setCurrentIndex(index)
+        self.theme_panel._apply_preset()
 
     def _on_reflection(self, h: int, k: int, l: int) -> None:
         """Look down the normal of the chosen reflection's planes.
@@ -1080,9 +1277,17 @@ class PreviewWindow(QMainWindow):
         r = self._current_result()
         if r is None:
             self.analysis.setHtml(
-                "<p style='color:#8a93a3'>Click a cation, or choose a site.</p>")
+                f"<p style='color:{chrome.muted_hex(self.theme)}'>"
+                f"Click a cation, or choose a site.</p>")
             return
 
+        muted = chrome.muted_hex(self.theme)
+        # phi over everything down to the listing threshold, beside phi over the
+        # bonded set: the gap between them is how much the index depends on
+        # where the cut was put, which is the whole argument of the program.
+        phi_listed = ("" if r.phi_listed != r.phi_listed
+                      else f" <span style='color:{chrome.muted_hex(self.theme)}'>"
+                           f"({r.phi_listed:.3f} to the listing cut)</span>")
         v = self.v_bond
         bonded = [c for c in r.contacts if c.has_valence and c.valence > v]
         cn = len(bonded)
@@ -1100,7 +1305,7 @@ class PreviewWindow(QMainWindow):
             f"<td align='right'>{c.distance:.4f}</td>"
             f"<td align='right'>{c.valence:.4f}</td>"
             f"<td align='center'>{'&#9679;' if c.valence > v else '&#9675;'}</td>"
-            f"<td style='color:#8a93a3'>"
+            f"<td style='color:{muted}'>"
             f"{'' if (c.param and c.param.fitted) else 'est.'}</td></tr>"
             for c in r.contacts if c.has_valence)
 
@@ -1116,14 +1321,14 @@ class PreviewWindow(QMainWindow):
         # statements of fact about how the numbers were produced, in the same
         # muted voice as the rest of the provenance
         notes = "".join(
-            f"<p style='color:#8a93a3;font-size:11px;margin:3px 0'>{n}</p>"
+            f"<p style='color:{muted};font-size:11px;margin:3px 0'>{n}</p>"
             for n in r.notes)
 
         param = next((c.param for c in r.contacts if c.param), None)
         provenance = ""
         if param is not None:
             provenance = (
-                f"<p style='color:#8a93a3;font-size:11px;margin-top:10px'>"
+                f"<p style='color:{muted};font-size:11px;margin-top:10px'>"
                 f"R<sub>0</sub>({param.label}) = {param.r0:.3f} Å, "
                 f"b = {param.b:.2f} Å &middot; "
                 f"{'fitted' if param.fitted else 'estimated'}<br>{param.source}"
@@ -1131,7 +1336,7 @@ class PreviewWindow(QMainWindow):
 
         self.analysis.setHtml(f"""
         <h2 style='margin-bottom:0'>{r.label}</h2>
-        <p style='color:#8a93a3;margin-top:2px'>
+        <p style='color:{muted};margin-top:2px'>
           {r.element}{'' if r.ox is None else f'{r.ox:+d}'}
           &middot; Wyckoff {r.wyckoff or '?'}
           &middot; site symmetry {r.site_symmetry or '?'}
@@ -1145,7 +1350,11 @@ class PreviewWindow(QMainWindow):
               <td align='right'>{bvs:.2f}{uncertainty} v.u.{discrepancy}</td></tr>
           <tr><td>ECoN (Hoppe)</td><td align='right'>{r.cn_ecoN:.2f}</td></tr>
           <tr><td>Maximum-gap split</td><td align='right'>{r.cn_gap}</td></tr>
-          <tr><td>&phi; (stereoactivity)</td><td align='right'>{r.phi:.3f}</td></tr>
+          <tr><td>&phi; (stereoactivity)</td>
+              <td align='right'>{r.phi:.3f}{phi_listed}</td></tr>
+          <tr><td>|&Sigma;v<sub>i</sub><b>&ucirc;</b><sub>i</sub>|
+              (bond-valence vector)</td>
+              <td align='right'>{r.bvv:.3f} v.u.</td></tr>
           <tr><td>Void cone half-angle</td>
               <td align='right'>{r.void_angle:.1f}&deg;</td></tr>
           <tr><td>Mean bond length</td>
@@ -1157,7 +1366,7 @@ class PreviewWindow(QMainWindow):
         {notes}
         <h4 style='margin-bottom:2px'>Contacts</h4>
         <table width='100%' cellspacing='0' cellpadding='2' style='font-size:11px'>
-          <tr style='color:#8a93a3'>
+          <tr style='color:{muted}'>
             <th align='left'>atom</th><th align='right'>d / Å</th>
             <th align='right'>v / v.u.</th><th></th><th></th></tr>
           {rows}
@@ -1493,12 +1702,37 @@ class PreviewWindow(QMainWindow):
         self.statusBar().showMessage(f"Wrote {path}", 8000)
 
     def _about(self) -> None:
+        """About, with what this session is actually running.
+
+        The renderer tier belongs here rather than only in a log: on a machine
+        without a graphics card FACET falls back to drawing in software, and a
+        user comparing two machines' output wants to know which they had.
+        """
+        from .help import AboutDialog
+
         caps = self.view.caps
-        QMessageBox.information(
-            self, f"About {NAME}",
-            f"<b>{NAME} {__version__}</b><br>"
-            "Coordination analysis, cut by bond valence.<br><br>"
-            f"Renderer: {caps.describe() if caps else 'not initialised'}")
+        dialog = AboutDialog(
+            self, renderer=caps.describe() if caps else "", theme=self.theme)
+        self._about_dialog = dialog          # keep it alive while it is open
+        dialog.exec()
+
+    def _show_manual(self, section: str = "") -> None:
+        """Open the manual, at ``section`` if one is named.
+
+        Held on the window rather than shown modally, so the manual can stay
+        open beside the workspace while its instructions are followed.
+        """
+        from .help import ManualDialog
+
+        existing = getattr(self, "_manual_dialog", None)
+        if existing is not None and existing.isVisible():
+            existing.show_section(section)
+            existing.raise_()
+            existing.activateWindow()
+            return
+        dialog = ManualDialog(self, section=section, theme=self.theme)
+        self._manual_dialog = dialog
+        dialog.show()
 
 
 def main(argv: list[str] | None = None) -> int:

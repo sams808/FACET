@@ -262,10 +262,16 @@ class SectionView(QWidget):
         for level, segments in lines.items():
             if not len(segments):
                 continue
-            # lighter where the field is higher, so the lines read as a relief
-            fraction = (level - low) / max(high - low, 1e-12)
-            shade = 120 + int(120 * min(max(fraction, 0.0), 1.0))
-            pen = QPen(QColor(shade, shade, shade, 220), 0.9)
+            # A contour is drawn on top of the colour map, and at this level the
+            # colour underneath it is known exactly -- it is the map sampled at
+            # the same fraction. So take the ink from there rather than from a
+            # fixed grey, which disappeared on a pale map and on a white ground.
+            fraction = min(max((level - low) / max(high - low, 1e-12), 0.0), 1.0)
+            under = sample_colormap(self.colormap, fraction).reshape(3)
+            luma = (0.2126 * under[0] + 0.7152 * under[1]
+                    + 0.0722 * under[2]) / 255.0
+            shade = 255 if luma < 0.5 else 0
+            pen = QPen(QColor(shade, shade, shade, 215), 0.9)
             pen.setCosmetic(True)
             painter.setPen(pen)
             x0, y0 = self._to_device(rect, segments[:, 0, 0], segments[:, 0, 1])
@@ -280,15 +286,26 @@ class SectionView(QWidget):
             return
         painter.save()
         painter.setClipRect(rect.adjusted(-30, -30, 30, 30))
+        # A marker lands anywhere on the colour map, so neither a light nor a
+        # dark ink is safe on its own: draw both, the dark one as an outline
+        # around the light one. That reads on every map and on both grounds.
+        dark = QColor(0, 0, 0, 190)
+        light = QColor(255, 255, 255, 235)
         for u, v, label in self.markers:
             x, y = self._to_device(rect, u, v)
             x, y = float(x), float(y)
-            painter.setPen(QPen(QColor(255, 255, 255, 230), 1.4))
-            painter.setBrush(QColor(0, 0, 0, 90))
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(dark, 2.6))
+            painter.drawEllipse(QPointF(x, y), 4.0, 4.0)
+            painter.setPen(QPen(light, 1.2))
             painter.drawEllipse(QPointF(x, y), 4.0, 4.0)
             if label:
-                painter.setPen(QPen(QColor(255, 255, 255, 235)))
-                painter.drawText(QPointF(x + 6, y - 4), label)
+                at = QPointF(x + 6, y - 4)
+                painter.setPen(QPen(dark))
+                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    painter.drawText(QPointF(at.x() + dx, at.y() + dy), label)
+                painter.setPen(QPen(light))
+                painter.drawText(at, label)
         painter.setBrush(Qt.NoBrush)
         painter.restore()
 

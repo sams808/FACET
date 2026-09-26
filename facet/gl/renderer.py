@@ -36,6 +36,7 @@ from . import buffers, shaders
 from .caps import Capabilities, Tier
 from .camera import Camera
 from .scene import Scene
+from ..core import theme as theme_mod
 
 # GL constants, so the module does not depend on a particular enum wrapper
 GL_FLOAT = 0x1406
@@ -69,9 +70,9 @@ class Renderer:
         self.version = caps.glsl_version
         self.use_ssao = caps.supports_ssao
         self.use_outline = caps.tier is Tier.FULL
-        self.background = np.array([0.086, 0.094, 0.110], np.float32)
-        self.cell_color = np.array([0.45, 0.48, 0.55], np.float32)
-        self.fog_amount = 0.65
+        self.background = np.array(theme_mod.FALLBACK_BACKGROUND, np.float32)
+        self.cell_color = np.array(theme_mod.FALLBACK_CELL_COLOR, np.float32)
+        self.fog_amount = theme_mod.FALLBACK_FOG
         self.supersample = 1
         # what the tier allows, kept separate from what the theme asks for, so
         # a theme requesting ambient occlusion on a software renderer is
@@ -86,6 +87,7 @@ class Renderer:
         # how many plane VAOs the last uploaded scene needed, so a scene with
         # fewer planes does not leave the extra ones being drawn
         self._n_plane_vaos = 0
+        self._n_overlay_vaos = 0
 
         # Depth-sorted transparency. Alpha blending is not commutative, so a
         # transparent surface drawn in buffer order shows whichever triangle
@@ -238,6 +240,21 @@ class Renderer:
             self._make_vao(f"plane{i}", {"aPosition": vertices,
                                          "aNormal": normals}, len(vertices))
 
+        # One VAO per overlay kind. Stale counts are cleared first, or an
+        # overlay that has just been switched off keeps being drawn from the
+        # buffer it left behind.
+        for i in range(self._n_overlay_vaos):
+            self._counts.pop(f"overlay{i}", None)
+        overlays = getattr(scene, "overlay_meshes", ())
+        self._n_overlay_vaos = len(overlays)
+        for i, mesh in enumerate(overlays):
+            if not len(mesh.vertices):
+                self._counts[f"overlay{i}"] = 0
+                continue
+            self._make_vao(f"overlay{i}", {"aPosition": mesh.vertices,
+                                           "aNormal": mesh.normals},
+                           len(mesh.vertices))
+
         lines = buffers.line_vertices(scene.cell_segments)
         if len(lines):
             self._make_vao("line", {"aPosition": lines}, len(lines))
@@ -309,6 +326,7 @@ class Renderer:
                 self._sort_transparent(view, scene)
                 self._draw_polyhedra(view, proj, light_view, scene)
                 self._draw_isosurface(view, proj, light_view, scene)
+                self._draw_overlays(view, proj, light_view, scene)
                 self._draw_planes(view, proj, light_view, scene)
 
         self._gbuffer.release()
@@ -424,7 +442,8 @@ class Renderer:
         # a degree of view direction is far below anything that changes the order.
         direction = np.asarray(view, float)[2, :3]
         key = (tuple(np.round(direction, 3)), scene.n_poly_triangles,
-               scene.n_iso_triangles, len(scene.plane_meshes))
+               scene.n_iso_triangles, len(scene.plane_meshes),
+               getattr(scene, "n_overlay_triangles", 0))
         if key == self._sort_key:
             return
         self._sort_key = key
@@ -458,6 +477,19 @@ class Renderer:
             self._make_vao("iso", {"aPosition": scene.iso_vertices,
                                    "aNormal": scene.iso_normals},
                            len(scene.iso_vertices))
+
+        # A lobe and a cone are convex and do not intersect each other, so
+        # ordering their triangles back to front blends them correctly. Done per
+        # triangle rather than per lobe because two lobes on neighbouring atoms
+        # can overlap on screen.
+        for i, mesh in enumerate(getattr(scene, "overlay_meshes", ())):
+            if not len(mesh.vertices) or not self._counts.get(f"overlay{i}"):
+                continue
+            _triangles, index = order(mesh.vertices)
+            mesh.reorder(index)          # carries the part mapping along
+            self._make_vao(f"overlay{i}", {"aPosition": mesh.vertices,
+                                           "aNormal": mesh.normals},
+                           len(mesh.vertices))
 
         if len(scene.plane_meshes) > 1:
             # whole planes rather than their triangles: a plane is flat, so its
@@ -517,6 +549,45 @@ class Renderer:
             gl.glDrawArrays(GL_LINES, 0, self._counts["plane_edge"])
             self._vaos["plane_edge"].release()
             line.release()
+
+        gl.glDepthMask(True)
+        gl.glDisable(GL_BLEND)
+        self._draw_buffers(3)
+
+    def _draw_overlays(self, view, proj, light, scene: Scene) -> None:
+        """The analysis overlays: the bond-valence vector, the void cone.
+
+        The same blended path as the polyhedra, with culling off because a lobe
+        is closed and a cone is a single sheet whose inside is visible from the
+        apex end. Never drawn into the picking pass -- an annotation must not
+        become the thing a click selects, or clicking a lobe would report the
+        atom it is drawn on as being somewhere else.
+        """
+        overlays = getattr(scene, "overlay_meshes", ())
+        if not overlays:
+            return
+        gl = self.gl
+        self._draw_buffers(1)
+        gl.glEnable(GL_BLEND)
+        gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        gl.glDepthMask(False)
+        gl.glDisable(GL_CULL_FACE)
+
+        p = self._programs["poly"]
+        p.bind()
+        self._set_matrix(p, "uView", view)
+        self._set_matrix(p, "uProj", proj)
+        gl.glUniform3f(p.uniformLocation("uLight"), *light)
+        for i, mesh in enumerate(overlays):
+            key = f"overlay{i}"
+            if not self._counts.get(key):
+                continue
+            gl.glUniform3f(p.uniformLocation("uColor"), *mesh.color)
+            gl.glUniform1f(p.uniformLocation("uAlpha"), mesh.alpha)
+            self._vaos[key].bind()
+            gl.glDrawArrays(GL_TRIANGLES, 0, self._counts[key])
+            self._vaos[key].release()
+        p.release()
 
         gl.glDepthMask(True)
         gl.glDisable(GL_BLEND)
