@@ -90,30 +90,51 @@ def test_the_chrome_follows_the_theme_both_ways():
     assert light.window != "#ffffff"
 
 
-def test_secondary_text_is_legible_against_its_panel():
-    """The hint colour has to carry against the window it is drawn on."""
-    def luminance(hexcolor):
-        r, g, b = (int(hexcolor[i:i + 2], 16) / 255 for i in (1, 3, 5))
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+def _rgb(hexcolor):
+    """A #rrggbb string as the 0..1 triple chrome works in."""
+    return tuple(int(hexcolor[i:i + 2], 16) / 255 for i in (1, 3, 5))
 
+
+def test_secondary_text_is_legible_against_its_panel():
+    """The hint colour has to carry against the window it is drawn on.
+
+    Measured with ``chrome.contrast``, which undoes the sRGB transfer function
+    first. A test with its own naive copy of the formula agreed with the code
+    only because the code shared the same mistake, and between them they scored
+    a menu row at 7.15 that the screen renders at 3.30.
+    """
     for factory in T.PRESETS.values():
         c = chrome.ui_colors(factory())
-        a, b = sorted((luminance(c.muted), luminance(c.window)))
-        contrast = (b + 0.05) / (a + 0.05)
-        assert contrast > 3.0, (factory().name, contrast)
+        ratio = chrome.contrast(_rgb(c.muted), _rgb(c.window))
+        assert ratio > 3.0, (factory().name, ratio)
 
 
 def test_accent_text_is_legible_on_the_accent():
+    """A selected menu row and a selected table row are drawn like this."""
     for factory in T.PRESETS.values():
         t = factory()
         c = chrome.ui_colors(t)
+        ratio = chrome.contrast(_rgb(c.accent), _rgb(c.accent_text))
+        assert ratio > 4.5, (t.name, ratio)
 
-        def luminance(hexcolor):
-            r, g, b = (int(hexcolor[i:i + 2], 16) / 255 for i in (1, 3, 5))
-            return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
-        a, b = sorted((luminance(c.accent), luminance(c.accent_text)))
-        assert (b + 0.05) / (a + 0.05) > 4.5, t.name
+def test_the_luminance_undoes_the_srgb_transfer_function():
+    """Against the published sRGB relative-luminance values.
+
+    Mid grey is the case that matters: sRGB 50% has a relative luminance of
+    0.2140, not 0.5, and treating it as 0.5 is what let a dark saturated blue
+    pass for a light background.
+    """
+    assert chrome._luminance((0.0, 0.0, 0.0)) == pytest.approx(0.0)
+    assert chrome._luminance((1.0, 1.0, 1.0)) == pytest.approx(1.0)
+    assert chrome._luminance((0.5, 0.5, 0.5)) == pytest.approx(0.2140, abs=1e-3)
+    # the primaries, at their published weights
+    assert chrome._luminance((1.0, 0.0, 0.0)) == pytest.approx(0.2126, abs=1e-4)
+    assert chrome._luminance((0.0, 1.0, 0.0)) == pytest.approx(0.7152, abs=1e-4)
+    assert chrome._luminance((0.0, 0.0, 1.0)) == pytest.approx(0.0722, abs=1e-4)
+    # and black against white is the textbook 21:1
+    assert chrome.contrast((0.0, 0.0, 0.0),
+                           (1.0, 1.0, 1.0)) == pytest.approx(21.0, abs=1e-6)
 
 
 def test_the_stylesheet_reaches_menus_and_tables():
@@ -320,3 +341,119 @@ def test_switching_theme_rewrites_the_hand_built_html(window, qapp):
     assert dark_muted != light_muted
     # the placeholder is rebuilt with the new colour
     assert light_muted.lstrip("#") in window.analysis.toHtml().lower()
+
+
+def test_no_menu_has_two_items_on_the_same_mnemonic(window):
+    """Two items in one menu claiming the same letter breaks the keyboard.
+
+    Qt does not complain: it moves the highlight to the next match instead of
+    triggering, so the route silently stops working and nothing on screen says
+    why. There were four of these -- File had &Export twice, the Export submenu
+    had &C and &S twice each, and View had &c on both "Along c" and "void
+    cone".
+    """
+    from collections import Counter
+
+    from PySide6.QtWidgets import QMenu
+
+    def check(menu, path):
+        letters = Counter()
+        for action in menu.actions():
+            if action.isSeparator():
+                continue
+            text = action.text()
+            if "&" in text:
+                index = text.index("&")
+                if index + 1 < len(text):
+                    letters[text[index + 1].lower()] += 1
+            sub = action.menu()
+            if isinstance(sub, QMenu):
+                check(sub, f"{path} > {text.replace('&', '')}")
+        duplicated = {k: v for k, v in letters.items() if v > 1}
+        assert not duplicated, f"{path}: {duplicated}"
+
+    for action in window.menuBar().actions():
+        if action.menu() is not None:
+            check(action.menu(), action.text().replace("&", ""))
+
+
+def test_every_panel_combo_shows_its_own_items(window, qapp):
+    """The anti-elision fix used to be applied to four boxes and forgotten.
+
+    Measured before the sweep: 8 of 17 panel drop-downs were laid out narrower
+    than their own longest item and 6 could not show even their current text --
+    one had a text field of minus five pixels, its arrow wider than the whole
+    widget.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QComboBox, QTabWidget
+
+    window.resize(1739, 940)
+    qapp.processEvents()
+    tabs = window.findChild(QTabWidget)
+    for index in range(tabs.count()):
+        tabs.setCurrentIndex(index)
+        qapp.processEvents()
+        # each page is wrapped in a scroll area, so search the wrapper
+        page = tabs.widget(index)
+        for box in page.findChildren(QComboBox):
+            if not box.isVisibleTo(page) or not box.count():
+                continue
+            view = box.view()
+            assert view is None or view.textElideMode() == Qt.ElideNone, (
+                tabs.tabText(index), box.currentText())
+
+
+def test_the_window_fits_on_a_laptop_screen(window):
+    """The whole point of a desktop application is that it opens.
+
+    Measured before the tab pages were allowed to scroll: the minimum size was
+    1434 x 1421 px, on a 1739 x 930 screen -- nearly 500 px taller than the
+    display, with no way to shrink it. The Volume panel alone demanded 1130 px
+    of height and nothing could give way.
+
+    1366 x 768 is the smallest screen worth designing for, and FACET must fit
+    inside it with room for the task bar. The width is the harder half, because
+    the two docks and the panel column all have real minimums; it is checked
+    against a 1440 px screen rather than 1366.
+    """
+    minimum = window.minimumSizeHint()
+    assert minimum.height() <= 730, (
+        f"the window cannot be made shorter than {minimum.height()} px, so it "
+        f"does not fit a 768 px screen")
+    assert minimum.width() <= 1440, (
+        f"the window cannot be made narrower than {minimum.width()} px")
+
+
+def test_all_ten_tabs_are_readable_without_scrolling(window, qapp):
+    """The complaint that started this: a tab bar cut off after "Ov...".
+
+    Two separate failures were in play. The names were long enough to need
+    636 px of tab bar, and the column holding them was pinned at 400 px with no
+    stretch, so it never grew however large the window. Eliding was worse than
+    either -- it made every tab unreadable at once rather than hiding two.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QTabWidget
+
+    # The application's own style sheet sets the tab padding, and without it
+    # the native one is far looser: the same ten tabs measure 586 px instead of
+    # 476. Applying it is what makes this a measurement of FACET.
+    chrome.apply(qapp, T.Theme())
+    qapp.processEvents()
+
+    tabs = window.findChild(QTabWidget)
+    bar = tabs.tabBar()
+    assert bar.elideMode() == Qt.ElideNone, (
+        "an elided tab bar mangles every name at once")
+    # 1739 is this machine's screen; below roughly 1700 the column is narrower
+    # than the ten labels need and the bar scrolls, which is a deliberate
+    # trade against raising the window's minimum width.
+    for width in (1739, 1920):
+        window.resize(width, 930)
+        qapp.processEvents()
+        wanted = sum(bar.tabSizeHint(i).width() for i in range(bar.count()))
+        assert wanted <= bar.width(), (
+            f"at a {width} px window the ten tabs want {wanted} px of tab bar "
+            f"and have {bar.width()}, so the last ones sit behind scroll "
+            f"arrows")

@@ -50,6 +50,7 @@ class OverridesPanel(QWidget):
         self.overrides: overrides_mod.StyleOverrides | None = None
         self._loading = False
         self._build_layout()
+        chrome.fit_every_combo(self)
         self.refresh()
 
     # -- layout ------------------------------------------------------------

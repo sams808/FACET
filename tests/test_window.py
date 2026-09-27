@@ -77,9 +77,8 @@ def test_every_tab_is_present(window):
     # A deliberate inventory rather than a subset check: it catches a tab
     # accidentally removed as well as one added, and the order is the reading
     # order of the workflow.
-    assert titles == ["Site", "Utilities", "Diffraction", "PDF", "EXAFS",
-                      "Planes", "Overrides", "Volume", "Disorder",
-                      "Appearance"]
+    assert titles == ["Site", "Tools", "Diffraction", "PDF", "EXAFS",
+                      "Planes", "Styles", "Volume", "Disorder", "Theme"]
     assert len(set(titles)) == len(titles)
 
 

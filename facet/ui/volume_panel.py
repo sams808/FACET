@@ -85,6 +85,7 @@ class VolumePanel(QWidget):
         chrome.mark_hint(self.stats)
 
         self._build_layout()
+        chrome.fit_every_combo(self)
 
     # -- layout ------------------------------------------------------------
     def _build_layout(self) -> None:
@@ -120,7 +121,9 @@ class VolumePanel(QWidget):
 
     def _source_group(self) -> QWidget:
         group = QGroupBox("Field")
-        row = QHBoxLayout(group)
+        # Stacked, not side by side: two form layouts competing for a
+        # 398 px panel squeeze each other's label columns to nothing.
+        row = QVBoxLayout(group)
         row.setSpacing(12)
 
         form = QFormLayout()
@@ -130,6 +133,7 @@ class VolumePanel(QWidget):
         self.kind.addItem("bond-valence energy landscape", "bvel")
         self.kind.addItem("loaded from a file", "file")
         self.kind.currentIndexChanged.connect(self._on_kind)
+        chrome.fit_combo(self.kind)
         form.addRow("kind", self.kind)
 
         probe = QHBoxLayout()
@@ -138,6 +142,7 @@ class VolumePanel(QWidget):
         for symbol in ("Li", "Na", "K", "Mg", "Ca", "Ag", "Cu", "Bi", "O", "F"):
             self.probe_element.addItem(symbol)
         self.probe_element.setCurrentText("Na")
+        chrome.fit_combo(self.probe_element)
         probe.addWidget(self.probe_element)
         self.probe_ox = QSpinBox()
         self.probe_ox.setRange(-4, 8)
@@ -185,7 +190,9 @@ class VolumePanel(QWidget):
 
     def _display_group(self) -> QWidget:
         group = QGroupBox("Isosurface and section")
-        row = QHBoxLayout(group)
+        # Stacked, not side by side: two form layouts competing for a
+        # 398 px panel squeeze each other's label columns to nothing.
+        row = QVBoxLayout(group)
         row.setSpacing(12)
 
         iso = QFormLayout()

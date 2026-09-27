@@ -135,115 +135,128 @@ class DiffractionPanel(QWidget):
         outer.addWidget(self.notes)
 
     def _controls(self) -> QWidget:
-        group = QGroupBox()
-        row = QHBoxLayout(group)
-        row.setSpacing(14)
+        """Self-labelling fields, two per row, with the diffractometer hidden.
 
-        # -- the experiment
-        experiment = QFormLayout()
-        experiment.setSpacing(3)
+        Three form layouts side by side is what this used to be, and in a 398 px
+        panel each column was squeezed until its labels were zero pixels wide.
+        The spin boxes now carry their own names; what described the instrument
+        rather than the structure sits behind a disclosure, because it is set
+        once.
+        """
+        group = QGroupBox()
+        rows = QVBoxLayout(group)
+        rows.setContentsMargins(8, 8, 8, 8)
+        rows.setSpacing(chrome.FIELD_SPACING)
+
+        # -- the experiment ------------------------------------------------
         self.radiation = QComboBox()
         for name in dif.RADIATIONS:
             self.radiation.addItem(name)
-        self.radiation.setToolTip(
-            "X-ray uses the International Tables form factors, which fall off "
-            "with angle. Neutron uses coherent scattering lengths, which do "
-            "not and which can be negative — that is what lets a light "
-            "atom be seen beside a heavy one. Electron uses Peng's fit.")
-        experiment.addRow("radiation", self.radiation)
+        chrome.name_inside(
+            self.radiation, "radiation",
+            tip="X-ray uses the International Tables form factors, which fall "
+                "off with angle. Neutron uses coherent scattering lengths, "
+                "which do not and which can be negative -- that is what lets a "
+                "light atom be seen beside a heavy one. Electron uses Peng's "
+                "fit.")
 
         self.wavelength_choice = QComboBox()
+        # The item text is asserted by tests/test_plot_diffraction_panel.py,
+        # which looks for a line starting "Mo Ka1": leave it alone.
         for name, value in dif.WAVELENGTHS.items():
             self.wavelength_choice.addItem(f"{name}   {value:.5f} Å", value)
         self.wavelength_choice.setCurrentIndex(0)
-        experiment.addRow("λ", self.wavelength_choice)
+        chrome.name_inside(self.wavelength_choice, "λ",
+                           tip="A common characteristic wavelength. Choosing "
+                               "one fills the exact value below.")
 
-        self.wavelength = _spin(0.10, 10.0, 1.540598, 0.001, 6, " Å")
-        experiment.addRow("λ (exact)", self.wavelength)
+        self.wavelength = chrome.name_inside(
+            _spin(0.10, 10.0, 1.540598, 0.001, 6), "λ", " Å",
+            tip="The wavelength actually used, to six decimals.")
+        self.two_theta_min = chrome.name_inside(
+            _spin(0.0, 179.0, 5.0, 1.0, 2), "2θ from", "°")
+        self.two_theta_max = chrome.name_inside(
+            _spin(1.0, 180.0, 90.0, 1.0, 2), "2θ to", "°")
 
-        self.monochromator = _spin(0.0, 90.0, 0.0, 0.5, 2, "°")
-        self.monochromator.setToolTip(
-            "2θ of a monochromator crystal, which changes the "
-            "polarisation term. Zero means no monochromator correction.")
-        experiment.addRow("mono 2θ", self.monochromator)
-        row.addLayout(experiment)
+        rows.addLayout(chrome.field_grid([
+            self.radiation, self.wavelength_choice,
+            (self.wavelength, 2),
+            self.two_theta_min, self.two_theta_max,
+        ]))
 
-        # -- the range
-        window = QFormLayout()
-        window.setSpacing(3)
-        self.two_theta_min = _spin(0.0, 179.0, 5.0, 1.0, 2, "°")
-        self.two_theta_max = _spin(1.0, 180.0, 90.0, 1.0, 2, "°")
-        window.addRow("2θ from", self.two_theta_min)
-        window.addRow("2θ to", self.two_theta_max)
-        self.step = _spin(0.001, 0.5, 0.020, 0.005, 3, "°")
-        window.addRow("step", self.step)
-        self.b_iso = _spin(0.0, 10.0, dif.DEFAULT_B_ISO, 0.1, 2, " Å²")
-        self.b_iso.setToolTip(
-            "Isotropic displacement parameter B used only for atoms whose site "
-            "carries no U_iso in the file. Where the file gives one, it is "
-            "used instead and the panel says so.")
-        window.addRow("B (fallback)", self.b_iso)
-        row.addLayout(window)
+        # -- the diffractometer, which is set once -------------------------
+        self.step = chrome.name_inside(
+            _spin(0.001, 0.5, 0.020, 0.005, 3), "step", "°",
+            tip="The 2-theta grid the profile is sampled on.")
+        self.b_iso = chrome.name_inside(
+            _spin(0.0, 10.0, dif.DEFAULT_B_ISO, 0.1, 2), "B₀", " Å²",
+            tip="Isotropic displacement parameter B used only for atoms whose "
+                "site carries no U_iso in the file. Where the file gives one, "
+                "it is used instead and the panel says so.")
+        self.monochromator = chrome.name_inside(
+            _spin(0.0, 90.0, 0.0, 0.5, 2), "mono 2θ", "°",
+            tip="2-theta of a monochromator crystal, which changes the "
+                "polarisation term. Zero means no monochromator correction.")
+        self.zero_shift = chrome.name_inside(
+            _spin(-2.0, 2.0, 0.0, 0.01, 3), "zero", "°",
+            tip="Shifts the calculated pattern bodily in 2-theta, for a "
+                "displaced or misaligned sample. Not a refined parameter.")
 
-        # -- the peak shape
-        shape = QFormLayout()
-        shape.setSpacing(3)
-        self.u = _spin(-1.0, 1.0, 0.010, 0.001, 4)
-        self.v = _spin(-1.0, 1.0, -0.004, 0.001, 4)
-        self.w = _spin(0.0, 1.0, 0.006, 0.001, 4)
+        self.u = chrome.name_inside(_spin(-1.0, 1.0, 0.010, 0.001, 4), "U")
+        self.v = chrome.name_inside(_spin(-1.0, 1.0, -0.004, 0.001, 4), "V")
+        self.w = chrome.name_inside(_spin(0.0, 1.0, 0.006, 0.001, 4), "W")
         for box in (self.u, self.v, self.w):
             box.setToolTip(
-                "Caglioti width: FWHM² = U tan²θ + V tanθ "
-                "+ W. These describe the diffractometer, not the structure.")
-        shape.addRow("U", self.u)
-        shape.addRow("V", self.v)
-        shape.addRow("W", self.w)
-        self.eta = _spin(0.0, 1.0, 0.5, 0.05, 2)
-        self.eta.setToolTip("0 is pure Gaussian, 1 is pure Lorentzian.")
-        shape.addRow("η", self.eta)
-        row.addLayout(shape)
+                "Caglioti width: FWHM^2 = U tan^2(theta) + V tan(theta) + W. "
+                "These describe the diffractometer, not the structure.")
+        self.eta = chrome.name_inside(
+            _spin(0.0, 1.0, 0.5, 0.05, 2), "η",
+            tip="The pseudo-Voigt mixing: 0 is pure Gaussian, 1 is pure "
+                "Lorentzian.")
 
-        # -- what to show
-        show = QVBoxLayout()
-        show.setSpacing(2)
-        self.zero_shift = _spin(-2.0, 2.0, 0.0, 0.01, 3, "°")
-        self.zero_shift.setToolTip(
-            "Shifts the calculated pattern bodily in 2θ, for a "
-            "displaced or misaligned sample. Not a refined parameter.")
-        zero_row = QHBoxLayout()
-        zero_row.addWidget(QLabel("zero shift"))
-        zero_row.addWidget(self.zero_shift)
-        show.addLayout(zero_row)
+        instrument = QWidget()
+        inner = QVBoxLayout(instrument)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.addLayout(chrome.field_grid([
+            self.step, self.b_iso,
+            self.monochromator, self.zero_shift,
+            self.u, self.v,
+            self.w, self.eta,
+        ]))
+        rows.addWidget(chrome.disclosure(
+            "Peak shape, zero shift and the B fallback", instrument))
 
-        self.show_ticks = QCheckBox("reflection marks")
+        # -- what to show ---------------------------------------------------
+        self.show_ticks = QCheckBox("marks")
         self.show_ticks.setChecked(True)
-        self.show_sticks = QCheckBox("line intensities only")
+        self.show_ticks.setToolTip("A tick at each reflection's position.")
+        self.show_sticks = QCheckBox("lines only")
         self.show_sticks.setToolTip(
             "Draw each reflection as a bare vertical line at its calculated "
             "intensity, with no peak shape at all.")
-        self.show_difference = QCheckBox("difference curve")
+        self.show_difference = QCheckBox("difference")
         self.show_difference.setChecked(True)
-        self.fill = QCheckBox("shade under the curve")
-        for box in (self.show_ticks, self.show_sticks, self.show_difference,
-                    self.fill):
-            show.addWidget(box)
-        row.addLayout(show)
+        self.show_difference.setToolTip(
+            "The measured pattern minus the scaled calculation, beneath.")
+        self.fill = QCheckBox("shade")
+        self.fill.setToolTip("Shade the area under the calculated curve.")
+        rows.addLayout(chrome.field_grid([
+            self.show_ticks, self.show_sticks,
+            self.show_difference, self.fill,
+        ]))
 
-        # -- actions
-        buttons = QVBoxLayout()
-        buttons.setSpacing(3)
+        # -- actions ---------------------------------------------------------
         self.load_measured = QPushButton("Load measured…")
-        self.clear_measured = QPushButton("Clear measured")
+        self.clear_measured = QPushButton("Clear")
         self.clear_measured.setEnabled(False)
         self.export_svg = QPushButton("Save SVG…")
         self.export_pdf = QPushButton("Save PDF…")
         self.export_csv = QPushButton("Save pattern…")
-        for button in (self.load_measured, self.clear_measured,
-                       self.export_svg, self.export_pdf, self.export_csv):
-            buttons.addWidget(button)
-        buttons.addStretch(1)
-        row.addLayout(buttons)
-        row.addStretch(1)
+        rows.addLayout(chrome.field_grid([
+            self.load_measured, self.clear_measured,
+            self.export_svg, self.export_pdf,
+            (self.export_csv, 2),
+        ]))
         return group
 
     def _connect(self) -> None:

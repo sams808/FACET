@@ -138,111 +138,122 @@ class PDFPanel(QWidget):
         outer.addWidget(self.notes)
 
     def _controls(self) -> QWidget:
+        """Two rows of what is reached for, and the instrument behind a button.
+
+        Every control names itself -- the spin boxes carry their name in the
+        prefix -- because a separate label column costs more width than this
+        panel has. See ``chrome.name_inside``.
+        """
         group = QGroupBox()
         rows = QVBoxLayout(group)
-        rows.setSpacing(4)
+        rows.setContentsMargins(8, 8, 8, 8)
+        rows.setSpacing(chrome.FIELD_SPACING)
 
-        top = QHBoxLayout()
-        top.setSpacing(12)
-        rows.addLayout(top)
-
+        # -- what the structure gives ------------------------------------
         self.radiation = QComboBox()
         for name in dif.RADIATIONS:
             self.radiation.addItem(name)
-        self.radiation.setToolTip(
-            "The weights w_ij come from this. An X-ray PDF of a heavy-element "
-            "compound is dominated by the heavy pairs; a neutron PDF of the "
-            "same compound is not. The table below gives the split.")
-        top.addWidget(QLabel("Radiation"))
-        top.addWidget(self.radiation)
-
-        self.r_max = _spin(5.0, 100.0, 20.0, 1.0, 1, " Å")
-        top.addWidget(QLabel("r max"))
-        top.addWidget(self.r_max)
-
-        self.dr = _spin(0.001, 0.05, 0.01, 0.002, 3, " Å")
-        self.dr.setToolTip(
-            "The r grid. Nyquist asks for dr ≤ π/Qmax (0.10 Å at Qmax = 30), "
-            "and the Gaussians ask for roughly σ/5.")
-        top.addWidget(QLabel("dr"))
-        top.addWidget(self.dr)
-
-        self.u_iso = _spin(0.0, 0.2, pdf_mod.DEFAULT_U_ISO, 0.001, 5, " Å²")
-        self.u_iso.setToolTip(
-            "Used only for atoms whose site gives no U in the file. The notes "
-            "say how many that was. Derived from the same constant the "
-            "diffraction panel uses, so the two cannot disagree.")
-        top.addWidget(QLabel("U if absent"))
-        top.addWidget(self.u_iso)
+        chrome.name_inside(
+            self.radiation, "radiation",
+            tip="The weights w_ij come from this. An X-ray PDF of a "
+                "heavy-element compound is dominated by the heavy pairs; a "
+                "neutron PDF of the same compound is not. The table below "
+                "gives the split.")
 
         self.which = QComboBox()
-        for label in ("G(r)  reduced", "g(r)  pair distribution",
-                      "R(r)  radial distribution"):
+        # Short items on purpose: the full name is in the tool tip and on the
+        # plot's own y axis, and this combo was measured getting a text area of
+        # zero pixels for 156 px of text.
+        for label, explanation in (
+                ("G(r)", "the reduced PDF, R(r)/r - 4 pi r rho0"),
+                ("g(r)", "the pair distribution function, which tends to 1"),
+                ("R(r)", "the radial distribution; a peak's area is the "
+                         "scattering-weighted coordination number")):
             self.which.addItem(label)
-        top.addWidget(QLabel("Show"))
-        top.addWidget(self.which)
-        top.addStretch(1)
+            self.which.setItemData(self.which.count() - 1, explanation,
+                                   Qt.ToolTipRole)
+        chrome.name_inside(self.which, "show",
+                           tip="Which of the three forms to plot. They are one "
+                               "curve written three ways.")
 
-        bottom = QHBoxLayout()
-        bottom.setSpacing(12)
-        rows.addLayout(bottom)
+        self.r_max = chrome.name_inside(
+            _spin(5.0, 100.0, 20.0, 1.0, 1), "r to", " Å",
+            tip="How far out to compute. Every distance in the structure is "
+                "exact to any radius; this only sets where the plot stops.")
+        self.dr = chrome.name_inside(
+            _spin(0.001, 0.05, 0.01, 0.002, 3), "dr", " Å",
+            tip="The r grid. Nyquist asks for dr <= pi/Qmax (0.10 A at "
+                "Qmax = 30), and the Gaussians ask for roughly sigma/5.")
 
-        self.q_min = _spin(0.0, 10.0, 0.0, 0.1, 2, " Å⁻¹")
-        bottom.addWidget(QLabel("Q min"))
-        bottom.addWidget(self.q_min)
+        rows.addLayout(chrome.field_grid([
+            self.radiation, self.which,
+            self.r_max, self.dr,
+        ]))
 
-        self.q_max = _spin(0.0, 60.0, 0.0, 1.0, 2, " Å⁻¹")
-        self.q_max.setToolTip(
-            "0 means no truncation: the ideal, infinite-Q PDF. Set it to a "
-            "measurement's Qmax and the amplitude loss and the termination "
-            "ripple below the first peak appear, because truncation is a "
-            "convolution in r.")
-        bottom.addWidget(QLabel("Q max"))
-        bottom.addWidget(self.q_max)
-
+        # -- what a measurement adds, behind a disclosure -----------------
+        self.q_min = chrome.name_inside(
+            _spin(0.0, 10.0, 0.0, 0.1, 2), "Q from", " Å⁻¹",
+            tip="The low-Q end of the transform. Above zero the kernel's "
+                "integral becomes zero rather than one, which removes the mean "
+                "of G(r) -- what excluding the small-Q region of a measurement "
+                "does.")
+        self.q_max = chrome.name_inside(
+            _spin(0.0, 60.0, 0.0, 1.0, 2), "Q to", " Å⁻¹",
+            tip="0 means no truncation: the ideal, infinite-Q PDF. Set it to a "
+                "measurement's Qmax and the amplitude loss and the termination "
+                "ripple below the first peak appear, because truncation is a "
+                "convolution in r.")
         self.window = QComboBox()
         for name in pdf_mod.WINDOWS:
             self.window.addItem(name)
-        bottom.addWidget(QLabel("window"))
-        bottom.addWidget(self.window)
+        chrome.name_inside(self.window, "window",
+                           tip="The shape cut out of Q. A boxcar has the "
+                               "closed-form kernel above; Lorch is applied by "
+                               "transforming, windowing and transforming back.")
+        self.q_damp = chrome.name_inside(
+            _spin(0.0, 0.2, 0.0, 0.005, 4), "Qdamp", " Å⁻¹",
+            tip="Finite Q-resolution: G(r) x exp(-(r Qdamp)^2/2). The dual of "
+                "the truncation above -- a convolution in Q is a "
+                "multiplication in r.")
+        self.delta1 = chrome.name_inside(
+            _spin(0.0, 5.0, 0.0, 0.05, 3), "δ₁", " Å",
+            tip="Correlated motion, the high-temperature form: "
+                "sigma' = sigma sqrt(1 - d1/r). Zero by default because it is "
+                "fitted against data and cannot be measured from a structure. "
+                "Near neighbours move together, so a measured first peak is "
+                "narrower than sigma^2 = U_i + U_j.")
+        self.delta2 = chrome.name_inside(
+            _spin(0.0, 10.0, 0.0, 0.1, 3), "δ₂", " Å²",
+            tip="The same, in the low-temperature form: "
+                "sigma' = sigma sqrt(1 - d2/r^2). Also zero by default.")
+        self.u_iso = chrome.name_inside(
+            _spin(0.0, 0.2, pdf_mod.DEFAULT_U_ISO, 0.001, 5), "U₀", " Å²",
+            tip="Used only for atoms whose site gives no U in the file. The "
+                "notes say how many that was. Derived from the same constant "
+                "the diffraction panel uses, so the two cannot disagree.")
 
-        self.q_damp = _spin(0.0, 0.2, 0.0, 0.005, 4, " Å⁻¹")
-        self.q_damp.setToolTip(
-            "Finite Q-resolution: G(r) × exp(−(r·Qdamp)²/2). The dual of the "
-            "truncation above — a convolution in Q is a multiplication in r.")
-        bottom.addWidget(QLabel("Q damp"))
-        bottom.addWidget(self.q_damp)
+        instrument = QWidget()
+        inner = QVBoxLayout(instrument)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.addLayout(chrome.field_grid([
+            self.q_min, self.q_max,
+            self.window, self.q_damp,
+            self.delta1, self.delta2,
+            self.u_iso,
+        ]))
+        rows.addWidget(chrome.disclosure(
+            "Instrument, correlation and the U fallback", instrument))
 
-        self.delta1 = _spin(0.0, 5.0, 0.0, 0.05, 3, " Å")
-        self.delta1.setToolTip(
-            "Correlated motion, the high-temperature form: σ′ = σ√(1 − δ₁/r). "
-            "Zero by default because it is fitted against data and cannot be "
-            "measured from a structure. Near neighbours move together, so a "
-            "measured first peak is narrower than σ² = U_i + U_j.")
-        bottom.addWidget(QLabel("δ₁"))
-        bottom.addWidget(self.delta1)
-
-        self.delta2 = _spin(0.0, 10.0, 0.0, 0.1, 3, " Å²")
-        self.delta2.setToolTip("The same, in the low-temperature form: σ′ = "
-                               "σ√(1 − δ₂/r²). Also zero by default.")
-        bottom.addWidget(QLabel("δ₂"))
-        bottom.addWidget(self.delta2)
-        bottom.addStretch(1)
-
-        third = QHBoxLayout()
-        third.setSpacing(10)
-        rows.addLayout(third)
-
+        # -- measured data -------------------------------------------------
         self.load_measured = QPushButton("Load measured G(r)…")
-        third.addWidget(self.load_measured)
         self.clear_measured = QPushButton("Clear")
-        third.addWidget(self.clear_measured)
         self.show_difference = QCheckBox("difference")
         self.show_difference.setChecked(True)
-        third.addWidget(self.show_difference)
-        third.addStretch(1)
         self.export_csv = QPushButton("Export CSV…")
-        third.addWidget(self.export_csv)
+        rows.addLayout(chrome.field_grid([
+            self.load_measured, self.clear_measured,
+            self.show_difference, self.export_csv,
+        ]))
         return group
 
     def _connect(self) -> None:

@@ -181,103 +181,123 @@ class ExafsPanel(QWidget):
         outer.addWidget(self.tabs, 1)
 
     def _controls(self) -> QWidget:
+        """Self-labelling controls, two per row, with the knobs behind a button.
+
+        The spin boxes carry their names in their prefixes; a label column of
+        its own cost more width than the panel has, and "parameters/shell" was
+        rendering as "para".
+        """
         group = QGroupBox()
         rows = QVBoxLayout(group)
-        rows.setSpacing(4)
-
-        top = QHBoxLayout()
-        top.setSpacing(12)
-        rows.addLayout(top)
+        rows.setContentsMargins(8, 8, 8, 8)
+        rows.setSpacing(chrome.FIELD_SPACING)
 
         self.absorber = QComboBox()
-        self.absorber.setToolTip("Which site the absorbing atom is.")
-        top.addWidget(QLabel("Absorber"))
-        top.addWidget(self.absorber)
+        chrome.name_inside(self.absorber, "absorber",
+                           tip="Which site the absorbing atom is. The shells "
+                               "below are its neighbours.")
 
-        self.r_max = _spin(3.0, 12.0, 6.0, 0.5, 1, " Å")
-        top.addWidget(QLabel("cluster"))
-        top.addWidget(self.r_max)
+        self.r_max = chrome.name_inside(
+            _spin(3.0, 12.0, 6.0, 0.5, 1), "cluster", " Å",
+            tip="How far out to gather neighbours, and the cluster radius "
+                "written into a FEFF input.")
+        self.tolerance = chrome.name_inside(
+            _spin(0.005, 0.5, 0.05, 0.005, 3), "shell", " Å",
+            tip="Contacts of one element within this of each other are one "
+                "shell. A contact joins only if it is within the tolerance of "
+                "every member, so no shell is ever wider than this.")
 
-        self.tolerance = _spin(0.005, 0.5, 0.05, 0.005, 3, " Å")
-        self.tolerance.setToolTip(
-            "Contacts of one element within this of each other are one shell. "
-            "A contact joins only if it is within the tolerance of every "
-            "member, so no shell is ever wider than this.")
-        top.addWidget(QLabel("shell width"))
-        top.addWidget(self.tolerance)
+        self.k_min = chrome.name_inside(
+            _spin(0.5, 20.0, 3.0, 0.5, 2), "k from", " Å⁻¹",
+            tip="The k range you intend to fit. It sets the resolution "
+                "dR = pi/(2 dk) reported on the Resolution tab.")
+        self.k_max = chrome.name_inside(
+            _spin(2.0, 30.0, 14.0, 0.5, 2), "k to", " Å⁻¹",
+            tip="The high-k end of the fitting range.")
 
-        self.temperature = _spin(0.0, 1500.0, 300.0, 10.0, 0, " K")
-        top.addWidget(QLabel("T"))
-        top.addWidget(self.temperature)
+        self.r_window_min = chrome.name_inside(
+            _spin(0.0, 10.0, 1.0, 0.1, 2), "r from", " Å",
+            tip="The r window of the fit, which sets how many independent "
+                "points the data holds.")
+        self.r_window_max = chrome.name_inside(
+            _spin(1.0, 12.0, 4.5, 0.1, 2), "r to", " Å",
+            tip="The outer edge of the fitting window.")
 
-        self.theta_e = _spin(50.0, 1200.0, 500.0, 10.0, 0, " K")
-        self.theta_e.setToolTip(
-            "The Einstein temperature of the σ² model. A knob, not a "
-            "measurement: at 500 K and 300 K a Bi–O pair gives 0.0048 Å².")
-        top.addWidget(QLabel("θ_E"))
-        top.addWidget(self.theta_e)
-        top.addStretch(1)
+        rows.addLayout(chrome.field_grid([
+            (self.absorber, 2),
+            self.r_max, self.tolerance,
+            self.k_min, self.k_max,
+            self.r_window_min, self.r_window_max,
+        ]))
 
-        bottom = QHBoxLayout()
-        bottom.setSpacing(12)
-        rows.addLayout(bottom)
-
-        self.k_min = _spin(0.5, 20.0, 3.0, 0.5, 2, " Å⁻¹")
-        bottom.addWidget(QLabel("k from"))
-        bottom.addWidget(self.k_min)
-        self.k_max = _spin(2.0, 30.0, 14.0, 0.5, 2, " Å⁻¹")
-        bottom.addWidget(QLabel("to"))
-        bottom.addWidget(self.k_max)
-
-        self.r_window_min = _spin(0.0, 10.0, 1.0, 0.1, 2, " Å")
-        bottom.addWidget(QLabel("fit window r"))
-        bottom.addWidget(self.r_window_min)
-        self.r_window_max = _spin(1.0, 12.0, 4.5, 0.1, 2, " Å")
-        bottom.addWidget(QLabel("to"))
-        bottom.addWidget(self.r_window_max)
-
+        self.temperature = chrome.name_inside(
+            _spin(0.0, 1500.0, 300.0, 10.0, 0), "T", " K",
+            tip="The temperature of the Einstein sigma^2 model. It is a model, "
+                "not a measurement of this structure.")
+        self.theta_e = chrome.name_inside(
+            _spin(50.0, 1200.0, 500.0, 10.0, 0), "θE", " K",
+            tip="The Einstein temperature of the sigma^2 model. A knob: at "
+                "500 K and 300 K a Bi-O pair gives 0.0048 A^2.")
         self.per_shell = QSpinBox()
         self.per_shell.setRange(1, 6)
         self.per_shell.setValue(3)
-        self.per_shell.setToolTip(
-            "Parameters per shell in the count against N_idp. Three is "
-            "N, R and σ² with S0² and E0 shared.")
-        bottom.addWidget(QLabel("parameters/shell"))
-        bottom.addWidget(self.per_shell)
-        bottom.addStretch(1)
+        chrome.name_inside(
+            self.per_shell, "par/shell",
+            tip="Parameters per shell in the count against N_idp. Three is N, "
+                "R and sigma^2, with S0^2 and E0 shared between shells.")
+
+        knobs = QWidget()
+        inner = QVBoxLayout(knobs)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.addLayout(chrome.field_grid([
+            self.temperature, self.theta_e,
+            (self.per_shell, 2),
+        ]))
+        rows.addWidget(chrome.disclosure(
+            "Temperature, the sigma-squared model, and the parameter count",
+            knobs))
 
         self.export_button = QPushButton("Export shells…")
-        bottom.addWidget(self.export_button)
+        rows.addLayout(chrome.field_grid([(self.export_button, 2)]))
         return group
 
     def _feff_controls(self) -> QWidget:
         group = QGroupBox()
-        row = QHBoxLayout(group)
-        row.setSpacing(10)
+        rows = QVBoxLayout(group)
+        rows.setContentsMargins(8, 8, 8, 8)
+        rows.setSpacing(chrome.FIELD_SPACING)
+
         self.write_input = QPushButton("Write feff.inp…")
         self.write_input.setToolTip(
             "A FEFF input for this absorber, with the cluster larger than "
             "RPATH and PRINT set so the path files are written.")
-        row.addWidget(self.write_input)
-        self.read_output = QPushButton("Read a FEFF calculation…")
+        self.read_output = QPushButton("Read a calculation…")
         self.read_output.setToolTip(
             "Point at a folder holding files.dat and feffNNNN.dat. FACET "
             "reads them; it does not run FEFF and does not ship it.")
-        row.addWidget(self.read_output)
         self.run_feff = QPushButton("Run FEFF here…")
         self.run_feff.setToolTip(
             "Runs an feff8l or feff6l executable you already have, in a folder "
             "you choose. Nothing is bundled.")
-        row.addWidget(self.run_feff)
-        self.s02 = _spin(0.1, 1.5, 0.9, 0.05, 2)
-        row.addWidget(QLabel("S₀²"))
-        row.addWidget(self.s02)
+
+        self.s02 = chrome.name_inside(
+            _spin(0.1, 1.5, 0.9, 0.05, 2), "S₀²",
+            tip="The amplitude reduction factor applied to the path sum. Your "
+                "value, not a fitted one.")
         self.use_sigma2 = QComboBox()
-        for label in ("σ² from Einstein model", "σ² from the file's U",
-                      "σ² = 0"):
+        for label in ("σ² Einstein", "σ² from the file", "σ² = 0"):
             self.use_sigma2.addItem(label)
-        row.addWidget(self.use_sigma2)
-        row.addStretch(1)
+        chrome.name_inside(
+            self.use_sigma2, "sigma2",
+            tip="Which sigma^2 from the shell table to apply to the matching "
+                "FEFF paths: the Einstein model, the file's displacement "
+                "parameters, or none at all.")
+
+        rows.addLayout(chrome.field_grid([
+            self.write_input, self.read_output,
+            (self.run_feff, 2),
+            self.s02, self.use_sigma2,
+        ]))
         return group
 
     def _connect(self) -> None:

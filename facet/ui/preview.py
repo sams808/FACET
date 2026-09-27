@@ -207,17 +207,37 @@ class PreviewWindow(QMainWindow):
         sites.setMinimumWidth(210)
 
         tabs = QTabWidget()
-        tabs.addTab(self.analysis, "Site")
-        tabs.addTab(self.utilities, "Utilities")
-        tabs.addTab(self.diffraction, "Diffraction")
-        tabs.addTab(self.pdf_panel, "PDF")
-        tabs.addTab(self.exafs_panel, "EXAFS")
-        tabs.addTab(self.planes_panel, "Planes")
-        tabs.addTab(self.overrides_panel, "Overrides")
-        tabs.addTab(self.volume_panel, "Volume")
-        tabs.addTab(self.disorder_panel, "Disorder")
-        tabs.addTab(self.theme_panel, "Appearance")
+        # Every page scrolls. A page that cannot scroll sets a floor under the
+        # window's height: the Volume panel wanted 1130 px of it, which forced
+        # a minimum window of 1434 x 1421 on a 1739 x 930 screen -- taller than
+        # the display. With setWidgetResizable the wrapper costs nothing while
+        # there is room.
+        for widget, title in ((self.analysis, "Site"),
+                              (self.utilities, "Tools"),
+                              (self.diffraction, "Diffraction"),
+                              (self.pdf_panel, "PDF"),
+                              (self.exafs_panel, "EXAFS"),
+                              (self.planes_panel, "Planes"),
+                              (self.overrides_panel, "Styles"),
+                              (self.volume_panel, "Volume"),
+                              (self.disorder_panel, "Disorder"),
+                              (self.theme_panel, "Theme")):
+            tabs.addTab(chrome.in_scroll_area(widget), title)
+        # Kept at 400. The ten tab labels want 476 px of tab bar, so a wider
+        # minimum would show them all -- but it also raises the window's own
+        # minimum width, measured 1434 -> 1496, and a window that cannot be
+        # made small enough is the worse fault of the two. Above about a
+        # 1700 px window the splitter gives the column more than 476 anyway;
+        # below it the bar scrolls, with the names intact rather than elided.
         tabs.setMinimumWidth(400)
+        # Ten tabs need more than 400 px of tab bar, so the bar may still
+        # scroll on a small screen; let it elide rather than hide a tab
+        # entirely, and keep the arrows for when it does.
+        tabs.setUsesScrollButtons(True)
+        # Never elide a tab name. Eliding makes every tab unreadable at once,
+        # which is worse than scrolling: with the arrows the names that are on
+        # screen are at least the real names.
+        tabs.tabBar().setElideMode(Qt.ElideNone)
 
         centre = QWidget()
         col = QVBoxLayout(centre)
@@ -229,8 +249,16 @@ class PreviewWindow(QMainWindow):
         split = QSplitter(Qt.Horizontal)
         split.addWidget(centre)
         split.addWidget(tabs)
-        split.setStretchFactor(0, 1)
-        split.setSizes([1000, 400])
+        # The panels used to have stretch 0, so a wider window made the 3-D view
+        # wider and left them at 400 px for ever -- measured identical at 1400,
+        # 1600 and 1920. They now take a quarter of the growth, which is what
+        # lets the tab bar show all ten tabs on a large screen.
+        split.setStretchFactor(0, 3)
+        split.setStretchFactor(1, 1)
+        # 500, not 400: the ten tab labels want 496 px of tab bar, and a
+        # column narrower than that hides some of them behind scroll arrows
+        # from the moment the window opens.
+        split.setSizes([980, 500])
 
         vertical = QSplitter(Qt.Vertical)
         vertical.addWidget(split)
@@ -353,22 +381,25 @@ class PreviewWindow(QMainWindow):
         return bar
 
     def _build_menu(self) -> None:
-        openf = QAction("&Open structure…", self)
+        openf = QAction("&Open…", self)
         openf.setShortcut(QKeySequence.Open)
         openf.triggered.connect(self._choose_file)
 
-        save = QAction("&Export image…", self)
+        save = QAction("Export &image…", self)
         save.setShortcut(QKeySequence.Save)
         save.triggered.connect(self._save_image)
 
-        vector = QAction("Export as &vector (SVG or PDF)…", self)
+        vector = QAction("Export &vector…", self)
+        vector.setToolTip("SVG or PDF: real vector geometry, not a bitmap in a "
+                          "wrapper.")
         vector.triggered.connect(self._save_vector)
 
         quit_ = QAction("&Quit", self)
         quit_.setShortcut(QKeySequence.Quit)
         quit_.triggered.connect(self.close)
 
-        openfolder = QAction("Open a &folder of CIFs…", self)
+        openfolder = QAction("Open &folder…", self)
+        openfolder.setToolTip("Every CIF in a folder, loaded at once.")
         openfolder.triggered.connect(self._choose_folder)
 
         m = self.menuBar().addMenu("&File")
@@ -380,19 +411,19 @@ class PreviewWindow(QMainWindow):
 
         export = m.addMenu("&Export")
         for label, handler in (
-                ("Site table (&CSV)…", self._export_sites_csv),
-                ("Contact table (CSV)…", self._export_contacts_csv),
-                ("Both tables (&XLSX)…", self._export_xlsx),
+                ("&Sites (CSV)…", self._export_sites_csv),
+                ("&Contacts (CSV)…", self._export_contacts_csv),
+                ("&Both (XLSX)…", self._export_xlsx),
                 (None, None),
-                ("Structure as CI&F…", self._export_cif),
-                ("Structure as &POSCAR…", self._export_poscar),
-                ("Structure as X&YZ…", self._export_xyz),
-                ("Structure as &VESTA…", self._export_vesta),
+                ("CI&F…", self._export_cif),
+                ("&POSCAR…", self._export_poscar),
+                ("X&YZ…", self._export_xyz),
+                ("&VESTA…", self._export_vesta),
                 (None, None),
-                ("FEFF input for this &site…", self._export_feff),
+                ("F&EFF input…", self._export_feff),
                 (None, None),
-                ("&Cutoff table…", self._export_cutoffs),
-                ("Threshold &scan…", self._export_scan)):
+                ("C&utoff table…", self._export_cutoffs),
+                ("&Threshold scan…", self._export_scan)):
             if label is None:
                 export.addSeparator()
                 continue
@@ -401,15 +432,15 @@ class PreviewWindow(QMainWindow):
             export.addAction(action)
 
         m.addSeparator()
-        load_params = QAction("Load &bond-valence parameters…", self)
+        load_params = QAction("Load &parameters…", self)
         load_params.setToolTip(
             "Read a published parameter set: the IUCr bvparm distribution, a "
             "softBV-style table, or a FACET parameter file. FACET does not ship "
             "the large compilations, because each comes with its own terms.")
         load_params.triggered.connect(self._load_parameters)
-        reset_params = QAction("Use the built-in parameters", self)
+        reset_params = QAction("Use the &built-in parameters", self)
         reset_params.triggered.connect(self._reset_parameters)
-        save_params = QAction("Save the parameters in use…", self)
+        save_params = QAction("Save parameter&s…", self)
         save_params.triggered.connect(self._save_parameters)
         m.addAction(load_params)
         m.addAction(save_params)
@@ -417,6 +448,8 @@ class PreviewWindow(QMainWindow):
 
         m.addSeparator()
         session_save = QAction("Save sessio&n…", self)
+        session_save.setToolTip("The files, the threshold, the styles and the "
+                                "view, so the same picture opens again.")
         session_save.triggered.connect(self._save_session)
         session_open = QAction("Open session…", self)
         session_open.triggered.connect(self._open_session)
@@ -435,7 +468,10 @@ class PreviewWindow(QMainWindow):
         e.addAction(self.undo_action)
         e.addAction(self.redo_action)
         e.addSeparator()
-        clear_overrides = QAction("Clear all per-atom and per-site styles", self)
+        clear_overrides = QAction("&Clear all styles", self)
+        clear_overrides.setToolTip(
+            "Removes every per-atom, per-site and per-element colour, size and "
+            "visibility change. Undoable.")
         clear_overrides.triggered.connect(self._clear_overrides)
         e.addAction(clear_overrides)
         self._refresh_history_actions()
@@ -467,7 +503,7 @@ class PreviewWindow(QMainWindow):
         self.vector_action.toggled.connect(self._on_show_vectors)
         v.addAction(self.vector_action)
 
-        self.cone_action = QAction("Show void &cone", self)
+        self.cone_action = QAction("Show v&oid cone", self)
         self.cone_action.setCheckable(True)
         self.cone_action.setToolTip(
             "A cone of the measured void half-angle about the void axis, on "
@@ -524,7 +560,9 @@ class PreviewWindow(QMainWindow):
         shortcuts.triggered.connect(lambda: self._show_manual("shortcuts"))
         h.addAction(shortcuts)
         h.addSeparator()
-        notices = QAction("&Licences and third-party notices", self)
+        notices = QAction("&Licences", self)
+        notices.setToolTip("What the bundled components require of a build "
+                           "that is passed on.")
         notices.triggered.connect(lambda: self._show_manual("licences"))
         h.addAction(notices)
         h.addSeparator()
@@ -559,11 +597,22 @@ class PreviewWindow(QMainWindow):
             self._rebuild()
 
     def _show_appearance_tab(self) -> None:
+        """Bring the Theme tab forward.
+
+        Walks up from the panel rather than naming an index, because each page
+        is wrapped in a scroll area -- ``setCurrentWidget(self.theme_panel)``
+        addresses the panel, which is no longer the tab widget's own child.
+        """
         tabs = self.theme_panel.parentWidget()
         while tabs is not None and not isinstance(tabs, QTabWidget):
             tabs = tabs.parentWidget()
-        if tabs is not None:
-            tabs.setCurrentWidget(self.theme_panel)
+        if tabs is None:
+            return
+        for index in range(tabs.count()):
+            page = tabs.widget(index)
+            if page is self.theme_panel or page.isAncestorOf(self.theme_panel):
+                tabs.setCurrentIndex(index)
+                return
 
     def _set_enabled(self, on: bool) -> None:
         for w in (self.style_box, self.poly_box, self.cell_check,

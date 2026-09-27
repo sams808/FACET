@@ -107,6 +107,53 @@ class TestGLView:
         view.reset_view()
         assert before.constBits() != after.constBits()
 
+    def test_turning_the_structure_does_not_change_how_brightly_it_is_lit(
+            self, view):
+        """The lamp is over the viewer's shoulder, not bolted to the crystal.
+
+        This is the fault the test exists for: the light used to be a direction
+        in the *crystal's* frame, rotated into view space every frame
+        (``light_view = view[:3, :3] @ light``). Orbiting therefore carried the
+        lamp around with the structure, and the far side went dark -- measured
+        at 78% of the reset view's mean atom luminance on this machine, and the
+        diffuse term itself at 53% over a full orbit.
+
+        Measured on the drawn pixels rather than the whole frame, because the
+        background is a large constant area that would dilute the effect to
+        nothing.
+        """
+        def lit_mean(image):
+            background = image.pixelColor(1, 1)
+            total, count = 0.0, 0
+            for y in range(0, image.height(), 3):
+                for x in range(0, image.width(), 3):
+                    c = image.pixelColor(x, y)
+                    if (abs(c.red() - background.red()) < 6
+                            and abs(c.green() - background.green()) < 6
+                            and abs(c.blue() - background.blue()) < 6):
+                        continue
+                    total += (0.2126 * c.redF() + 0.7152 * c.greenF()
+                              + 0.0722 * c.blueF())
+                    count += 1
+            return (total / count) if count else 0.0
+
+        view.reset_view()
+        reset = lit_mean(view.grab_image(240, 200, supersample=1))
+        assert reset > 0.0, "nothing was drawn, so there is nothing to measure"
+
+        means = [reset]
+        for _ in range(4):
+            # four quarter turns about the screen-up axis, back to the start
+            view.camera.drag_rotate(0, 100, 120, 100, 240, 200)
+            means.append(lit_mean(view.grab_image(240, 200, supersample=1)))
+        view.reset_view()
+
+        spread = max(means) / max(min(means), 1e-9)
+        assert spread < 1.25, (
+            f"the structure is {spread:.2f}x brighter from one side than from "
+            f"another: {['%.4f' % m for m in means]}. The light has become "
+            f"fixed to the crystal again.")
+
     def test_picking_the_centre_returns_a_real_atom_or_background(self, view):
         from PySide6.QtCore import QPoint
 
@@ -214,3 +261,46 @@ class TestPainterFallback:
         painter = QPainter(image)
         PainterRenderer().render(painter, Scene(), Camera(), 80, 60)
         painter.end()
+
+
+# ---------------------------------------------------------------------------
+# the light itself
+# ---------------------------------------------------------------------------
+
+def test_the_light_is_a_unit_vector_pointing_at_the_viewer():
+    """A headlight, by definition: fixed in view space with a positive z.
+
+    Needs no GL context, so it guards the property on every machine. The z
+    component is the one that matters -- it is what puts the lamp on the
+    viewer's side. x and y only decide which shoulder it sits over, and a light
+    with no x or y at all would flatten every sphere into a disc.
+    """
+    import numpy as np
+
+    from facet.gl.renderer import LIGHT_VIEW
+
+    assert float(np.linalg.norm(LIGHT_VIEW)) == pytest.approx(1.0, abs=1e-12)
+    assert LIGHT_VIEW[2] > 0.3, (
+        "the light points away from the viewer, so the visible side of every "
+        "atom is the unlit one")
+    assert abs(LIGHT_VIEW[0]) > 0.05 and abs(LIGHT_VIEW[1]) > 0.05, (
+        "a light exactly along the view axis gives a sphere no shading at all")
+
+
+def test_the_shader_light_does_not_depend_on_the_camera():
+    """Read the renderer's own source, because this is what regressed.
+
+    A brittle test on purpose. The fault it guards is a single matrix multiply
+    that reintroduces itself naturally -- transforming a direction into view
+    space looks like the right thing to do, and the result renders perfectly at
+    the default orientation. Nothing else in the suite would notice.
+    """
+    import inspect
+
+    from facet.gl.renderer import Renderer
+
+    source = inspect.getsource(Renderer.render)
+    assert "light_view = LIGHT_VIEW" in source
+    assert "@ light" not in source, (
+        "the light is being transformed by the camera again; it must stay a "
+        "view-space constant")

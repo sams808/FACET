@@ -186,7 +186,7 @@ the shipped {bv.V_BOND_DEFAULT:g}&nbsp;v.u. a contact counts as a bond out to
 <i>R</i><sub>0</sub>&nbsp;+&nbsp;{d_list:.3f}&nbsp;&Aring;. A short Si&ndash;O
 bond and a long Bi&ndash;I bond are then being judged by the same physical
 criterion rather than by the same number of &aring;ngstr&ouml;ms. The
-<b>Cutoffs</b> tab under <b>Utilities</b> prints the distance each pair gets, so
+<b>Cutoffs</b> tab under <b>Tools</b> prints the distance each pair gets, so
 the translation is visible rather than implied.</p>
 <h2>What FACET does not do with this</h2>
 <p>It does not tell you which threshold to use, and it does not mark a
@@ -213,12 +213,17 @@ how many cells to tile, the unit cell, the projection, what to label atoms and
 bonds with, and the tabulation threshold.</p>
 <h2>Right</h2>
 <p>Ten tabs. <b>Site</b> is the analysis of the selected site.
-<b>Utilities</b> holds the whole-structure tables. <b>Diffraction</b> computes a
+<b>Tools</b> holds the whole-structure tables. <b>Diffraction</b> computes a
 powder pattern, <b>PDF</b> a pair distribution function, and <b>EXAFS</b> the
 shell list and resolution report. <b>Planes</b> cuts lattice planes and slabs.
-<b>Overrides</b> lists per-atom and per-site styling. <b>Volume</b> maps
+<b>Styles</b> lists per-atom and per-site styling. <b>Volume</b> maps
 bond-valence sum through space. <b>Disorder</b> handles partial occupancy and
-alternative configurations. <b>Appearance</b> is colour, sizing and themes.</p>
+alternative configurations. <b>Theme</b> is colour, sizing and palettes.</p>
+
+<p {note}>Most controls state their own name inside themselves rather than
+beside them -- a spin box reading "r to 20.0 &Aring;" is the r limit. Hovering
+any of them explains what it does, and the settings that are set once and left
+sit behind a disclosure arrow.</p>
 <h2>Bottom</h2>
 <p>The <b>cutoff explorer</b>. Each site is a staircase: coordination number
 against threshold, with the flat treads being the plateaux. Drag the vertical
@@ -270,7 +275,7 @@ actually used.</p>
 
         ("lonepair", "The bond-valence vector", f"""
 <h1>The bond-valence vector, and the lone pair</h1>
-<p><i>View &rsaquo; Show bond-valence vector</i>, or the Appearance tab, draws a
+<p><i>View &rsaquo; Show bond-valence vector</i> draws a
 lobe on each cation pointing away from its bonded ligands.</p>
 <h2>What is drawn</h2>
 <p>For each drawn atom, FACET forms
@@ -298,8 +303,8 @@ drag the explorer is telling you that the vector sum depends on contacts near
 the cut.</p>
 """),
 
-        ("utilities", "Utilities", f"""
-<h1>Utilities</h1>
+        ("utilities", "Tools", f"""
+<h1>Tools</h1>
 <p>Whole-structure tables, each recomputed for the active structure.</p>
 <ul>
 <li><b>Cell</b> — lattice parameters, the reciprocal cell in the
@@ -446,9 +451,9 @@ them and lets one configuration be shown at a time. Where it declares only
 partial occupancies, sites closer together than a physical bond are reported as
 mutually exclusive candidates. Which configuration is real is not decided
 here.</p>
-<h2>Overrides</h2>
+<h2>Styles</h2>
 <p>Any element, site or single atom can be given its own colour, radius or
-visibility. The <b>Overrides</b> tab lists every one of them so that a figure
+visibility. The <b>Styles</b> tab lists every one of them so that a figure
 can be retraced, and any of them can be removed. Overrides belong to the
 structure they were made on, and an atom index that no longer addresses an atom
 is dropped when a file is reloaded rather than applied to whatever landed on
@@ -464,7 +469,7 @@ panels and tables. The presets are a white VESTA-like default, a light theme for
 print, a greyscale publication theme with depth cueing off, a high-contrast
 theme chosen to survive the commonest colour-vision deficiencies, and two darker
 grounds for working at night.</p>
-<p>The <b>Appearance</b> tab goes further: per-element colours, what an atom's
+<p>The <b>Theme</b> tab goes further: per-element colours, what an atom's
 colour <i>means</i> (element, site, bond-valence sum, coordination number,
 &phi;, or valence discrepancy), atom and bond scaling, depth cueing, ambient
 occlusion and outlines. A theme can be saved to a file and shared, which is how
@@ -475,9 +480,16 @@ supersampling. <i>File &rsaquo; Export as vector</i> writes SVG or PDF — real
 vector geometry, not a bitmap in a wrapper, so it can be edited in a drawing
 program and scales without pixels. The vector exporter is the same code path as
 the software renderer, so what it writes is what the fallback tier draws.</p>
+<h2>Lighting</h2>
+<p>The light is fixed to the viewer, not to the crystal: turning the structure
+does not turn the lamp with it, so looking along &minus;c is lit exactly as
+looking along +c. Depth cueing, which fades distant atoms towards the
+background, is the separate control in the Theme tab, and it is what the
+publication theme switches off.</p>
+
 <h2>Stereo</h2>
 <p>Anaglyph, greyscale anaglyph, side-by-side and cross-eyed pairs are in the
-Appearance tab. The separation is an angle rather than a distance, so the depth
+Theme tab. The separation is an angle rather than a distance, so the depth
 survives zooming.</p>
 """),
 

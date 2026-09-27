@@ -57,6 +57,20 @@ GL_LINE_SMOOTH = 0x0B20
 GL_FRAMEBUFFER = 0x8D40
 
 
+# The light, as a direction in VIEW space: up, to the right, and toward the
+# viewer. Fixed there rather than in the crystal's frame, so that turning the
+# structure does not turn the lamp with it -- looking along -c is lit exactly as
+# looking along +c. Its z component is what makes it a headlight; the x and y
+# give the surface something to shade against, since a light exactly behind the
+# eye flattens every sphere into a disc.
+#
+# This is the same triple that used to be rotated into view space each frame,
+# kept deliberately: the view rotation is the identity at the reset camera, so
+# the default view renders bit for bit as it did before.
+LIGHT_VIEW = np.array([0.42, 0.62, 0.66], np.float64)
+LIGHT_VIEW = LIGHT_VIEW / np.linalg.norm(LIGHT_VIEW)
+
+
 class ShaderError(RuntimeError):
     pass
 
@@ -306,9 +320,10 @@ class Renderer:
         scene = self._scene
 
         view, proj = camera.matrices(w / max(h, 1))
-        light = np.array([0.42, 0.62, 0.66])
-        light = light / np.linalg.norm(light)
-        light_view = view[:3, :3] @ light
+        # No `view[:3, :3] @` here: the light is already a view-space direction.
+        # Rotating a world direction into view space is what made the far side
+        # of a structure dark -- the lamp travelled with the crystal.
+        light_view = LIGHT_VIEW
 
         self._gbuffer.bind()
         self._draw_buffers(3)

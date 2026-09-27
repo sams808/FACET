@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import theme as theme_mod
+from . import chrome
 
 
 def _swatch(rgb, size: int = 18) -> QIcon:
@@ -98,6 +99,7 @@ class ThemePanel(QWidget):
         self._layout.addStretch(1)
         self._build_io()
         self._reload()
+        chrome.fit_every_combo(self)
 
     # -- sections ----------------------------------------------------------
     def _group(self, title: str) -> QFormLayout:

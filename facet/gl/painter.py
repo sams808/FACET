@@ -168,7 +168,13 @@ class PainterRenderer:
     def _atom_drawer(self, x, y, r, rgb, view_z):
         def draw(painter: QPainter):
             shade = self._cue(_qcolor(rgb), view_z)
-            # the highlight sits up and to the left, matching the GL path's light
+            # The highlight is placed in screen space, so it does not move when
+            # the structure turns -- which is the same property the GL tiers now
+            # have from their view-space light. It sits up and to the LEFT,
+            # where the GL light is up and to the right (its view-space x is
+            # +0.42): the two tiers disagree about which shoulder the lamp is
+            # over, and always have. Left alone here because changing it would
+            # alter every figure already exported.
             grad = QRadialGradient(QPointF(x - r * 0.35, y - r * 0.35), r * 1.5)
             grad.setColorAt(0.0, shade.lighter(165))
             grad.setColorAt(0.45, shade)
@@ -256,8 +262,15 @@ class PainterRenderer:
             shade = _qcolor(colour, alpha)
             length = float(np.linalg.norm(normal))
             if length > 1e-12:
-                # the same light direction the GL path uses, so the two tiers
-                # shade a polyhedron the same way round
+                # A face's shade here depends on neither the camera nor the
+                # light's position relative to it: both operands are fixed, and
+                # the abs() lights the far hemisphere as well as the near one.
+                # So this tier never darkened when the structure was turned --
+                # measured 97.1-103.1% of the reset view over a full orbit --
+                # and it is deliberately not converted to the view-space light
+                # the GL tiers use. Measured, that conversion would move the
+                # exported figure further from the screen, not closer: the
+                # mean face difference goes 9.2% -> 14.9%.
                 lit = abs(float(np.dot(normal / length,
                                        np.array([0.42, 0.62, 0.66]))))
                 factor = 0.55 + 0.45 * min(lit / 0.99, 1.0)

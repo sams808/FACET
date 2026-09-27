@@ -105,16 +105,22 @@ class PlanesPanel(QWidget):
         box = QVBoxLayout(group)
         box.setSpacing(4)
 
-        add = QHBoxLayout()
+        # Two rows: the preset list and the typed indices together asked for
+        # more width than the panel has, and the combo was rendering "choose..."
+        # as "cho...".
         self.preset = QComboBox()
-        self.preset.addItem("choose…", None)
+        self.preset.addItem("choose a plane…", None)
         for label, hkl in PRESETS:
             self.preset.addItem(label, hkl)
         self.preset.currentIndexChanged.connect(self._add_preset)
-        add.addWidget(QLabel("add"))
-        add.addWidget(self.preset)
+        chrome.name_inside(
+            self.preset, "preset",
+            tip="Add one of the common planes by name, instead of typing its "
+                "indices.")
+        box.addWidget(self.preset)
 
-        add.addSpacing(10)
+        add = QHBoxLayout()
+        add.setSpacing(chrome.FIELD_SPACING)
         add.addWidget(QLabel("h"))
         self.new_h = _index_spin(1)
         add.addWidget(self.new_h)
@@ -151,7 +157,9 @@ class PlanesPanel(QWidget):
 
     def _slab_group(self) -> QWidget:
         group = QGroupBox("Slab — show only what lies between two planes")
-        row = QHBoxLayout(group)
+        # Stacked, not side by side: two form layouts competing for a
+        # 398 px panel squeeze each other's label columns to nothing.
+        row = QVBoxLayout(group)
         row.setSpacing(12)
 
         self.slab_on = QCheckBox("enabled")
