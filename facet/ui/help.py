@@ -487,6 +487,11 @@ atom instead — useful when the site you are examining is at the edge of the
 cell and keeps swinging out of frame. The picture does not jump when you choose
 it: the camera pans so that the atom is where the middle of the view already
 was, and nothing grows or shrinks.</p>
+<p>A site you cannot find in the view can be reached from the site list on the
+left: double-click it, or right-click it for the same two choices. Where a site
+is drawn several times over — once per cell of the block — the copy nearest the
+middle of the block is the one used, since turning about one at the edge puts
+the rest of the structure off to one side.</p>
 <p>The toolbar says which atom it is for as long as it is set. <b>C</b> puts the
 centre back at the middle of the cell, <b>Esc</b> clears it along with the
 selection and any measurement, and panning with the right or middle button moves

@@ -107,6 +107,14 @@ class PreviewWindow(QMainWindow):
 
         self.site_list = QListWidget()
         self.site_list.currentRowChanged.connect(self._on_site_row)
+        # Double-click to turn about a site. The list is the only place that
+        # names every site, so it is where a site that cannot be found in the
+        # view -- buried, off frame, one of forty -- has to be reachable from.
+        self.site_list.itemDoubleClicked.connect(self._on_site_double_click)
+        self.site_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.site_list.customContextMenuRequested.connect(self._site_menu)
+        self.site_list.setToolTip(
+            "Double-click a site to turn the view about it")
 
         self.structure_panel = StructureList()
         self.structure_panel.set_project(self.project)
@@ -922,6 +930,75 @@ class PreviewWindow(QMainWindow):
             self.site_index = self._rows[row]
             self._rebuild()
 
+    def _atom_of_site(self, site_index: int) -> int | None:
+        """A drawn atom of a site: the one nearest the middle of the cell.
+
+        A site is drawn as many times as the cell range repeats it, and they
+        are not interchangeable for this purpose -- turning about a copy at the
+        edge of the block puts the rest of the structure off to one side. The
+        one nearest the middle is the copy the eye takes as the site.
+        """
+        import numpy as np
+
+        scene = self.scene
+        if scene is None or scene.n_atoms == 0:
+            return None
+        which = np.flatnonzero(
+            np.asarray(scene.atom_site) == int(site_index))
+        if not len(which):
+            return None
+        centre = self._cell_centre()
+        if centre is None:
+            centre = scene.center
+        offsets = np.linalg.norm(
+            scene.atom_position[which] - np.asarray(centre, float), axis=1)
+        return int(which[int(np.argmin(offsets))])
+
+    def _center_on_site(self, site_index: int) -> None:
+        """Turn the view about a site chosen by name rather than by clicking."""
+        index = self._atom_of_site(site_index)
+        if index is None:
+            self.statusBar().showMessage(
+                "That site is not drawn at the moment.", 6000)
+            return
+        self._center_on_atom(index, self.scene.atom_label[index])
+
+    def _on_site_double_click(self, item) -> None:
+        row = self.site_list.row(item)
+        if 0 <= row < len(getattr(self, "_rows", [])):
+            self._center_on_site(self._rows[row])
+
+    def _site_menu(self, position) -> None:
+        item = self.site_list.itemAt(position)
+        if item is None:
+            return
+        menu = self._build_site_menu(self.site_list.row(item))
+        if menu is not None:
+            menu.exec(self.site_list.viewport().mapToGlobal(position))
+
+    def _build_site_menu(self, row: int):
+        """The site list's menu, built but not shown.
+
+        Separated for the same reason as the viewport's: the contents are the
+        part worth testing, and exec() would block a test forever.
+        """
+        from PySide6.QtWidgets import QMenu
+
+        if not (0 <= row < len(getattr(self, "_rows", []))):
+            return None
+        site_index = self._rows[row]
+        index = self._atom_of_site(site_index)
+        menu = QMenu(self)
+        chrome.apply(menu, self.theme)
+        turn = menu.addAction(
+            f"Rotate about {self.scene.atom_label[index]}"
+            if index is not None else "Rotate about this site")
+        turn.setEnabled(index is not None)
+        turn.triggered.connect(lambda: self._center_on_site(site_index))
+        menu.addAction("Rotate about the cell centre").triggered.connect(
+            self._center_on_cell)
+        return menu
+
     def _on_labels(self) -> None:
         self.labels.atom = self.atom_label_box.currentData()
         self.labels.bond = self.bond_label_box.currentData()
@@ -1225,12 +1302,17 @@ class PreviewWindow(QMainWindow):
         self._on_presentation_change("removed every override")
 
     def _focus_atom(self, index: int) -> None:
+        """Show an atom named somewhere else -- an override row, say.
+
+        It used to draw a ring round it and nothing more, which shows nothing
+        at all when the atom is behind the structure or outside the frame: the
+        two cases where being shown it is the point. It now brings the atom to
+        the middle of the view, where a ring round it means something.
+        """
         if self.scene is None or not (0 <= index < self.scene.n_atoms):
             return
         self.view.select_atom(index)
-        self.statusBar().showMessage(
-            self.scene.atom_label[index] + " ("
-            + self.scene.atom_element[index] + ")", 6000)
+        self._center_on_atom(index, self.scene.atom_label[index])
 
     def _on_context_menu(self, atom_index: int, global_pos=None) -> None:
         """Raise the right-click menu for whatever is under the pointer."""

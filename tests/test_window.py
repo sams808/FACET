@@ -525,3 +525,89 @@ def test_closing_the_last_structure_clears_the_viewport(window, qapp):
     assert window.view.scene is None, (
         "the viewport is still holding the structure that was closed")
     assert window.site_list.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# reaching a site that cannot be clicked
+# ---------------------------------------------------------------------------
+
+def test_the_site_list_centres_on_the_copy_nearest_the_cell_centre(window):
+    """A site is drawn once per repeat, and they are not interchangeable.
+
+    Turning about a copy at the edge of the block puts the rest of the
+    structure off to one side. The copy nearest the middle is the one the eye
+    takes as the site.
+    """
+    scene = window.scene
+    centre = np.asarray(window._cell_centre(), float)
+    for row in range(window.site_list.count()):
+        site = window._rows[row]
+        index = window._atom_of_site(site)
+        assert index is not None
+        assert int(scene.atom_site[index]) == site
+
+        copies = np.flatnonzero(np.asarray(scene.atom_site) == site)
+        assert len(copies) > 1, "this site is drawn only once; nothing to choose"
+        distances = np.linalg.norm(scene.atom_position[copies] - centre, axis=1)
+        chosen = np.linalg.norm(scene.atom_position[index] - centre)
+        assert chosen == pytest.approx(distances.min())
+
+
+def test_double_clicking_a_site_turns_the_view_about_it(window, qapp):
+    """The site list names every site; it is how you reach one you cannot see.
+
+    The rotation centre could otherwise only be set by right-clicking the atom
+    in the 3-D view, which needs it to be visible, findable and clickable --
+    and the site worth turning about is often the one that is none of those.
+    """
+    for row in range(window.site_list.count()):
+        item = window.site_list.item(row)
+        index = window._atom_of_site(window._rows[row])
+        position = window.scene.atom_position[index].astype(float).copy()
+
+        window._on_site_double_click(item)
+        qapp.processEvents()
+        assert window.view.camera.target == pytest.approx(position, abs=1e-9)
+        assert window.view.pivot_caption == window.scene.atom_label[index]
+
+
+def test_the_site_list_menu_offers_the_centre(window):
+    menu = window._build_site_menu(0)
+    assert menu is not None
+    texts = [a.text() for a in menu.actions()]
+    assert any(t.startswith("Rotate about") for t in texts), texts
+    assert "Rotate about the cell centre" in texts
+
+    index = window._atom_of_site(window._rows[0])
+    assert texts[0] == f"Rotate about {window.scene.atom_label[index]}"
+    assert window._build_site_menu(-1) is None
+    assert window._build_site_menu(10_000) is None
+
+
+def test_showing_an_atom_brings_it_into_view(window, qapp):
+    """"Show me this atom" used to draw a ring and nothing else.
+
+    Which shows nothing at all when the atom is behind the structure or outside
+    the frame -- the two cases where being shown it is the point. The overrides
+    panel asks for this by double-clicking an atom override.
+    """
+    scene = window.scene
+    far = int(np.argmax(np.linalg.norm(
+        scene.atom_position - scene.center, axis=1)))
+    before = window.view.camera.target.copy()
+
+    window._focus_atom(far)
+    qapp.processEvents()
+
+    assert window.view._selected == far
+    assert np.linalg.norm(window.view.camera.target - before) > 1e-6, (
+        "the camera did not move, so the atom was not shown")
+    assert window.view.camera.target == pytest.approx(
+        scene.atom_position[far].astype(float), abs=1e-9)
+
+
+def test_centring_on_a_site_that_is_not_drawn_says_so(window, qapp):
+    """Rather than moving the view somewhere arbitrary, or doing nothing."""
+    window._center_on_site(10_000)
+    qapp.processEvents()
+    assert "not drawn" in window.statusBar().currentMessage()
