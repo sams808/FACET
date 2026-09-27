@@ -378,11 +378,21 @@ class TestCutoffExplorer:
         assert w.v_bond == pytest.approx(target_v, rel=1e-6)
 
     def test_the_threshold_is_clamped_to_the_visible_axis(self, qapp, result):
+        """To the axis this site actually draws, not to a fixed 0.6 v.u.
+
+        The name was always right and the constant was not: the axis now grows
+        to hold the site's own contacts, and on a silicate every one of them
+        lies above 0.6, so a clamp there stopped the threshold short of where
+        the coordination number changes.
+        """
         w = self._widget(qapp, result)
+        low, high = w._data_range()
         w.set_threshold(1e6)
-        assert w.v_bond <= 0.6
+        assert w.v_bond <= high
         w.set_threshold(-5.0)
-        assert w.v_bond >= 0.004
+        assert w.v_bond >= low
+        # the shipped span is a floor, so a site that fitted before still does
+        assert low <= 0.004 and high >= 0.6
 
     def test_the_reference_distance_can_be_cleared(self, qapp, result):
         w = self._widget(qapp, result)
@@ -493,3 +503,70 @@ def test_the_axis_caption_does_not_sit_on_the_top_tick(qapp):
     tick_centre = e._cn_to_y(cn_max, cn_max)
     assert abs(caption_centre - tick_centre) >= 10, (
         "the CN caption and the top tick overlap")
+
+
+def test_no_contact_is_drawn_outside_the_plot(qapp):
+    """The fault the user saw: the axis stopped and the plot did not.
+
+    `_v_to_x` clamped only the low end against a fixed V_MAX of 0.6 v.u., a
+    span chosen for Bi-O. A silicon-oxygen bond is about 1.0 v.u. and a
+    phosphorus-oxygen bond more, so the tick, the step and the plateau shading
+    for every one of those contacts were painted past `plot.right()`, onto the
+    widget's margin, and cut off at its edge. Measured over the reference
+    collection, 81 of 143 sites had at least one contact outside the box, the
+    worst 213 px past the right edge of a 1088 px plot.
+
+    Run over every site of every structure available, because the sites that
+    broke were not the ones the explorer was designed around.
+    """
+    from pathlib import Path as _Path
+
+    from facet.core import bv, cif, coordination
+    from facet.ui.cutoff_explorer import CutoffExplorer
+
+    folder = _Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs")
+    if not folder.is_dir():
+        pytest.skip("the CIF collection is not present")
+
+    widget = CutoffExplorer()
+    widget.resize(1148, 230)
+    checked = 0
+    for path in sorted(folder.glob("*.cif"))[:18]:
+        try:
+            structure = cif.read(str(path))
+            results = coordination.analyse_structure(structure, bv.DEFAULT)
+        except Exception:
+            continue
+        for result in results:
+            values = [c.valence for c in result.contacts if c.has_valence]
+            if not values:
+                continue
+            widget.set_result(result)
+            widget._layout()
+            checked += 1
+            for v in values:
+                x = widget._v_to_x(v)
+                assert widget._plot.left() - 0.5 <= x <= widget._plot.right() + 0.5, (
+                    f"{path.name} {result.label}: a contact at {v:.4f} v.u. is "
+                    f"drawn at x={x:.0f}, outside the plot "
+                    f"{widget._plot.left():.0f}..{widget._plot.right():.0f}")
+    assert checked > 40, f"only {checked} sites were actually checked"
+
+
+def test_the_axis_holds_the_threshold_wherever_it_is(qapp):
+    """One threshold serves the whole structure, and sites differ.
+
+    A value set on a site with strong bonds must not leave the marker off the
+    end of the plot when a site with weak ones is selected.
+    """
+    from facet.ui.cutoff_explorer import CutoffExplorer
+
+    widget = CutoffExplorer()
+    widget.resize(1148, 230)
+    widget._layout()
+    for v in (0.004, 0.02, 0.075, 0.6, 1.5, 3.0):
+        widget.v_bond = v
+        low, high = widget._v_range()
+        assert low <= v <= high, (v, low, high)
+        x = widget._v_to_x(v)
+        assert widget._plot.left() - 0.5 <= x <= widget._plot.right() + 0.5

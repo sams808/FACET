@@ -86,7 +86,11 @@ class CutoffExplorer(QWidget):
         self.update()
 
     def set_threshold(self, v: float, emit: bool = False) -> None:
-        self.v_bond = float(np.clip(v, V_MIN, V_MAX))
+        # Clamped to what the site has, not to a fixed 0.6: on a silicate
+        # every bond lies above that, so the threshold could not be dragged to
+        # where the coordination number actually changes.
+        low, high = self._data_range()
+        self.v_bond = float(np.clip(v, low, high))
         if emit:
             self.thresholdChanged.emit(self.v_bond)
         self.update()
@@ -126,13 +130,51 @@ class CutoffExplorer(QWidget):
         return QColor("#14161b")
 
     # -- axis mapping ------------------------------------------------------
+    def _data_range(self) -> tuple[float, float]:
+        """The valences this site actually has, with a margin.
+
+        V_MIN and V_MAX are floors, not the axis. They were chosen for Bi-O,
+        whose strongest contact is about 0.5 v.u.; a silicon-oxygen bond is
+        about 1.0 and a phosphorus-oxygen bond more. With a fixed top, 81 of
+        143 sites in the reference collection had at least one contact mapped
+        past the right-hand edge of the plot -- and since `_v_to_x` clamped only
+        the low end, the tick, the step and the shading for those contacts were
+        painted outside the box and cut off at the widget's edge.
+
+        Keeping the shipped span as a floor means a site that fitted before
+        still looks exactly as it did.
+        """
+        lo, hi = V_MIN, V_MAX
+        if self.result is not None:
+            values = [c.valence for c in self.result.contacts
+                      if c.has_valence and c.valence > 0]
+            if values:
+                hi = max(hi, max(values) * 1.12)
+                lo = min(lo, min(values) / 1.12)
+        return lo, hi
+
+    def _v_range(self) -> tuple[float, float]:
+        """The axis as drawn: the data, and the threshold wherever it sits.
+
+        The threshold is included so that a value carried over from another
+        site -- it is one setting for the whole structure -- cannot leave the
+        marker off the end of the plot.
+        """
+        lo, hi = self._data_range()
+        v = float(self.v_bond)
+        if v > 0:
+            lo, hi = min(lo, v / 1.05), max(hi, v * 1.05)
+        return lo, hi
+
     def _v_to_x(self, v: float) -> float:
-        lo, hi = math.log10(V_MIN), math.log10(V_MAX)
-        t = (math.log10(max(float(v), V_MIN)) - lo) / (hi - lo)
+        v_lo, v_hi = self._v_range()
+        lo, hi = math.log10(v_lo), math.log10(v_hi)
+        t = (math.log10(min(max(float(v), v_lo), v_hi)) - lo) / (hi - lo)
         return self._plot.left() + t * self._plot.width()
 
     def _x_to_v(self, x: float) -> float:
-        lo, hi = math.log10(V_MIN), math.log10(V_MAX)
+        v_lo, v_hi = self._v_range()
+        lo, hi = math.log10(v_lo), math.log10(v_hi)
         t = (x - self._plot.left()) / max(self._plot.width(), 1.0)
         return float(10 ** (lo + np.clip(t, 0.0, 1.0) * (hi - lo)))
 
@@ -298,8 +340,9 @@ class CutoffExplorer(QWidget):
         if not values:
             return
 
+        v_lo, v_hi = self._v_range()
         path = QPainterPath()
-        x = self._v_to_x(V_MIN)
+        x = self._v_to_x(v_lo)
         y = self._cn_to_y(len(values), cn_max)
         path.moveTo(x, y)
         for k, v in enumerate(reversed(values), start=1):
@@ -309,7 +352,7 @@ class CutoffExplorer(QWidget):
             path.lineTo(xv, y)
             y = self._cn_to_y(len(values) - k, cn_max)
             path.lineTo(xv, y)
-        path.lineTo(self._v_to_x(V_MAX), y)
+        path.lineTo(self._v_to_x(v_hi), y)
 
         p.setPen(QPen(self._ink, 2.0, Qt.SolidLine, Qt.FlatCap, Qt.MiterJoin))
         p.setBrush(Qt.NoBrush)
@@ -348,7 +391,8 @@ class CutoffExplorer(QWidget):
         param = self._dominant_param()
         if param is not None and self.reference_distance:
             v = float(param.valence(self.reference_distance))
-            if V_MIN < v < V_MAX:
+            v_lo, v_hi = self._v_range()
+            if v_lo < v < v_hi:
                 marks.append((v, f"{self.reference_distance:.2f} Å "
                                  f"convention", QColor("#b08a5a")))
 
