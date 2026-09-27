@@ -243,6 +243,53 @@ def build_installer(archive: Path) -> Path:
     return exe
 
 
+def write_dist_readme() -> None:
+    """The note beside the artefacts, naming this version's files.
+
+    It used to be a static file that nothing updated, so it named the previous
+    version's installer -- in a folder that keeps every build ever made, where
+    the names differ by one character. It is the note read when choosing which
+    file to send to someone, so it is written by the build that makes them.
+    """
+    (DIST / "README.md").write_text(f"""\
+# dist/ - the built application
+
+This folder is where the build puts everything, and it keeps **every version
+ever built**. The files below are the ones from the most recent build; anything
+else here is older, and is not what you want to hand to anybody.
+
+Its contents are **not in the repository**: `{NAME}-Setup-{__version__}.exe` is
+over GitHub's 100 MB per-file limit, and a repository that carries its own
+binaries becomes slow to clone for no benefit. Binaries belong in a GitHub
+**Release**, which allows 2 GB per file.
+
+## Building
+
+```
+py -3.11 tools/build_exe.py
+```
+
+Takes a few minutes. This build produced:
+
+| | For |
+|---|---|
+| `{NAME}/` | **your own use.** Run `{NAME}.exe` from inside it. |
+| `{NAME}-Setup-{__version__}.exe` | **what you send to a collaborator.** |
+| `{NAME}-{__version__}.zip` | for anyone who would rather not run an installer. |
+
+`py -3.11 tools/build_exe.py --app` builds only the application folder, which is
+the quicker loop while developing.
+
+## Before handing a build to anyone
+
+`THIRD_PARTY_NOTICES.md` in the repository root has the licence checklist, and
+`BUILDING.md` explains why the application is a folder rather than a single file
+-- it is an LGPL obligation, not a preference. The SmartScreen warning on first
+run is expected: the executable is not code-signed. Say so in the message that
+carries it, or it reads as a virus warning.
+""", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=f"Build {NAME}")
     parser.add_argument("--app", action="store_true",
@@ -261,13 +308,26 @@ def main() -> int:
     archive = zip_app()
     build_installer(archive)
 
+    write_dist_readme()
+
     print()
     print("Done. In dist/:")
+    older = []
     for item in sorted(DIST.iterdir()):
-        if item.is_file():
-            print(f"  {item.name:40s} {item.stat().st_size / 1e6:6.0f} MB")
-        else:
+        if not item.is_file():
             print(f"  {item.name + '/':40s} (run {NAME}.exe from here)")
+            continue
+        # Every build ever made stays here, and the names differ by one
+        # character. Whichever is handed on is chosen by reading this list.
+        stale = item.name.startswith(NAME) and __version__ not in item.name
+        note = "  <- an older build" if stale else ""
+        if stale:
+            older.append(item.name)
+        print(f"  {item.name:40s} {item.stat().st_size / 1e6:6.0f} MB{note}")
+    if older:
+        print()
+        print(f"  {len(older)} file(s) from an earlier version are still here. "
+              f"Send {NAME}-Setup-{__version__}.exe.")
     return 0
 
 

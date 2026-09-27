@@ -4,7 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "facet"
-version = "0.1.0"
+# Read from facet/version.py, which calls itself the single source of truth
+# and was not: this said 0.1.0 while the application said 0.3.0, so anything
+# installed from the repository reported a version three releases old.
+dynamic = ["version"]
 description = "Coordination analysis from crystal structure files, cut by bond valence rather than by distance"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,6 +35,9 @@ dev = ["pytest>=8.0", "pytest-qt>=4.4"]
 
 [project.gui-scripts]
 facet = "facet.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "facet.version.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["facet*"]
