@@ -335,8 +335,18 @@ class Renderer:
 
         if scene is not None:
             self._draw_spheres(view, proj, light_view, picking)
-            self._draw_tubes(view, proj, light_view, picking)
             if not picking:
+                # Atoms are the only pickable thing, so they are the only thing
+                # drawn into the pick pass. A bond used to be drawn there with
+                # an id of zero, meaning "background" -- but it still wrote
+                # depth, so it did not read as background, it read as a hole.
+                # Measured on Bi2O3: a Bi2 drawn 19 px across had a dead cross
+                # through the middle of it where its own bonds crossed its
+                # centre, and clicking the middle of the atom selected nothing.
+                # Leaving bonds out entirely picks the atom behind, which is
+                # what the click meant, and is what the software tier -- which
+                # never knew about bonds -- has always done.
+                self._draw_tubes(view, proj, light_view, picking)
                 self._draw_lines(view, proj)
                 self._sort_transparent(view, scene)
                 self._draw_polyhedra(view, proj, light_view, scene)
@@ -696,6 +706,23 @@ class Renderer:
         p.release()
         if self.target_fbo is None:
             self._composite.release()
+
+    def bind_target(self, fbo, width: int, height: int) -> None:
+        """Point the context back at a framebuffer, at a viewport of this size.
+
+        ``reset_state`` deliberately binds nothing -- it is called straight
+        after a render that left the right framebuffer bound. Rendering to an
+        image does not: it binds buffers of its own, at the size of the image,
+        and leaves them that way. Anything drawn afterwards, a QPainter overlay
+        included, then goes to the wrong surface through the wrong viewport,
+        which is how a stereo pair composed correctly at 814 by 302 came to be
+        drawn as one eye stretched across the middle of the widget.
+        """
+        try:
+            self.gl.glBindFramebuffer(GL_FRAMEBUFFER, int(fbo))
+            self.gl.glViewport(0, 0, max(1, int(width)), max(1, int(height)))
+        except Exception:
+            pass                    # a context that cannot, will not be drawn
 
     def reset_state(self) -> None:
         """Hand the context back in a state QPainter can draw into.

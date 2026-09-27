@@ -157,3 +157,72 @@ def output_size(mode: Mode, width: int, height: int,
     if mode in (Mode.SIDE_BY_SIDE, Mode.CROSS_EYED):
         return width * 2 + max(int(gap), 0), height
     return width, height
+
+
+# ---------------------------------------------------------------------------
+# where each eye's image sits
+# ---------------------------------------------------------------------------
+#
+# An anaglyph superimposes the two images, so the combined picture is the size
+# of one eye and a point in it means the same thing in both. Side by side does
+# not: the picture is two panes and a seam, and a point in it belongs to one eye
+# or to neither. Everything that has to turn a position in the combined image
+# back into a position in a view -- picking an atom, drawing a label on one --
+# needs that arithmetic, so it lives here, beside the composition it has to
+# agree with, rather than being worked out again by each caller.
+
+
+def pane_size(mode: Mode, width: int, height: int,
+              gap: int = 8) -> tuple[int, int, int]:
+    """One eye's size and the gap, for a pair that fits in ``width x height``.
+
+    Each eye keeps the *area's* proportions, so the pair is the same picture
+    twice at half the scale rather than two tall slices of it. Rendering each
+    eye at the full size and fitting the double-width result in afterwards --
+    what the shipped build did -- leaves the pair at half size in a band across
+    the top of the widget with the previous frame still showing underneath;
+    rendering each eye at half the width and the full height instead crops both
+    of them, which for a wide structure means neither eye shows all of it.
+
+    Returned rather than assumed so that everything -- the composition, the
+    labels drawn over it, the click that picks an atom out of it -- works from
+    one statement of where the two pictures are.
+    """
+    width, height = int(width), int(height)
+    if mode not in (Mode.SIDE_BY_SIDE, Mode.CROSS_EYED):
+        return width, height, 0
+    gap = min(max(int(gap), 0), max(width - 2, 0))
+    eye = max(1, (width - gap) // 2)
+    return eye, max(1, round(eye * height / max(width, 1))), gap
+
+
+def panes(mode: Mode, width: int, height: int,
+          gap: int = 8) -> tuple[tuple[int, int, int, int, int], ...]:
+    """Where each eye's image sits, as ``(eye, x, y, width, height)``.
+
+    ``width`` and ``height`` are one eye's. ``eye`` is the argument to
+    :meth:`~facet.gl.camera.Camera.for_eye`: ``-1`` for the left eye and ``+1``
+    for the right -- and ``0`` for the anaglyph modes, where the images are
+    superimposed and what the viewer is pointing at is the *fused* position,
+    which belongs to the undisplaced camera and not to either eye. In the
+    crossed layout the right eye's image is the one on the left.
+    """
+    w, h = int(width), int(height)
+    if mode not in (Mode.SIDE_BY_SIDE, Mode.CROSS_EYED):
+        return ((0, 0, 0, w, h),)
+    first = +1 if mode is Mode.CROSS_EYED else -1
+    return ((first, 0, 0, w, h),
+            (-first, w + max(int(gap), 0), 0, w, h))
+
+
+def locate(mode: Mode, width: int, height: int, x: float, y: float,
+           gap: int = 8) -> tuple[int, float, float] | None:
+    """Which eye a point in the combined image falls in.
+
+    ``(eye, x, y)`` in that eye's own image, or ``None`` for the seam between
+    the two, where there is nothing to point at.
+    """
+    for eye, x0, y0, w, h in panes(mode, width, height, gap):
+        if x0 <= x < x0 + w and y0 <= y < y0 + h:
+            return eye, x - x0, y - y0
+    return None

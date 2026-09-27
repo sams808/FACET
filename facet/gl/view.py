@@ -12,8 +12,10 @@ worse than one that draws flatly.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
 from PySide6.QtOpenGL import QOpenGLPaintDevice
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
@@ -54,6 +56,10 @@ class StructureView(QOpenGLWidget):
         self.setContextMenuPolicy(Qt.PreventContextMenu)
 
         self.camera = Camera()
+        # Which view the overlay and the picker are working in. None means the
+        # widget itself with the undisplaced camera, which is every case but
+        # one eye of a side-by-side pair and an export at another size.
+        self._view_override = None
         self.scene: Scene | None = None
         # Stereo is off by default and costs nothing while it is: the second
         # eye is only rendered when a mode asks for it.
@@ -325,8 +331,16 @@ class StructureView(QOpenGLWidget):
         w = int(width or self.width())
         h = int(height or self.height())
         if self.stereo.needs_two_eyes and self.scene is not None:
+            # Each eye at the size asked for, so the pair is wider than one of
+            # them. On screen the two have to share the window and each is
+            # necessarily half size; a file does not, and an exported pair is
+            # for fusing -- in a stereoscope, on a page -- where the detail in
+            # each eye is the whole point.
             left, right = self.stereo_pair(w, h, supersample)
-            return stereo_mod.combine(left, right, self.stereo)
+            pair = stereo_mod.combine(left, right, self.stereo,
+                                      gap_color=self._gap_color())
+            return self._draw_overlay_on(
+                pair, stereo_mod.panes(self.stereo, w, h), h)
         if self._renderer is None:
             # Render at the size asked for rather than grabbing the widget.
             # Grabbing ignores width and height entirely, so on a machine with
@@ -334,7 +348,9 @@ class StructureView(QOpenGLWidget):
             # the size of the window -- the one tier where a user is most likely
             # to need a bigger image than the screen.
             if self.scene is not None:
-                return self._render_to_image(self.camera, w, h)
+                return self._draw_overlay_on(
+                    self._render_to_image(self.camera, w, h),
+                    ((0, 0, 0, w, h),), h)
             return self.grab().toImage()
         self.makeCurrent()
         try:
@@ -343,6 +359,61 @@ class StructureView(QOpenGLWidget):
             self._renderer.target_fbo = previous
         finally:
             self.doneCurrent()
+        return self._draw_overlay_on(image, ((0, 0, 0, w, h),), h)
+
+    def _draw_overlay_on(self, image, panes, pane_height: int):
+        """Put the labels, the gizmo and the measurement onto an exported image.
+
+        Without this an exported PNG carried none of them. The renderers draw
+        geometry; everything written on the picture is painted over the top in
+        ``paintGL``, and the export path never did it -- so a user who turned on
+        bond-valence labels to make a figure got the figure without them, while
+        the SVG of the same view had all 370 of them.
+
+        The annotation is scaled by how much larger the export is than the
+        window, so that a figure exported at three times the size is an
+        enlargement of what is on screen rather than the same picture with
+        hairline text on it.
+        """
+        if self.scene is None or image is None or image.isNull():
+            return image
+        from PySide6.QtGui import QImage
+
+        # Not premultiplied. Qt's raster engine draws text with the display's
+        # subpixel antialiasing on that format and only on that format, whatever
+        # the font asks for -- measured here: orange and blue fringes on 62% of
+        # the pixels of a line of text, against none on any other format. Those
+        # fringes are tuned to one monitor's subpixel order and are a coloured
+        # halo everywhere else, including in print. The renderers hand back
+        # premultiplied images, so the conversion belongs here.
+        if image.format() == QImage.Format_ARGB32_Premultiplied:
+            image = image.convertToFormat(QImage.Format_ARGB32)
+        scale = pane_height / max(self.height(), 1)
+        painter = QPainter(image)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.TextAntialiasing, True)
+            # Greyscale antialiasing, not the screen's subpixel kind. Subpixel
+            # rendering puts orange on one edge of every stroke and blue on the
+            # other, which is invisible on the display it was tuned for and is
+            # a coloured fringe on every other -- in print, in a projected
+            # slide, on a colleague's monitor.
+            font = QFont(painter.font())
+            font.setStyleStrategy(QFont.StyleStrategy(
+                font.styleStrategy().value
+                | QFont.StyleStrategy.NoSubpixelAntialias.value))
+            painter.setFont(font)
+            for eye, x0, y0, pane_w, pane_h in panes:
+                camera = (self.camera if eye == 0 else
+                          self.camera.for_eye(eye, self.stereo_separation))
+                painter.save()
+                painter.translate(x0, y0)
+                painter.setClipRect(QRectF(0, 0, pane_w, pane_h))
+                with self._in_view(camera, pane_w, pane_h, scale):
+                    self._paint_overlay(painter)
+                painter.restore()
+        finally:
+            painter.end()
         return image
 
     # -- GL lifecycle ------------------------------------------------------
@@ -410,13 +481,31 @@ class StructureView(QOpenGLWidget):
         h = max(1, int(self.height() * ratio))
 
         stereo_image = None
+        panes = ()
         if self.stereo.needs_two_eyes and self.scene is not None:
             # Both eyes are rendered offscreen and combined on the pixels, then
             # the result is blitted with QPainter. Doing it that way rather than
             # with colour masks in the shader is what lets the software tier and
             # the image export use exactly the same stereo code.
-            left, right = self.stereo_pair(w, h)
-            stereo_image = stereo_mod.combine(left, right, self.stereo)
+            #
+            # Each eye is rendered at the size of the pane it will occupy, so
+            # the combined image is exactly the size of the widget and goes in
+            # pixel for pixel. Rendering both at the full size and fitting the
+            # double-width result in afterwards is what the shipped build did,
+            # and it put the pair at half size in a band across the top with
+            # the *previous* frame still showing underneath.
+            ox, oy, panes, ew, eh, gap = self._stereo_layout(w, h)
+            left, right = self.stereo_pair(ew, eh)
+            stereo_image = stereo_mod.combine(
+                left, right, self.stereo, gap=gap,
+                gap_color=self._gap_color())
+            if self._renderer is not None:
+                # Rendering the eyes bound framebuffers of its own, at the size
+                # of one eye. Everything below draws with a QPainter, which goes
+                # to whatever is bound through whatever viewport is set.
+                self._renderer.bind_target(
+                    self.defaultFramebufferObject(), w, h)
+                self._renderer.reset_state()
         elif self._renderer is not None and self.scene is not None:
             self._renderer.target_fbo = self.defaultFramebufferObject()
             try:
@@ -437,16 +526,73 @@ class StructureView(QOpenGLWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         if stereo_image is not None:
-            painter.drawImage(0, 0, stereo_image.scaled(
-                w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            # Nothing else clears the widget on this path, and the pair does
+            # not cover all of it, so the ground is painted first -- otherwise
+            # the margin keeps whatever frame was there before, which is how a
+            # side-by-side view came to show the previous mono one underneath.
+            painter.fillRect(self.rect(), self._ink(
+                self.theme.background if self.theme
+                else theme_mod.FALLBACK_BACKGROUND))
+            # Drawn in logical coordinates at one device pixel per image pixel;
+            # letting the painter's own transform do the conversion is what
+            # makes it land correctly on a display that is not at a ratio of one.
+            painter.drawImage(
+                QRectF(ox / ratio, oy / ratio,
+                       stereo_image.width() / ratio,
+                       stereo_image.height() / ratio),
+                stereo_image)
         elif self._renderer is None:
             self._paint_fallback(painter)
-        # The overlay -- labels, the gizmo, a measurement -- is drawn once, from
-        # the centre view. Drawing it per eye would put the text at two different
-        # depths and it would not fuse; a single overlay reads as floating in
-        # front, which is where an annotation belongs.
-        self._paint_overlay(painter)
+
+        # The overlay -- labels, the gizmo, a measurement -- is drawn once per
+        # pane. Superimposed modes have a single pane and the undisplaced
+        # camera, so an anaglyph gets one overlay at screen depth, which is
+        # where an annotation belongs. Side by side has two, each with its own
+        # eye's camera: there is no single place to put a label on a picture
+        # that is two pictures, and the parallax that puts it in the right one
+        # is the same parallax that makes it fuse onto its atom.
+        if not panes:
+            self._paint_overlay(painter)        # the widget, the mono camera
+        else:
+            for eye, x0, y0, pane_w, pane_h in panes:
+                camera = (self.camera if eye == 0 else
+                          self.camera.for_eye(eye, self.stereo_separation))
+                painter.save()
+                painter.translate((ox + x0) / ratio, (oy + y0) / ratio)
+                painter.setClipRect(QRectF(0, 0, pane_w / ratio,
+                                           pane_h / ratio))
+                # The annotation shrinks with the picture it annotates, so a
+                # half-size eye gets half-size type rather than labels that
+                # overrun the atoms they name.
+                with self._in_view(camera, pane_w / ratio, pane_h / ratio,
+                                   pane_h / max(h, 1)):
+                    self._paint_overlay(painter)
+                painter.restore()
         painter.end()
+
+    def _stereo_layout(self, width: int, height: int):
+        """Where the pair sits in an area, and where each eye sits in the pair.
+
+        ``(x, y, panes, eye_width, eye_height, gap)``. One statement of the
+        layout, used by the painting and by the picking, because the two
+        disagreeing is exactly the fault this replaced: a click was answered by
+        the mono camera at the full widget size while the atom it was pointing
+        at had been drawn by an eye camera in half of it.
+        """
+        ew, eh, gap = stereo_mod.pane_size(self.stereo, width, height)
+        cw, ch = stereo_mod.output_size(self.stereo, ew, eh, gap)
+        return ((width - cw) / 2.0, (height - ch) / 2.0,
+                stereo_mod.panes(self.stereo, ew, eh, gap), ew, eh, gap)
+
+    def _gap_color(self) -> tuple[int, int, int]:
+        """The seam between two side-by-side images, in the theme's background.
+
+        Black on a white theme reads as part of the picture -- a dark bar
+        through the middle of the figure -- rather than as the join it is.
+        """
+        background = (self.theme.background if self.theme
+                      else theme_mod.FALLBACK_BACKGROUND)
+        return tuple(int(round(255 * float(c))) for c in background[:3])
 
     def _paint_fallback(self, painter: QPainter) -> None:
         if self._fallback is None or self.scene is None:
@@ -486,8 +632,47 @@ class StructureView(QOpenGLWidget):
         painter.drawText(self.rect(), Qt.AlignCenter,
                          "Open a structure, or drop a .cif file here")
 
+    # -- which view is being drawn or clicked in ---------------------------
+    #
+    # The overlay used to take the widget and the undisplaced camera as given.
+    # That is right for the ordinary case and wrong for two others: one eye of a
+    # side-by-side pair, which occupies half the widget and has a camera of its
+    # own, and an export, which is drawn at a size the widget never had. Both
+    # were wrong in the shipped build -- labels for a side-by-side pair landed
+    # hundreds of pixels from their atoms, and an exported PNG had none at all.
+
+    @contextmanager
+    def _in_view(self, camera, width: float, height: float,
+                 scale: float = 1.0):
+        """Draw or pick as if the view were this camera at this size.
+
+        ``scale`` multiplies the things that are measured in pixels rather than
+        in the scene -- type, pen widths, the gizmo -- so that a figure exported
+        at three times the size of the window is an enlargement of it and not
+        the same picture with hairline annotation.
+        """
+        previous = self._view_override
+        self._view_override = (camera, float(width), float(height),
+                               float(scale))
+        try:
+            yield
+        finally:
+            self._view_override = previous
+
+    def _view_camera(self) -> Camera:
+        return self.camera if self._view_override is None \
+            else self._view_override[0]
+
+    def _view_size(self) -> tuple[float, float]:
+        if self._view_override is None:
+            return float(self.width()), float(self.height())
+        return self._view_override[1], self._view_override[2]
+
+    def _view_scale(self) -> float:
+        return 1.0 if self._view_override is None else self._view_override[3]
+
     def _visible(self, positions: np.ndarray) -> np.ndarray:
-        return self.camera.project(positions, self.width(), self.height())
+        return self._view_camera().project(positions, *self._view_size())
 
     def _paint_labels(self, painter: QPainter) -> None:
         """Atom, bond, axis and measurement labels, de-cluttered and haloed."""
@@ -499,8 +684,12 @@ class StructureView(QOpenGLWidget):
                 settings.show_measurements and len(self._measure_chain) >= 2):
             return
 
+        camera = self._view_camera()
+        width, height = self._view_size()
+        scale = self._view_scale()
+
         font = QFont(painter.font())
-        font.setPointSizeF(max(6.0, settings.font_points))
+        font.setPointSizeF(max(6.0, settings.font_points) * scale)
         font.setBold(settings.bold)
         painter.setFont(font)
         metrics = QFontMetricsF(font)
@@ -509,14 +698,14 @@ class StructureView(QOpenGLWidget):
             return metrics.horizontalAdvance(text), metrics.height()
 
         placed = labels_mod.build(
-            s, self.camera, settings, width=self.width(), height=self.height(),
+            s, camera, settings, width=width, height=height,
             measure=measure, results=self.results, structure=self.structure,
             selected_site=self._selected_site())
 
         if settings.show_measurements and len(self._measure_chain) >= 2:
             placed += labels_mod.measurement_labels(
-                s, self.camera, self._measure_chain,
-                width=self.width(), height=self.height(),
+                s, camera, self._measure_chain,
+                width=width, height=height,
                 decimals=settings.decimals)
 
         base = (settings.color if settings.color is not None
@@ -534,7 +723,7 @@ class StructureView(QOpenGLWidget):
                 colour = self._ink(self.theme.subthreshold_color if self.theme
                                    else (0.62, 0.64, 0.68))
             self._draw_haloed(painter, label.text, label.x, label.y,
-                              colour, halo, settings.halo)
+                              colour, halo, settings.halo, scale)
 
     def _paint_axis_gizmo(self, painter: QPainter) -> None:
         """a, b and c drawn in the corner, showing which way the cell points.
@@ -546,13 +735,15 @@ class StructureView(QOpenGLWidget):
         """
         from .camera import quat_to_matrix
 
-        size = 46
-        margin = 14
-        cx = self.width() - size - margin
-        cy = self.height() - size - margin
+        width, height = self._view_size()
+        scale = self._view_scale()
+        size = 46 * scale
+        margin = 14 * scale
+        cx = width - size - margin
+        cy = height - size - margin
 
         orth = self.structure.cell.orth
-        rot = quat_to_matrix(self.camera.orientation)
+        rot = quat_to_matrix(self._view_camera().orientation)
 
         axes = []
         for i, name in enumerate(("a", "b", "c")):
@@ -571,7 +762,7 @@ class StructureView(QOpenGLWidget):
         colours = {"a": QColor("#e8674f"), "b": QColor("#7bc96f"),
                    "c": QColor("#5b9bd5")}
         font = QFont(painter.font())
-        font.setPointSizeF(8.5)
+        font.setPointSizeF(8.5 * scale)
         font.setBold(True)
         painter.setFont(font)
 
@@ -583,15 +774,15 @@ class StructureView(QOpenGLWidget):
             colour = QColor(colours[name])
             if dz < 0:
                 colour.setAlpha(120)          # pointing away from the viewer
-            painter.setPen(QPen(colour, 2.0, Qt.SolidLine, Qt.RoundCap))
+            painter.setPen(QPen(colour, 2.0 * scale, Qt.SolidLine, Qt.RoundCap))
             painter.drawLine(QPointF(cx, cy), QPointF(x2, y2))
             painter.setPen(colour)
-            self._draw_haloed(painter, name, x2 + 3, y2 + 4,
-                              colour, self._halo_color(), True)
+            self._draw_haloed(painter, name, x2 + 3 * scale, y2 + 4 * scale,
+                              colour, self._halo_color(), True, scale)
 
-        painter.setPen(QPen(QColor(150, 155, 165, 120), 1.0))
+        painter.setPen(QPen(QColor(150, 155, 165, 120), 1.0 * scale))
         painter.setBrush(Qt.NoBrush)
-        painter.drawEllipse(QPointF(cx, cy), 2.0, 2.0)
+        painter.drawEllipse(QPointF(cx, cy), 2.0 * scale, 2.0 * scale)
 
     def _halo_color(self) -> QColor:
         """A contrasting outline, so text reads over an atom, the background or
@@ -602,12 +793,13 @@ class StructureView(QOpenGLWidget):
 
     @staticmethod
     def _draw_haloed(painter: QPainter, text: str, x: float, y: float,
-                     colour: QColor, halo: QColor, enabled: bool) -> None:
+                     colour: QColor, halo: QColor, enabled: bool,
+                     scale: float = 1.0) -> None:
         if enabled:
             painter.setPen(halo)
             for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1),
                            (-1, -1), (1, -1), (-1, 1), (1, 1)):
-                painter.drawText(QPointF(x + dx, y + dy), text)
+                painter.drawText(QPointF(x + dx * scale, y + dy * scale), text)
         painter.setPen(colour)
         painter.drawText(QPointF(x, y), text)
 
@@ -626,29 +818,33 @@ class StructureView(QOpenGLWidget):
         px = self._visible(s.atom_position[i:i + 1])[0]
         if px[2] >= 0:
             return
+        scale = self._view_scale()
         r = self._screen_radius(s.atom_position[i], s.atom_radius[i])
         pen = QPen(self._ink(self.theme.selection_color if self.theme
-                            else (1.0, 0.84, 0.36)), 2.0)
+                            else (1.0, 0.84, 0.36)), 2.0 * scale)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
-        painter.drawEllipse(QPoint(int(px[0]), int(px[1])),
-                            int(r + 4), int(r + 4))
+        painter.drawEllipse(QPointF(px[0], px[1]),
+                            r + 4 * scale, r + 4 * scale)
         painter.setPen(self._ink(self.theme.selection_color if self.theme
                                  else (1.0, 0.84, 0.36)))
-        painter.drawText(QPoint(int(px[0]) + int(r) + 8, int(px[1]) - int(r) - 2),
+        painter.drawText(QPointF(px[0] + r + 8 * scale,
+                                 px[1] - r - 2 * scale),
                          s.atom_label[i])
 
     def _screen_radius(self, position, radius) -> float:
         """Radius in pixels of a sphere at a world position."""
-        centre = self.camera.project([position], self.width(), self.height())[0]
+        camera = self._view_camera()
+        size = self._view_size()
+        centre = camera.project([position], *size)[0]
         offset = np.array(position, float) + self.camera_right() * float(radius)
-        edge = self.camera.project([offset], self.width(), self.height())[0]
+        edge = camera.project([offset], *size)[0]
         return float(np.hypot(edge[0] - centre[0], edge[1] - centre[1]))
 
     def camera_right(self) -> np.ndarray:
         from .camera import quat_to_matrix
 
-        return quat_to_matrix(self.camera.orientation)[0, :3]
+        return quat_to_matrix(self._view_camera().orientation)[0, :3]
 
     def _paint_measurement(self, painter: QPainter) -> None:
         s = self.scene
@@ -656,12 +852,14 @@ class StructureView(QOpenGLWidget):
         if len(pts) < 2:
             return
         px = self._visible(np.array(pts))
-        pen = QPen(QColor(120, 220, 255), 1.6, Qt.DashLine)
+        scale = self._view_scale()
+        pen = QPen(QColor(120, 220, 255), 1.6 * scale, Qt.DashLine)
         painter.setPen(pen)
         for a, b in zip(px[:-1], px[1:]):
-            painter.drawLine(int(a[0]), int(a[1]), int(b[0]), int(b[1]))
+            painter.drawLine(QPointF(a[0], a[1]), QPointF(b[0], b[1]))
         for point in px:
-            painter.drawEllipse(QPoint(int(point[0]), int(point[1])), 3, 3)
+            painter.drawEllipse(QPointF(point[0], point[1]),
+                                3 * scale, 3 * scale)
 
     @staticmethod
     def _ink(rgb) -> QColor:
@@ -672,7 +870,13 @@ class StructureView(QOpenGLWidget):
     def _paint_status(self, painter: QPainter) -> None:
         painter.setPen(self._ink(self.theme.contrasting_ink() if self.theme
                                  else (0.82, 0.85, 0.89)))
-        rect = self.rect().adjusted(10, 0, -10, -8)
+        width, height = self._view_size()
+        scale = self._view_scale()
+        if scale != 1.0:
+            font = QFont(painter.font())
+            font.setPointSizeF(font.pointSizeF() * scale)
+            painter.setFont(font)
+        rect = QRectF(10 * scale, 0, width - 20 * scale, height - 8 * scale)
         painter.drawText(rect, Qt.AlignLeft | Qt.AlignBottom, self._status)
 
     # -- interaction -------------------------------------------------------
@@ -762,25 +966,59 @@ class StructureView(QOpenGLWidget):
             super().keyPressEvent(event)
 
     # -- picking -----------------------------------------------------------
+    def _pane_at(self, pos: QPoint):
+        """``(camera, x, y, width, height)`` for a click, in the view it lands in.
+
+        That is the widget and the undisplaced camera in every case but one:
+        under a side-by-side mode the widget holds two pictures, drawn by two
+        different cameras, and a click belongs to whichever it landed in. The
+        shipped build asked the mono camera at the full widget size where the
+        click was, which was out by more than a quarter of the width -- clicking
+        an atom picked a different one, or nothing.
+
+        ``None`` for the seam between the two, where nothing is drawn.
+        """
+        width, height = float(self.width()), float(self.height())
+        if not self.stereo.needs_two_eyes or self.scene is None:
+            return self.camera, float(pos.x()), float(pos.y()), width, height
+        ox, oy, _, ew, eh, gap = self._stereo_layout(width, height)
+        found = stereo_mod.locate(self.stereo, ew, eh,
+                                  pos.x() - ox, pos.y() - oy, gap)
+        if found is None:
+            return None
+        eye, x, y = found
+        camera = (self.camera if eye == 0 else
+                  self.camera.for_eye(eye, self.stereo_separation))
+        return camera, float(x), float(y), float(ew), float(eh)
+
     def pick_at(self, pos: QPoint) -> int | None:
-        if self._renderer is None or self.scene is None:
-            return self._pick_on_cpu(pos)
+        target = self._pane_at(pos)
+        if target is None or self.scene is None:
+            return None
+        camera, x, y, width, height = target
+        if self._renderer is None:
+            with self._in_view(camera, width, height):
+                return self._pick_on_cpu(QPointF(x, y))
         ratio = self.devicePixelRatioF()
         self.makeCurrent()
         try:
             index = self._renderer.pick(
-                self.camera,
-                max(1, int(self.width() * ratio)),
-                max(1, int(self.height() * ratio)),
-                int(pos.x() * ratio), int(pos.y() * ratio))
+                camera,
+                max(1, int(width * ratio)),
+                max(1, int(height * ratio)),
+                int(x * ratio), int(y * ratio))
         finally:
             self.doneCurrent()
         if index is None or not (0 <= index < self.scene.n_atoms):
             return None
         return int(index)
 
-    def _pick_on_cpu(self, pos: QPoint) -> int | None:
-        """Nearest projected atom, used by the QPainter fallback."""
+    def _pick_on_cpu(self, pos) -> int | None:
+        """Nearest projected atom, used by the QPainter fallback.
+
+        Projects through whichever view is current, so that under a
+        side-by-side mode it answers for the pane the click was in.
+        """
         s = self.scene
         if s is None or s.n_atoms == 0:
             return None

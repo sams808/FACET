@@ -628,3 +628,99 @@ def test_the_software_tier_draws_polyhedra(qapp, structure):
     with_polyhedron = colours(build_scene(structure, polyhedron_site=site))
     assert with_polyhedron != plain, "the polyhedron was not drawn"
     assert len(with_polyhedron) > len(plain)
+
+
+# ---------------------------------------------------------------------------
+# where the two pictures are
+# ---------------------------------------------------------------------------
+#
+# The composition was always right; what was missing was any statement of where
+# it put the two images, so everything that had to know -- the blit, the labels
+# drawn over it, the click that picks an atom out of it -- guessed, and guessed
+# differently.
+
+SIDE_MODES = (S.Mode.SIDE_BY_SIDE, S.Mode.CROSS_EYED)
+FLAT_MODES = (S.Mode.OFF, S.Mode.ANAGLYPH, S.Mode.ANAGLYPH_GREY)
+
+
+@pytest.mark.parametrize("mode", list(S.Mode))
+@pytest.mark.parametrize("area", [(738, 552), (1201, 800), (321, 321),
+                                  (1920, 1080), (64, 48)])
+def test_a_pair_composed_for_an_area_fits_in_it(mode, area):
+    """It must fit, or the blit scales it and every pixel measurement is out."""
+    width, height = area
+    ew, eh, gap = S.pane_size(mode, width, height)
+    cw, ch = S.output_size(mode, ew, eh, gap)
+    assert cw <= width and ch <= height
+    assert ew >= 1 and eh >= 1
+
+
+@pytest.mark.parametrize("mode", SIDE_MODES)
+@pytest.mark.parametrize("area", [(738, 552), (1201, 800), (1920, 1080)])
+def test_each_eye_keeps_the_proportions_of_the_area(mode, area):
+    """Two copies of the same picture, not two tall slices of it.
+
+    Giving each eye half the width and the full height crops both of them, so a
+    wide structure is cut off in both eyes at once -- and the aspect of what is
+    drawn no longer matches the window it was framed in.
+    """
+    width, height = area
+    ew, eh, gap = S.pane_size(mode, width, height)
+    assert ew / eh == pytest.approx(width / height, rel=0.01)
+    assert S.output_size(mode, ew, eh, gap)[0] == pytest.approx(width, abs=1)
+
+
+@pytest.mark.parametrize("mode", FLAT_MODES)
+def test_a_superimposed_mode_is_one_pane_and_the_fused_camera(mode):
+    """An anaglyph has one picture, and the viewer points at the fused image.
+
+    That position belongs to the undisplaced camera, not to either eye, which is
+    why the pane reports eye 0 rather than picking one of them.
+    """
+    panes = S.panes(mode, 800, 600)
+    assert len(panes) == 1
+    eye, x, y, w, h = panes[0]
+    assert (eye, x, y, w, h) == (0, 0, 0, 800, 600)
+
+
+@pytest.mark.parametrize("mode", SIDE_MODES)
+def test_the_crossed_layout_swaps_which_eye_is_on_the_left(mode):
+    panes = S.panes(mode, 400, 300, 8)
+    assert [p[0] for p in panes] == (
+        [+1, -1] if mode is S.Mode.CROSS_EYED else [-1, +1])
+    assert [p[1] for p in panes] == [0, 408]
+
+
+@pytest.mark.parametrize("mode", list(S.Mode))
+def test_every_point_of_a_pane_locates_back_to_it(mode):
+    """The round trip the picking depends on."""
+    ew, eh, gap = S.pane_size(mode, 738, 552)
+    for eye, x0, y0, w, h in S.panes(mode, ew, eh, gap):
+        for fx, fy in ((0.0, 0.0), (0.5, 0.5), (0.999, 0.999), (0.1, 0.9)):
+            x, y = x0 + fx * (w - 1), y0 + fy * (h - 1)
+            found = S.locate(mode, ew, eh, x, y, gap)
+            assert found is not None, (mode, x, y)
+            assert found[0] == eye
+            assert found[1] == pytest.approx(x - x0)
+            assert found[2] == pytest.approx(y - y0)
+
+
+@pytest.mark.parametrize("mode", SIDE_MODES)
+def test_the_seam_belongs_to_neither_eye(mode):
+    """There is nothing drawn there, so there is nothing to pick."""
+    ew, eh, gap = S.pane_size(mode, 738, 552)
+    assert gap >= 1
+    for x in range(ew, ew + gap):
+        assert S.locate(mode, ew, eh, x, eh // 2, gap) is None
+    assert S.locate(mode, ew, eh, -1, 5, gap) is None
+    assert S.locate(mode, ew, eh, 2 * ew + gap + 1, 5, gap) is None
+
+
+def test_the_gap_can_be_given_the_colour_of_the_ground(qapp):
+    """A black bar down the middle of a white figure reads as part of it."""
+    left = _solid(qapp, 40, 30, (200, 40, 40))
+    right = _solid(qapp, 40, 30, (40, 40, 200))
+    joined = S.side_by_side(left, right, gap=6, gap_color=(255, 255, 255))
+    assert joined.width() == 86
+    middle = joined.pixelColor(43, 15)
+    assert (middle.red(), middle.green(), middle.blue()) == (255, 255, 255)
