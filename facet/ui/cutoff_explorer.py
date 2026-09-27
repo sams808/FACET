@@ -172,10 +172,35 @@ class CutoffExplorer(QWidget):
         p.drawText(self.rect(), Qt.AlignCenter,
                    "Select a cation site to explore its coordination")
 
+    # Space above the highest gridline, so the top step of the staircase is
+    # inside the plot rather than on its edge, and so the threshold's grab
+    # handle has somewhere to sit.
+    HEADROOM = 16
+
+    def _small_font(self) -> QFont:
+        fnt = QFont(self.font())
+        fnt.setPointSizeF(max(7.0, fnt.pointSizeF() - 1.5))
+        return fnt
+
     def _layout(self) -> None:
+        """Size the plot, the rail and the space the labels below them need.
+
+        Done in two passes because the two depend on each other only one way
+        round: how many rows of reference labels are needed depends on where
+        they fall horizontally, which depends on the plot's left edge and width
+        -- and those do not depend on the rows. So the first pass fixes the
+        horizontal geometry and the second spends the vertical.
+        """
         f = QFontMetricsF(self.font())
-        top = f.height() + 10 if self.show_distance_axis else 8
-        bottom = f.height() * 2 + 26
+        small = QFontMetricsF(self._small_font())
+        top = (f.height() + 10 if self.show_distance_axis else 8) + self.HEADROOM
+
+        provisional = f.height() * 2 + 26
+        self._plot = QRectF(self.rect()).adjusted(46, top, -14, -provisional)
+        rows = self._reference_rows(small)
+
+        # rail, then one line per row of labels, then the readout
+        bottom = 24 + rows * (small.height() - 1) + f.height() + 6
         self._plot = QRectF(self.rect()).adjusted(46, top, -14, -bottom)
         self._rail = QRectF(self._plot.left(), self._plot.bottom() + 6,
                             self._plot.width(), 16)
@@ -224,8 +249,16 @@ class CutoffExplorer(QWidget):
                 p.setFont(self.font())
 
     def _cn_to_y(self, cn: float, cn_max: int) -> float:
+        """Where a coordination number sits in the plot.
+
+        The plot rectangle is the data box exactly: CN 0 is its bottom edge and
+        cn_max its top. The headroom above the top step is reserved by the
+        layout instead, so that the shaded plateau bands, the gridlines and the
+        staircase all share one boundary -- they did not before, and the
+        shading ran 16 px above the highest gridline.
+        """
         t = cn / max(cn_max, 1)
-        return self._plot.bottom() - t * (self._plot.height() - 16)
+        return self._plot.bottom() - t * self._plot.height()
 
     def _paint_grid(self, p: QPainter) -> None:
         r = self.result
@@ -249,7 +282,10 @@ class CutoffExplorer(QWidget):
             p.drawText(QRectF(2, y - 8, 40, 16),
                        Qt.AlignRight | Qt.AlignVCenter, str(cn))
         p.setPen(self._muted)
-        p.drawText(QRectF(2, self._plot.top() - 2, 40, 16),
+        # In the headroom, not on the top tick: the highest gridline now sits
+        # exactly at the top of the plot, so a caption placed there printed on
+        # top of the number beside it.
+        p.drawText(QRectF(2, self._plot.top() - self.HEADROOM - 2, 40, 16),
                    Qt.AlignRight | Qt.AlignVCenter, "CN")
         p.setFont(self.font())
 
@@ -302,12 +338,12 @@ class CutoffExplorer(QWidget):
             p.drawLine(QPointF(x, self._rail.center().y() - h / 2),
                        QPointF(x, self._rail.center().y() + h / 2))
 
-    def _paint_references(self, p: QPainter) -> None:
-        """Marks for the thresholds and rules a reader already knows."""
+    def _reference_marks(self) -> list:
+        """The thresholds and rules a reader already knows, as (v, label, col)."""
         r = self.result
-        marks: list[tuple[float, str, QColor]] = []
-
-        marks.append((r.v_list, "tabulate", QColor("#6f8cb0")))
+        if r is None:
+            return []
+        marks = [(r.v_list, "tabulate", QColor("#6f8cb0"))]
 
         param = self._dominant_param()
         if param is not None and self.reference_distance:
@@ -323,31 +359,52 @@ class CutoffExplorer(QWidget):
         if r.cn_gap and 0 < r.cn_gap < len(vals):
             v = math.sqrt(vals[r.cn_gap - 1] * vals[r.cn_gap])
             marks.append((v, "max gap", QColor("#7f9e79")))
+        return sorted(marks, key=lambda m: m[0])
 
-        fnt = QFont(self.font())
-        fnt.setPointSizeF(max(7.0, fnt.pointSizeF() - 1.5))
-        p.setFont(fnt)
-        fm = QFontMetricsF(fnt)
+    def _place_references(self, fm: QFontMetricsF) -> list:
+        """Lay the mark labels out, staggering the ones that collide.
 
-        # Stagger labels that would otherwise collide. The 0.075 v.u. threshold
-        # sits at 3.05 A for Bi-O, which is almost exactly the 3.00 A
-        # convention -- so these marks land on top of each other precisely in
-        # the case the figure is meant to make a point about.
-        placed: list[tuple[float, float, int]] = []          # left, right, row
+        The 0.075 v.u. threshold sits at 3.05 A for Bi-O, which is almost
+        exactly the 3.00 A convention, so these marks land on top of each other
+        precisely in the case the figure is meant to make a point about.
+
+        Returns (v, label, colour, left, width, row) per mark. Shared with the
+        layout, which needs the row count to know how much room to leave --
+        without that the second row was printed over the readout.
+        """
+        placed: list = []
 
         def overlaps(left: float, right: float, row: int) -> bool:
-            return any(r == row and left < pr and right > pl
-                       for pl, pr, r in placed)
+            return any(other == row and left < pr and right > pl
+                       for pl, pr, other in
+                       ((q[3], q[3] + q[4], q[5]) for q in placed))
 
-        for v, label, col in sorted(marks, key=lambda m: m[0]):
+        for v, label, col in self._reference_marks():
             x = self._v_to_x(v)
             w = fm.horizontalAdvance(label) + 8
-            left = min(max(x - w / 2, self._plot.left()), self._plot.right() - w)
+            left = min(max(x - w / 2, self._plot.left()),
+                       self._plot.right() - w)
             row = 0
             while row < 3 and overlaps(left, left + w, row):
                 row += 1
-            placed.append((left, left + w, row))
+            placed.append((v, label, col, left, w, row))
+        return placed
 
+    def _reference_rows(self, fm: QFontMetricsF) -> int:
+        """How many rows of mark labels this site needs. At least one."""
+        placed = self._place_references(fm)
+        return max((q[5] for q in placed), default=0) + 1
+
+    def _paint_references(self, p: QPainter) -> None:
+        """Marks for the thresholds and rules a reader already knows."""
+        if self.result is None:
+            return
+        fnt = self._small_font()
+        p.setFont(fnt)
+        fm = QFontMetricsF(fnt)
+
+        for v, label, col, left, w, row in self._place_references(fm):
+            x = self._v_to_x(v)
             p.setPen(QPen(col, 1.2, Qt.DashLine))
             p.drawLine(QPointF(x, self._plot.top()),
                        QPointF(x, self._plot.bottom()))

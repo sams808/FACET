@@ -388,3 +388,108 @@ class TestCutoffExplorer:
         w = self._widget(qapp, result)
         w.set_reference_distance(None)
         assert not w.grab().isNull()
+
+
+# --- the cutoff explorer's layout --------------------------------------------
+
+def _explorer_with(result, width=1148, height=230):
+    """A laid-out explorer showing one site's result."""
+    from facet.ui.cutoff_explorer import CutoffExplorer
+
+    e = CutoffExplorer()
+    e.resize(width, height)
+    e.set_result(result)
+    e._layout()
+    return e
+
+
+def _si_result():
+    """A site whose reference marks nearly coincide, which is the hard case.
+
+    The tabulation threshold and the distance convention land within a few
+    pixels of each other for a short bond, so their labels collide and have to
+    be staggered -- and the stagger is what used to be printed over the
+    readout.
+    """
+    from pathlib import Path as _Path
+
+    import pytest as _pytest
+
+    from facet.core import bv, cif, coordination
+
+    sample = _Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
+                   r"\9011871_bismutoferrite.cif")
+    if not sample.is_file():
+        _pytest.skip("the sample structure is not present")
+    structure = cif.read(str(sample))
+    results = coordination.analyse_structure(structure, bv.DEFAULT)
+    return next(r for r in results if r.element == "Si")
+
+
+def test_the_explorer_leaves_room_for_every_label_row(qapp):
+    """A staggered reference label must not be printed over the readout.
+
+    The stagger worked; the layout did not know about it. `bottom` reserved a
+    fixed two lines, so the second row landed on the readout at the foot of the
+    widget -- visible exactly when two marks nearly coincide, which is the case
+    the figure exists to make a point about.
+    """
+    from PySide6.QtGui import QFontMetricsF
+
+    e = _explorer_with(_si_result())
+    small = QFontMetricsF(e._small_font())
+    rows = e._reference_rows(small)
+    assert rows >= 2, "this site was chosen because its marks collide"
+
+    last_row_bottom = (e._rail.bottom() + 2 + (rows - 1) * (small.height() - 1)
+                       + small.height())
+    readout_top = e.height() - QFontMetricsF(e.font()).height() - 2
+    assert last_row_bottom <= readout_top, (
+        f"the last label row ends at {last_row_bottom:.0f} and the readout "
+        f"starts at {readout_top:.0f}: they overlap")
+    assert last_row_bottom <= e.height()
+
+
+def test_the_plot_box_is_the_data_box(qapp):
+    """The shading, the gridlines and the staircase must share one boundary.
+
+    The headroom above the top step used to be kept inside the plot rectangle,
+    so the plateau shading -- which fills the rectangle -- ran 16 px above the
+    highest gridline and above the staircase's top step.
+    """
+    result = _si_result()
+    e = _explorer_with(result)
+    cn_max = max([q.cn for q in result.plateaus] + [1])
+    assert e._cn_to_y(cn_max, cn_max) == pytest.approx(e._plot.top(), abs=0.01)
+    assert e._cn_to_y(0, cn_max) == pytest.approx(e._plot.bottom(), abs=0.01)
+    # and the headroom is real, above the box
+    assert e._plot.top() >= e.HEADROOM
+
+
+def test_nothing_the_explorer_draws_falls_outside_it(qapp):
+    """Every element, at several widget sizes."""
+    from PySide6.QtGui import QFontMetricsF
+
+    result = _si_result()
+    for width, height in ((1148, 230), (1467, 230), (700, 230), (520, 260)):
+        e = _explorer_with(result, width, height)
+        small = QFontMetricsF(e._small_font())
+        assert e._plot.height() > 0, (width, height)
+        assert e._plot.left() >= 0 and e._plot.right() <= width
+        assert e._rail.bottom() <= height
+        for _v, _label, _col, left, w, _row in e._place_references(small):
+            assert left >= 0, (width, _label, left)
+            assert left + w <= width + 1, (width, _label, left + w)
+        readout_top = e.height() - QFontMetricsF(e.font()).height() - 2
+        assert readout_top >= e._rail.bottom(), (width, height)
+
+
+def test_the_axis_caption_does_not_sit_on_the_top_tick(qapp):
+    """"CN" and the highest number were printed on top of each other."""
+    result = _si_result()
+    e = _explorer_with(result)
+    cn_max = max([q.cn for q in result.plateaus] + [1])
+    caption_centre = e._plot.top() - e.HEADROOM - 2 + 8
+    tick_centre = e._cn_to_y(cn_max, cn_max)
+    assert abs(caption_centre - tick_centre) >= 10, (
+        "the CN caption and the top tick overlap")
