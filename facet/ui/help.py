@@ -480,6 +480,22 @@ supersampling. <i>File &rsaquo; Export as vector</i> writes SVG or PDF — real
 vector geometry, not a bitmap in a wrapper, so it can be edited in a drawing
 program and scales without pixels. The vector exporter is the same code path as
 the software renderer, so what it writes is what the fallback tier draws.</p>
+<h2>What the view turns about</h2>
+<p>By default the view rotates about the middle of the drawn cell block. Right-
+click an atom and choose <i>Rotate about &lt;label&gt;</i> to turn about that
+atom instead — useful when the site you are examining is at the edge of the
+cell and keeps swinging out of frame. The picture does not jump when you choose
+it: the camera pans so that the atom is where the middle of the view already
+was, and nothing grows or shrinks.</p>
+<p>The toolbar says which atom it is for as long as it is set. <b>C</b> puts the
+centre back at the middle of the cell, <b>Esc</b> clears it along with the
+selection and any measurement, and panning with the right or middle button moves
+the centre off the atom as a pan always has.</p>
+<p {note}>The centre is kept as a position, not as an atom. Nothing that
+redraws the structure — moving the threshold, changing the style, cutting a
+slab — disturbs it, but if the same atom moves, as it can between disorder
+configurations, the centre stays where it was rather than following.</p>
+
 <h2>Lighting</h2>
 <p>The light is fixed to the viewer, not to the crystal: turning the structure
 does not turn the lamp with it, so looking along &minus;c is lit exactly as
@@ -497,15 +513,20 @@ survives zooming.</p>
 <h1>Keyboard and mouse</h1>
 <table cellpadding="4" width="100%">
 <tr><td width="40%"><b>Left-drag</b></td><td>Rotate</td></tr>
-<tr><td><b>Middle-drag</b> or <b>Shift+left-drag</b></td><td>Pan</td></tr>
+<tr><td><b>Middle-drag</b> or <b>right-drag</b></td><td>Pan. This moves the
+   centre of rotation with it.</td></tr>
 <tr><td><b>Wheel</b></td><td>Zoom</td></tr>
 <tr><td><b>Left-click an atom</b></td><td>Select that site</td></tr>
 <tr><td><b>Right-click</b></td><td>Context menu for the atom under the cursor:
-   colour, radius, hide, focus, or a measurement</td></tr>
+   colour, radius, visibility, its polyhedron, and what to turn the view
+   about</td></tr>
 <tr><td><b>Click two atoms</b></td><td>Distance</td></tr>
 <tr><td><b>Click three</b></td><td>Angle</td></tr>
 <tr><td><b>Click four</b></td><td>Torsion</td></tr>
 <tr><td><b>R</b></td><td>Reset the view</td></tr>
+<tr><td><b>C</b></td><td>Turn about the centre of the cell again</td></tr>
+<tr><td><b>Esc</b></td><td>Clear the selection, the measurement and the
+   rotation centre</td></tr>
 <tr><td><b>L</b></td><td>Cycle the atom labels</td></tr>
 <tr><td><b>Ctrl+O</b></td><td>Open a structure</td></tr>
 <tr><td><b>Ctrl+S</b></td><td>Export an image</td></tr>

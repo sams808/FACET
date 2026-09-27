@@ -358,3 +358,169 @@ def test_empty_scene_has_a_usable_bounding_sphere():
     s = Scene()
     assert s.radius > 0 and s.n_atoms == 0
     s.restyle(0.1)                                  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# the rotation centre
+# ---------------------------------------------------------------------------
+
+def _framed(radius=7.5, centre=(1.0, 2.0, 3.0)):
+    from facet.gl.camera import Camera
+
+    camera = Camera()
+    camera.frame(np.array(centre, float), radius)
+    return camera
+
+
+def test_the_pivot_and_the_scene_are_separate_points():
+    """They coincide until someone chooses a centre, and then they do not.
+
+    Every depth the camera computes used to be measured from the pivot, which
+    is only the scene centre while nothing has moved it.
+    """
+    camera = _framed()
+    assert camera.scene_center == pytest.approx(camera.target)
+    assert camera.scene_depth() == pytest.approx(camera.distance, abs=1e-12)
+
+    camera.center_on(np.array([9.0, -4.0, 2.0]))
+    assert camera.target == pytest.approx([9.0, -4.0, 2.0])
+    assert camera.scene_center == pytest.approx([1.0, 2.0, 3.0])
+
+
+def test_centring_is_a_pure_pan_under_perspective():
+    """Choosing a centre must not make anything grow or shrink.
+
+    The eye moves along its own axis by the depth the new centre gains, so
+    every drawn point keeps the depth it had. Without that correction the whole
+    structure lurches toward or away from the viewer.
+    """
+    camera = _framed()
+    rng = np.random.default_rng(5)
+    points = rng.normal(scale=4.0, size=(200, 3)) + np.array([1.0, 2.0, 3.0])
+
+    def depths(cam):
+        homogeneous = np.hstack([points, np.ones((len(points), 1))])
+        return -(homogeneous @ cam.view_matrix().T)[:, 2]
+
+    before = depths(camera)
+    camera.center_on(points[7])
+    after = depths(camera)
+    assert np.abs(before - after).max() < 1e-9
+
+    # and the chosen point is now in the middle of the view
+    projected = camera.project(np.array([points[7]]), 800, 600)[0]
+    assert projected[0] == pytest.approx(400.0, abs=1e-6)
+    assert projected[1] == pytest.approx(300.0, abs=1e-6)
+
+
+def test_centring_does_not_rescale_an_orthographic_view():
+    """Under an orthographic projection `distance` is the zoom, not a depth.
+
+    `half_height` is `distance * tan(fov/2)` in both projections, and the
+    QPainter tier -- which is also the SVG and PDF exporter -- reads it for its
+    own scale. Applying the perspective depth correction here would silently
+    rescale every orthographic figure.
+    """
+    camera = _framed()
+    camera.orthographic = True
+    before = camera.half_height()
+    camera.center_on(np.array([9.0, -4.0, 2.0]))
+    assert camera.half_height() == pytest.approx(before, rel=1e-12)
+
+
+def test_the_chosen_point_stays_at_the_centre_under_rotation():
+    camera = _framed()
+    point = np.array([6.0, 7.0, -1.0])
+    camera.center_on(point)
+    for _ in range(24):
+        camera.drag_rotate(100.0, 100.0, 160.0, 60.0, 900, 700)
+        projected = camera.project(np.array([point]), 900, 700)[0]
+        assert projected[0] == pytest.approx(450.0, abs=1e-6)
+        assert projected[1] == pytest.approx(350.0, abs=1e-6)
+
+
+def test_an_off_centre_pivot_does_not_clip_the_structure():
+    """The window is measured around the scene, not around the pivot.
+
+    Measured on a real structure before the fix: 6 of 68 drawn points fell
+    outside near/far with the pivot on the outermost atom, and because the
+    QPainter tier does not clip at all, the exported figure would have kept
+    drawing what the view had dropped.
+    """
+    camera = _framed(radius=7.5, centre=(0.0, 0.0, 0.0))
+    rng = np.random.default_rng(3)
+    shell = rng.normal(size=(400, 3))
+    shell /= np.linalg.norm(shell, axis=1)[:, None]
+    points = shell * 7.5                       # the extremes of the scene
+
+    camera.center_on(points[0])                # pivot on the surface
+    homogeneous = np.hstack([points, np.ones((len(points), 1))])
+    for _ in range(200):
+        camera.drag_rotate(0.0, 0.0, float(rng.uniform(-300, 300)),
+                           float(rng.uniform(-300, 300)), 900, 700)
+        near, far = camera.clip_planes()
+        depth = -(homogeneous @ camera.view_matrix().T)[:, 2]
+        assert (depth >= near - 1e-9).all() and (depth <= far + 1e-9).all()
+
+
+def test_the_fog_window_follows_the_scene_too():
+    camera = _framed()
+    near, far = camera.fog_range()
+    assert near == pytest.approx(camera.distance - camera.scene_radius * 0.55)
+    assert far == pytest.approx(camera.distance + camera.scene_radius * 1.25)
+
+    camera.center_on(np.array([9.0, -4.0, 2.0]))
+    moved_near, moved_far = camera.fog_range()
+    depth = camera.scene_depth()
+    assert moved_near == pytest.approx(depth - camera.scene_radius * 0.55)
+    assert moved_far == pytest.approx(depth + camera.scene_radius * 1.25)
+
+
+def test_set_bounds_moves_nothing():
+    """It adopts what is drawn; it must not move the camera."""
+    camera = _framed()
+    before = (camera.target.copy(), camera.distance,
+              camera.orientation.copy())
+    camera.set_bounds(np.array([40.0, 0.0, 0.0]), 22.0, 1.5)
+    assert camera.target == pytest.approx(before[0])
+    assert camera.distance == pytest.approx(before[1])
+    assert camera.orientation == pytest.approx(before[2])
+    assert camera.scene_center == pytest.approx([40.0, 0.0, 0.0])
+    assert camera.scene_radius == pytest.approx(22.0)
+    assert camera.min_distance == pytest.approx(1.5)
+
+
+def test_for_eye_carries_every_field():
+    """A hand-written field list is where the next field gets forgotten.
+
+    A field left out reverts to its default in one eye only, which shows as the
+    two eyes clipping or cueing differently -- the hardest stereo fault to see.
+    """
+    import dataclasses
+
+    from facet.gl.camera import Camera
+
+    camera = _framed()
+    camera.center_on(np.array([5.0, 5.0, 5.0]))
+    camera.min_distance = 0.9
+    camera.rotation_sense = -1.0
+    camera.fov = 31.0
+
+    for eye in (-1, 1):
+        other = camera.for_eye(eye)
+        for f in dataclasses.fields(Camera):
+            if f.name == "orientation":
+                continue                       # deliberately different
+            mine, theirs = getattr(camera, f.name), getattr(other, f.name)
+            if isinstance(mine, np.ndarray):
+                assert theirs == pytest.approx(mine), f.name
+            else:
+                assert theirs == mine, f.name
+
+
+def test_zoom_cannot_put_the_eye_inside_an_atom():
+    camera = _framed()
+    camera.min_distance = 2.0
+    for _ in range(80):
+        camera.zoom(4.0)
+    assert camera.distance >= 2.0 - 1e-9

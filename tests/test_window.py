@@ -354,3 +354,174 @@ def test_a_stale_atom_override_is_pruned_on_load(window):
     window.project.current.overrides.set_atom(100000, visible=False)
     window._after_load()
     assert 100000 not in window.project.current.overrides.by_atom
+
+
+# ---------------------------------------------------------------------------
+# the rotation centre
+# ---------------------------------------------------------------------------
+
+def _outermost(scene):
+    """The atom furthest from the middle -- the case that breaks things."""
+    offsets = np.linalg.norm(scene.atom_position - scene.center, axis=1)
+    return int(np.argmax(offsets))
+
+
+def test_an_atom_can_be_made_the_centre_of_rotation(window):
+    scene = window.scene
+    index = _outermost(scene)
+    position = scene.atom_position[index].astype(float).copy()
+
+    window._center_on_atom(index, scene.atom_label[index])
+    assert window.view.camera.target == pytest.approx(position, abs=1e-6)
+    assert window.view.pivot_caption == scene.atom_label[index]
+    assert scene.atom_label[index] in window.pivot_label.text()
+
+
+def test_choosing_a_centre_does_not_move_the_structure_in_depth(window):
+    """A pan, not a zoom: every drawn point keeps the depth it had."""
+    scene = window.scene
+    camera = window.view.camera
+    points = np.asarray(scene.atom_position, float)
+
+    def depths():
+        homogeneous = np.hstack([points, np.ones((len(points), 1))])
+        return -(homogeneous @ camera.view_matrix().T)[:, 2]
+
+    before = depths()
+    window._center_on_atom(_outermost(scene), "x")
+    assert np.abs(before - depths()).max() < 1e-6
+
+
+def test_the_centre_survives_every_rebuild(window, qapp):
+    """A rebuild happens on nearly every interaction, so it must not disturb it.
+
+    This is why the centre is a position and not an atom index: an index into
+    the drawn scene is renumbered by a change of threshold, of cell range or by
+    a slab, and would silently come to mean a different atom.
+    """
+    scene = window.scene
+    index = _outermost(scene)
+    position = scene.atom_position[index].astype(float).copy()
+    window._center_on_atom(index, scene.atom_label[index])
+
+    for act in (lambda: window._on_threshold(0.02),
+                lambda: window.style_box.setCurrentIndex(1),
+                lambda: window.cell_check.setChecked(False),
+                lambda: window.site_list.setCurrentRow(0),
+                window._rebuild):
+        act()
+        qapp.processEvents()
+        assert window.view.camera.target == pytest.approx(position, abs=1e-6)
+    assert window.view.pivot_caption
+
+
+def test_a_deliberate_reframe_clears_the_centre(window, qapp):
+    """Reset view and a newly framed structure overwrite the pivot.
+
+    They must also clear the record, or the read-out names an atom the camera
+    is no longer turning about.
+    """
+    scene = window.scene
+    window._center_on_atom(_outermost(scene), scene.atom_label[0])
+    assert window.view.pivot_caption
+
+    window.view.set_scene(window.scene, reframe=True)
+    qapp.processEvents()
+    assert window.view.pivot_caption is None
+    assert window.pivot_label.text() == ""
+
+
+def test_the_cell_centre_is_the_cell_and_not_the_atoms(window):
+    """Two different points, and the action is named for the one it uses.
+
+    `scene.center` is the centroid of everything drawn. For a centrosymmetric
+    cell it coincides with the middle of the cell box; for one that is not, the
+    two can be nearly 2 A apart, so an action called "the cell centre" that
+    used the centroid would be a false label.
+    """
+    centre = window._cell_centre()
+    assert centre is not None
+    cell = window.structure.cell
+    expected = cell.orth @ np.array([0.5, 0.5, 0.5])
+    assert centre == pytest.approx(expected, abs=1e-9)
+
+    window._center_on_cell()
+    assert window.view.camera.target == pytest.approx(expected, abs=1e-6)
+    assert window.pivot_label.text() == ""
+
+
+def test_the_cell_centre_follows_the_cell_range(window, qapp):
+    for box in window.range_boxes:
+        box.setValue(2)
+    qapp.processEvents()
+    cell = window.structure.cell
+    assert window._cell_centre() == pytest.approx(
+        cell.orth @ np.array([1.0, 1.0, 1.0]), abs=1e-9)
+    for box in window.range_boxes:
+        box.setValue(1)
+    qapp.processEvents()
+
+
+def test_escape_clears_the_centre(window, qapp):
+    """Escape is the application's "clear what I set" gesture."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    window._center_on_atom(_outermost(window.scene), "Bi1")
+    assert window.view.pivot_caption
+    window.view.keyPressEvent(
+        QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+    qapp.processEvents()
+    assert window.view.pivot_caption is None
+
+
+def test_the_camera_learns_the_new_extent_on_every_rebuild(window, qapp):
+    """The bug this uncovered, which shipped: a stale radius clips the scene.
+
+    `set_scene` refreshed the camera's idea of the scene only when it reframed,
+    and nearly every rebuild does not. Growing the cell range then left the
+    camera believing the structure was one cell wide, and the clip planes are
+    that radius.
+    """
+    for box in window.range_boxes:
+        box.setValue(3)
+    qapp.processEvents()
+    assert window.view.camera.scene_radius == pytest.approx(
+        window.scene.radius, rel=1e-9)
+
+    points = np.asarray(window.scene.atom_position, float)
+    homogeneous = np.hstack([points, np.ones((len(points), 1))])
+    near, far = window.view.camera.clip_planes()
+    depth = -(homogeneous @ window.view.camera.view_matrix().T)[:, 2]
+    outside = int(((depth < near) | (depth > far)).sum())
+    assert outside == 0, f"{outside} of {len(points)} atoms are clipped away"
+
+    for box in window.range_boxes:
+        box.setValue(1)
+    qapp.processEvents()
+
+
+def test_the_context_menu_offers_the_rotation_centre(window):
+    scene = window.scene
+    menu = window._build_context_menu(_outermost(scene))
+    assert menu is not None
+    texts = [a.text() for a in menu.actions()]
+    assert any(t.startswith("Rotate about") for t in texts), texts
+    assert "Rotate about the cell centre" in texts
+
+
+def test_closing_the_last_structure_clears_the_viewport(window, qapp):
+    """The window let go of the scene and the viewport did not.
+
+    `_on_remove` set `self.scene = None` and never told the view, so after
+    closing the only open file the 3-D view carried on drawing it -- 44 atoms
+    of a structure the application no longer considered open, with the panels
+    beside it empty.
+    """
+    assert window.view.scene is not None
+    window._on_remove(0)
+    qapp.processEvents()
+    assert window.scene is None
+    assert window.view.scene is None, (
+        "the viewport is still holding the structure that was closed")
+    assert window.site_list.count() == 0

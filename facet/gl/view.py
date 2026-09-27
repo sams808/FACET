@@ -36,10 +36,15 @@ class StructureView(QOpenGLWidget):
     ready = Signal(object)              # Capabilities, once the context exists
     labelsChanged = Signal(object)      # LabelSettings, after a keyboard cycle
     contextRequested = Signal(int, object)   # atom index or -1, and the position
+    pivotChanged = Signal(object)       # a caption for the rotation centre, or None
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
+        # What the camera turns about, when it is not the middle of the scene.
+        # A caption only: the point itself lives in camera.target, which is
+        # already carried through a saved session.
+        self._pivot = None
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         # The right button pans, so Qt must not open a menu on press. The menu
@@ -98,8 +103,26 @@ class StructureView(QOpenGLWidget):
         self.scene = scene
         if scene is not None and scene.theme is not None:
             self.theme = scene.theme
+
+        if scene is not None:
+            # Unconditionally, not only when reframing. Almost every rebuild
+            # comes through here with reframe=False -- a style change, the cell
+            # range, the unit cell, polyhedra, planes, a slab, the selected
+            # site, an override, an undo -- and without this the camera keeps
+            # the extent of whatever it last framed. Enlarging the cell range
+            # then clips the new atoms away, because the clip planes are that
+            # radius.
+            biggest = (float(scene.atom_radius.max())
+                       if scene.n_atoms else 0.0)
+            self.camera.set_bounds(scene.center, scene.radius, 3.0 * biggest)
+
         if reframe:
             self.camera.frame(scene.center, scene.radius)
+            # frame() has just overwritten the pivot, so any record of a chosen
+            # centre is stale by definition; keeping it would make the read-out
+            # name an atom the camera is no longer turning about.
+            self._pivot = None
+            self.pivotChanged.emit(None)
         self._selected = None
         self._measure_chain.clear()
         if self._renderer is not None:
@@ -109,6 +132,44 @@ class StructureView(QOpenGLWidget):
             finally:
                 self.doneCurrent()
         self.update()
+
+    # -- the rotation centre ----------------------------------------------
+    def center_on(self, point, caption: str = "") -> None:
+        """Turn about ``point`` from now on.
+
+        The picture does not jump: under perspective the eye moves along its own
+        axis by the depth the new centre gains, so every drawn point keeps the
+        depth it had. See ``Camera.center_on``.
+        """
+        import numpy as np
+
+        self.camera.center_on(np.asarray(point, float))
+        self._pivot = caption or None
+        self.pivotChanged.emit(self._pivot)
+        self.update()
+
+    def center_on_scene(self, caption: str = "") -> None:
+        """Turn about the middle of what is drawn, which is the default."""
+        if self.scene is None:
+            return
+        self.camera.center_on(self.scene.center)
+        self._pivot = caption or None
+        self.pivotChanged.emit(self._pivot)
+        self.update()
+
+    def atom_position(self, index: int):
+        """Where a drawn atom is, or None if that index draws nothing.
+
+        The caller resolves an index to a point at the moment of choosing, and
+        keeps the point -- never the index.
+        """
+        if self.scene is None or not (0 <= index < self.scene.n_atoms):
+            return None
+        return self.scene.atom_position[index].astype(float).copy()
+
+    @property
+    def pivot_caption(self):
+        return self._pivot
 
     def set_threshold(self, v_bond: float) -> None:
         """Move the bond threshold.
@@ -207,11 +268,24 @@ class StructureView(QOpenGLWidget):
 
     def _render_to_image(self, camera, width: int, height: int,
                          supersample: int = 1):
-        """One camera to a QImage, on whichever tier is in use."""
-        from PySide6.QtGui import QImage, QPainter
+        """One camera to a QImage, on whichever tier is in use.
+
+        The context is made current only if it is not already, and released
+        only if this call made it so. That distinction is not a nicety: this
+        method is reached both from outside a paint -- ``grab_image``, the
+        vector export -- where the context has to be made current, and from
+        inside ``paintGL`` for the stereo pair, where it already is. Calling
+        ``doneCurrent()`` there releases the context out from under the rest of
+        ``paintGL``, which then opens a QOpenGLPaintDevice on a framebuffer
+        that is no longer bound to anything. That crashed the application
+        outright -- an access violation, every time, on choosing anaglyph.
+        """
+        from PySide6.QtGui import QImage, QOpenGLContext, QPainter
 
         if self._renderer is not None:
-            self.makeCurrent()
+            ours = QOpenGLContext.currentContext() is self.context()
+            if not ours:
+                self.makeCurrent()
             try:
                 previous = self._renderer.target_fbo
                 self._renderer.target_fbo = None
@@ -221,7 +295,8 @@ class StructureView(QOpenGLWidget):
                 finally:
                     self._renderer.target_fbo = previous
             finally:
-                self.doneCurrent()
+                if not ours:
+                    self.doneCurrent()
 
         image = QImage(width, height, QImage.Format_RGBA8888)
         image.fill(0)
@@ -678,6 +753,11 @@ class StructureView(QOpenGLWidget):
         elif key == Qt.Key_Escape:
             self.clear_measurement()
             self.select_atom(None)
+            # and the rotation centre. Escape is this application's "clear what
+            # I set" gesture, and a chosen centre is exactly that kind of state
+            # -- one the user cannot otherwise see they are in.
+            if self._pivot is not None:
+                self.center_on_scene()
         else:
             super().keyPressEvent(event)
 

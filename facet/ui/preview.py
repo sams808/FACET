@@ -150,6 +150,7 @@ class PreviewWindow(QMainWindow):
 
         self.history = history_mod.History()
         self.view.contextRequested.connect(self._on_context_menu)
+        self.view.pivotChanged.connect(self._on_pivot_changed)
 
         self._build_layout()
         self._build_menu()
@@ -361,6 +362,14 @@ class PreviewWindow(QMainWindow):
                     self.atom_label_box, self.bond_label_box):
             self._fit_combo(box)
 
+        # Says which atom the view is turning about, when it is not the middle
+        # of the cell. A camera state the user set and can see no other way:
+        # the status bar message that announces it expires after a few seconds,
+        # and the centre does not.
+        self.pivot_label = QLabel("")
+        chrome.mark_hint(self.pivot_label)
+        row.addWidget(self.pivot_label)
+
         row.addStretch(1)
         # The search radius, expressed as the valence below which a contact is
         # not tabulated at all. Unlike the bond threshold this re-runs the
@@ -492,6 +501,18 @@ class PreviewWindow(QMainWindow):
             v.addAction(act)
 
         v.addSeparator()
+        # Not "&cell": the View menu already spends c on "Along c", and two
+        # items sharing a letter makes Qt move the highlight instead of
+        # triggering -- the keyboard route then fails silently.
+        cell_centre = QAction("Rotat&e about the cell centre", self)
+        cell_centre.setShortcut("C")
+        cell_centre.setToolTip(
+            "Put the centre of rotation back at the middle of the drawn cell "
+            "block. Right-click an atom to turn about that atom instead.")
+        cell_centre.triggered.connect(self._center_on_cell)
+        v.addAction(cell_centre)
+
+        v.addSeparator()
         self.vector_action = QAction("Show bond-&valence vector", self)
         self.vector_action.setCheckable(True)
         self.vector_action.setToolTip(
@@ -595,6 +616,68 @@ class PreviewWindow(QMainWindow):
             action.setChecked(abs(scale - self.vector_scale) < 1e-9)
         if self.show_vectors:
             self._rebuild()
+
+    def _center_on_atom(self, atom_index: int, label: str) -> None:
+        """Turn the view about one drawn atom.
+
+        The index is resolved to a position here and then thrown away. An index
+        into the drawn scene does not survive a rebuild -- widening the
+        tabulation threshold renumbers it, a slab renumbers it, the cell range
+        renumbers it -- and rebuilds happen on nearly every interaction. The
+        point does survive, and it is what the camera needs.
+        """
+        point = self.view.atom_position(atom_index)
+        if point is None:
+            return
+        self.view.center_on(point, label)
+        self.statusBar().showMessage(
+            f"Turning about {label} at "
+            f"({point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}) Å. "
+            f"Press C, or Escape, to put the centre back in the middle of the "
+            f"cell; panning with the right or middle button moves it too.",
+            12000)
+
+    def _cell_centre(self):
+        """The middle of the drawn block of cells, in world coordinates.
+
+        Not the centroid of the atoms, which is what the framing uses: for a
+        centrosymmetric cell they are the same point, and for one that is not
+        they can be nearly 2 Å apart. The user asked for the centre of the
+        cell, so this is the cell.
+        """
+        entry = self.project.current
+        if entry is None:
+            return None
+        import numpy as np
+
+        cells = np.array([b.value() for b in self.range_boxes], float)
+        centre = entry.structure.cell.orth @ (0.5 * cells)
+        return centre + np.asarray(getattr(entry, "offset", np.zeros(3)), float)
+
+    def _center_on_cell(self) -> None:
+        """Put the centre of rotation back at the middle of the cell block."""
+        centre = self._cell_centre()
+        if centre is None:
+            if self.scene is not None:
+                self.view.center_on_scene()
+            return
+        self.view.center_on(centre, "")
+        self.statusBar().showMessage(
+            "Turning about the middle of the drawn cell block, at "
+            f"({centre[0]:.3f}, {centre[1]:.3f}, {centre[2]:.3f}) Å.", 9000)
+
+    def _on_pivot_changed(self, caption) -> None:
+        """Say which atom the view is turning about, for as long as it is."""
+        if not hasattr(self, "pivot_label"):
+            return
+        if caption:
+            self.pivot_label.setText(f"turning about {caption}")
+            self.pivot_label.setToolTip(
+                "The view rotates about this atom. Press C or Escape to put "
+                "the centre back in the middle of the cell.")
+        else:
+            self.pivot_label.setText("")
+            self.pivot_label.setToolTip("")
 
     def _show_appearance_tab(self) -> None:
         """Bring the Theme tab forward.
@@ -869,6 +952,12 @@ class PreviewWindow(QMainWindow):
             self._after_load(reframe=True)
         else:
             self.scene = None
+            # and tell the viewport, which otherwise keeps drawing the file
+            # that has just been closed -- along with its analysis panels, its
+            # cutoff staircase and a camera framed on it.
+            self.view.set_scene(None, reframe=False)
+            self.explorer.set_result(None)
+            self._update_analysis()
             self.site_list.clear()
             self._set_enabled(False)
             self.setWindowTitle(f"{NAME} {__version__}")
@@ -1188,6 +1277,13 @@ class PreviewWindow(QMainWindow):
                 lambda _=False, i=site_index: self._on_site_picked(i))
             menu.addAction("Show this site's polyhedron").triggered.connect(
                 lambda _=False, i=site_index: self._show_polyhedron_for(i))
+            turn = menu.addAction(f"Rotate about {label}")
+            turn.setToolTip(
+                "Turn the view about this atom instead of about the middle of "
+                "the cell. The picture does not jump; dragging with the right "
+                "or middle button moves the centre off it again.")
+            turn.triggered.connect(
+                lambda _=False, i=atom_index, t=label: self._center_on_atom(i, t))
             menu.addSeparator()
 
             site_menu = QMenu("Site " + site_label, menu)
@@ -1235,6 +1331,8 @@ class PreviewWindow(QMainWindow):
                 lambda _=False: self._clear_override("element", element))
             menu.addSeparator()
 
+        menu.addAction("Rotate about the cell centre").triggered.connect(
+            self._center_on_cell)
         menu.addAction("Reset the view").triggered.connect(self.view.reset_view)
         for name, axis in (("Look along a", (1, 0, 0)),
                            ("Look along b", (0, 1, 0)),

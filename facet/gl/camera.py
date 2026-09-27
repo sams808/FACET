@@ -136,6 +136,13 @@ class Camera:
     fov: float = 22.0
     orthographic: bool = False
     scene_radius: float = 1.0
+    # Where the drawn contents are, as distinct from where the camera pivots.
+    # They coincide until someone chooses a rotation centre or pans, and every
+    # depth calculation below has to use this one rather than `target`.
+    scene_center: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    # How close the eye may come. Set from the largest drawn atom, so that
+    # "centre on this atom and zoom right in" cannot put the eye inside it.
+    min_distance: float = 0.0
     # +1 drags the object with the pointer; -1 orbits around it. Exposed
     # because which one feels right is a matter of habit, not of correctness.
     rotation_sense: float = 1.0
@@ -148,9 +155,43 @@ class Camera:
     # -- framing ----------------------------------------------------------
     def frame(self, center, radius: float, margin: float = 1.08) -> None:
         self.target = np.asarray(center, float).copy()
+        self.scene_center = np.asarray(center, float).copy()
         self.scene_radius = max(float(radius), 1e-3)
         half = math.radians(self.fov) / 2.0
         self.distance = self.scene_radius / math.sin(half) * margin
+
+    def set_bounds(self, center, radius: float,
+                   min_distance: float = 0.0) -> None:
+        """Adopt what is drawn without moving the camera.
+
+        Called on every rebuild, framing or not. Without it the camera keeps
+        the extent of whatever was drawn when it last framed -- so enlarging the
+        cell range clips the new atoms away, which it does today.
+        """
+        self.scene_center = np.asarray(center, float).copy()
+        self.scene_radius = max(float(radius), 1e-3)
+        self.min_distance = max(float(min_distance), 0.0)
+
+    def center_on(self, point) -> None:
+        """Put ``point`` at the centre of the view, and pivot there.
+
+        Under perspective the eye is moved along its own axis by the depth the
+        new centre gains or loses, so this is a pure pan: every drawn point
+        keeps the depth it had and nothing grows or shrinks. Under an
+        orthographic projection ``distance`` is not a depth at all, it is the
+        zoom -- ``half_height`` is ``distance * tan(fov/2)``, and the QPainter
+        tier reads it for its own scale -- so it is left alone, and the pan is
+        exact without it.
+        """
+        point = np.asarray(point, float).copy()
+        if not self.orthographic:
+            forward = -quat_to_matrix(self.orientation)[2, :3]
+            along = float((point - self.target) @ forward)
+            self.distance = float(np.clip(
+                self.distance + along,
+                max(self.scene_radius * 0.05, self.min_distance),
+                self.scene_radius * 60.0))
+        self.target = point
 
     def reset_orientation(self) -> None:
         self.orientation = quat_identity()
@@ -204,7 +245,8 @@ class Camera:
 
     def zoom(self, steps: float) -> None:
         self.distance = float(np.clip(self.distance * (0.88 ** steps),
-                                      self.scene_radius * 0.05,
+                                      max(self.scene_radius * 0.05,
+                                          self.min_distance),
                                       self.scene_radius * 60.0))
 
     def set_fov(self, fov: float) -> None:
@@ -237,11 +279,43 @@ class Camera:
         m[2, 3] -= self.distance
         return m
 
+    def scene_depth(self) -> float:
+        """Axial depth of the scene centre from the eye.
+
+        Equal to ``distance`` exactly while the pivot is the scene centre --
+        which is what ``frame`` arranges -- so every window measured from it is
+        unchanged at the default framing. It is the quantity the shipped code
+        meant by ``distance`` in the two places below.
+        """
+        r = quat_to_matrix(self.orientation)
+        offset = np.asarray(self.scene_center, float) - np.asarray(self.target,
+                                                                   float)
+        return float(self.distance - r[2, :3] @ offset)
+
     def clip_planes(self) -> tuple[float, float]:
+        """Near and far, around the scene rather than around the pivot.
+
+        Measured from `scene_depth`, the depth range of the drawn contents is
+        exactly [d - r, d + r], so a span of 1.6 r always contains them however
+        far the pivot has moved. Widening the span by the pivot offset instead
+        would also contain them, and would spend depth-buffer precision -- 60%
+        wider on a measured case -- that this does not need.
+        """
+        depth = self.scene_depth()
         span = self.scene_radius * 1.6
-        near = max(self.distance - span, self.scene_radius * 1e-3, 1e-3)
-        far = self.distance + span
+        near = max(depth - span, self.scene_radius * 1e-3, 1e-3)
+        far = depth + span
         return near, far
+
+    def fog_range(self) -> tuple[float, float]:
+        """Where depth cueing starts and ends, in view depth.
+
+        Read by the renderer instead of its own `distance +/- radius * k`, so
+        that the cue stays on the structure when the pivot is off-centre. Same
+        numbers as before while the two coincide.
+        """
+        depth = self.scene_depth()
+        return depth - self.scene_radius * 0.55, depth + self.scene_radius * 1.25
 
     def projection_matrix(self, aspect: float) -> np.ndarray:
         near, far = self.clip_planes()
@@ -281,11 +355,18 @@ class Camera:
                              else self.STEREO_SEPARATION) * float(eye)
         up = quat_to_matrix(self.orientation)[1, :3]
         turn = quat_from_axis_angle(up, angle)
+        # Every field, listed. A field left out here silently reverts to its
+        # default in one eye only, which shows up as the two eyes clipping or
+        # cueing differently -- the hardest kind of stereo fault to see.
+        # tests/test_stereo_transparency.py walks dataclasses.fields against
+        # this call so the next field added cannot be forgotten.
         return Camera(
             target=self.target.copy(), distance=self.distance,
             orientation=quat_multiply(self.orientation, turn),
             fov=self.fov, orthographic=self.orthographic,
             scene_radius=self.scene_radius,
+            scene_center=np.asarray(self.scene_center, float).copy(),
+            min_distance=self.min_distance,
             rotation_sense=self.rotation_sense)
 
     def eye_matrices(self, aspect: float, eye: int,

@@ -676,10 +676,11 @@ class Renderer:
         p = self._programs["composite"]
         p.bind()
         gl.glUniform3f(p.uniformLocation("uBg"), *self.background)
-        gl.glUniform1f(p.uniformLocation("uFogNear"),
-                       camera.distance - camera.scene_radius * 0.55)
-        gl.glUniform1f(p.uniformLocation("uFogFar"),
-                       camera.distance + camera.scene_radius * 1.25)
+        # From the camera, which measures it against the scene rather than
+        # against the pivot. Identical while the two coincide.
+        fog_near, fog_far = camera.fog_range()
+        gl.glUniform1f(p.uniformLocation("uFogNear"), fog_near)
+        gl.glUniform1f(p.uniformLocation("uFogFar"), fog_far)
         gl.glUniform1f(p.uniformLocation("uFogAmount"), self.fog_amount)
         self._bind_texture(p, "uColor", tex[0], 0)
         if self.use_ssao:

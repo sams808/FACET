@@ -154,6 +154,50 @@ class TestGLView:
             f"another: {['%.4f' % m for m in means]}. The light has become "
             f"fixed to the crystal again.")
 
+    def test_every_stereo_mode_renders(self, view, app):
+        """Choosing anaglyph used to crash the application outright.
+
+        Not an exception -- an access violation, exit 139, every time, on the
+        real OpenGL tier. `paintGL` renders the two eyes through
+        `_render_to_image`, which called `makeCurrent()` and then
+        `doneCurrent()`; inside `paintGL` the context is already current, so
+        that released it out from under the rest of the method, which then
+        opened a QOpenGLPaintDevice on a framebuffer bound to nothing.
+
+        1187 tests passed with this in the shipped build, because none of them
+        drove the widget through a stereo mode. This one does, and it is why it
+        is here rather than beside the stereo arithmetic in
+        tests/test_stereo_transparency.py -- the fault was never in the stereo
+        maths.
+        """
+        from facet.gl import stereo as stereo_mod
+
+        try:
+            for mode in stereo_mod.Mode:
+                view.set_stereo(mode, 1.5)
+                for _ in range(3):
+                    app.processEvents()
+                image = view.grab_image(200, 160, supersample=1)
+                assert not image.isNull(), mode.name
+                assert len(_distinct_colours(image)) > 2, mode.name
+        finally:
+            view.set_stereo(stereo_mod.Mode.OFF, 1.5)
+            for _ in range(2):
+                app.processEvents()
+
+    def test_rendering_a_pair_does_not_release_the_context(self, view, app):
+        """The mechanism, stated directly rather than through its symptom."""
+        from PySide6.QtGui import QOpenGLContext
+
+        view.makeCurrent()
+        try:
+            assert QOpenGLContext.currentContext() is view.context()
+            view._render_to_image(view.camera, 120, 100, 1)
+            assert QOpenGLContext.currentContext() is view.context(), (
+                "_render_to_image released a context it did not make current")
+        finally:
+            view.doneCurrent()
+
     def test_picking_the_centre_returns_a_real_atom_or_background(self, view):
         from PySide6.QtCore import QPoint
 
