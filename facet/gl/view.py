@@ -1069,15 +1069,9 @@ class StructureView(QOpenGLWidget):
             ang = np.degrees(np.arccos(np.clip(cos, -1, 1)))
             return f"{names[0]}–{names[1]}–{names[2]}  {ang:.2f}°"
         if len(pts) == 4:
-            b0 = pts[0] - pts[1]
-            b1 = pts[2] - pts[1]
-            b2 = pts[3] - pts[2]
-            n1 = np.cross(b0, b1)
-            n2 = np.cross(b1, b2)
-            m = np.cross(n1, b1 / np.linalg.norm(b1))
-            x = float(np.dot(n1, n2))
-            y = float(np.dot(m, n2))
-            ang = np.degrees(np.arctan2(y, x))
+            from ..core.utilities import torsion_angle
+
+            ang = torsion_angle(*pts)
             return (f"{names[0]}–{names[1]}–{names[2]}–{names[3]}"
                     f"  {ang:.2f}° torsion")
         return ""
