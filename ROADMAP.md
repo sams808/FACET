@@ -86,7 +86,7 @@ complete, which undercuts the application's central claim.
 
 - Lattice planes and Miller planes
 - Slabs and clipping planes
-- Thermal ellipsoids — the ADPs are already parsed
+- Thermal ellipsoids — the tensor is read, diagonalised and reported; the geometry is what remains
 - Per-atom and per-site style and colour overrides
 - Order-independent transparency, once many polyhedra overlap
 - Boundary modes: whole molecules, packing diagrams

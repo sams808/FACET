@@ -33,6 +33,11 @@ class Site:
     site_symmetry: str | None = None
     u_iso: float | None = None
     u_iso_esd: float | None = None
+    # The six anisotropic components, in the CIF's own order and basis:
+    # U11 U22 U33 U12 U13 U23, on the reciprocal basis rather than on
+    # Cartesian axes. Kept as the file gave them, because that is what can be
+    # written back out; facet.core.adp is what turns them into a shape.
+    u_aniso: np.ndarray | None = None
     frac_esd: np.ndarray | None = None   # esds on the coordinates, if given
 
     # Disorder, as the file declares it: which region of the cell has
@@ -48,6 +53,8 @@ class Site:
     def __post_init__(self):
         self.frac = np.asarray(self.frac, float).reshape(3)
         self.element = elements.normalise(self.element)
+        if self.u_aniso is not None:
+            self.u_aniso = np.asarray(self.u_aniso, float).reshape(6)
 
     @property
     def is_anion(self) -> bool:
@@ -131,7 +138,10 @@ class Structure:
     reference: str | None = None
     year: int | None = None
 
-    # Filled by facet.core.quality; a structure always knows how sound it is.
+    # What facet.core.quality measured, once anything has asked it to. Empty
+    # until then: the checks need the analysis results to say anything about
+    # bond-valence sums, and those do not exist when a file is first read. The
+    # File tab fills this when it computes.
     issues: list = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 

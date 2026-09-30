@@ -310,6 +310,8 @@ the cut.</p>
 <li><b>Cell</b> — lattice parameters, the reciprocal cell in the
 crystallographic convention (<i>a</i>* = <b>b</b>&times;<b>c</b>/<i>V</i>,
 without 2&pi;), density, composition and formula weight.</li>
+<li><b>File</b> — where the structure came from, what every health check
+measured, and the displacement parameters. See below.</li>
 <li><b>Angles</b> — ligand&ndash;centre&ndash;ligand angles for the selected
 site, over the bonded set.</li>
 <li><b>Shells</b> — neighbours grouped into shells with their degeneracies,
@@ -333,6 +335,38 @@ totals count the same bonds from opposite ends, so their agreement is a check on
 the arithmetic rather than a restatement of it. The charge balance line reports
 the residual.</li>
 </ul>
+<p {note}>A tab is computed when you show it, not before. Recomputing all ten on
+every move of the threshold took nearly four seconds on a structure of a few
+hundred atoms, and nine of them were behind another tab at the time.</p>
+
+<h2>The File tab</h2>
+<p>What the file says about itself, and what can be measured about it. Three
+parts:</p>
+<p><b>Where this came from</b> — the path, the name, the formula as written, the
+space group, the database code and the reference. Every number on every other
+tab is derived from this file, and the file is not always the one you think it
+is.</p>
+<p><b>Checks</b> — coordinates that collide, occupancies over one, uncertainties
+large enough to swallow a bond length, a formula that disagrees with the atom
+list, a bond-valence sum far from the stated oxidation state, a displacement
+tensor that describes no ellipsoid. Each says what it measured and the value it
+was compared against, grouped by how far outside the ordinary range it fell.
+<b>None of them says whether the structure is usable.</b> That depends on what
+is being asked of it: coordinates too uncertain to settle a bond-valence sum
+still carry the cell that indexes a powder pattern.</p>
+<p><b>Displacement</b> — where the file gives anisotropic parameters, the tensor
+converted to Cartesian axes and diagonalised. <i>U</i><sub>eq</sub> is one third
+of the trace, which is the quantity comparable with a quoted
+<i>U</i><sub>iso</sub>; the three r.m.s. values are the displacements along the
+principal axes. That last part is what no single number carries — a site can
+have an entirely ordinary <i>U</i><sub>eq</sub> and still be four times longer
+than it is wide.</p>
+<p {note}>A displacement tensor is a covariance matrix and has to be positive
+definite. One that is not describes a hyperboloid, which is not a shape an atom
+can have, and the site was refined where the data did not constrain it. Such a
+site is listed with its eigenvalues rather than with an r.m.s. it does not have.
+The test is made on the file's own components, so it does not depend on the
+conversion: changing basis cannot change the sign of an eigenvalue.</p>
 """),
 
         ("diffraction", "Diffraction and PDF", f"""
@@ -555,9 +589,10 @@ fitted.</li>
 <li><b>It does not judge a structure.</b> No number is labelled good, poor or
 trustworthy, and no coordination number is marked as the right one. Where a
 quantity depends on a choice, the choice is shown next to it.</li>
-<li><b>It reads anisotropic displacement parameters only as isotropic
+<li><b>It uses anisotropic displacement parameters only as isotropic
 equivalents</b> in the derived quantities, so PDF peak widths and
-&sigma;&sup2; estimates use <i>U</i><sub>iso</sub>.</li>
+&sigma;&sup2; estimates use <i>U</i><sub>iso</sub>. The tensor itself is read
+and reported on the File tab, and is not yet drawn as an ellipsoid.</li>
 <li><b>It does not compute XANES</b>, and it does not compute &chi;(<i>k</i>)
 from geometry alone. See the EXAFS section for what it does instead.</li>
 <li><b>It ships no bond-valence compilation</b> beyond a small built-in set, and

@@ -17,6 +17,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import dispose
+
 SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
               r"\1526458_Bi2O3.cif")
 SECOND = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
@@ -40,7 +42,7 @@ def window(qapp):
     w = PreviewWindow()
     w.load(str(SAMPLE))
     yield w
-    w.close()
+    dispose(w)
 
 
 # ---------------------------------------------------------------------------
@@ -611,3 +613,186 @@ def test_centring_on_a_site_that_is_not_drawn_says_so(window, qapp):
     window._center_on_site(10_000)
     qapp.processEvents()
     assert "not drawn" in window.statusBar().currentMessage()
+
+
+# ---------------------------------------------------------------------------
+# the health checks, which never ran
+# ---------------------------------------------------------------------------
+
+NPD = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\7023720_BiPO4.cif")
+
+
+def _file_tab(window):
+    """What the File tab shows once it is the tab on screen.
+
+    Shown rather than merely asked for, because the panel computes a tab when
+    it is shown and not before -- recomputing all ten on every change cost 3.8
+    seconds on a 484-atom structure.
+    """
+    panel = window.utilities
+    titles = [panel.tabs.tabText(i) for i in range(panel.tabs.count())]
+    assert "File" in titles, titles
+    panel.tabs.setCurrentIndex(titles.index("File"))
+    return panel.file_report.toPlainText()
+
+
+def test_the_health_checks_run_at_all(window):
+    """They were written, tested, and never called.
+
+    facet/core/quality.py is 350 lines of checks for the things that make a
+    number untrustworthy, and `Structure.issues` carries a comment saying the
+    module fills it. Until the File tab existed, the module was imported by the
+    test suite and by nothing else: no check had ever run in the application,
+    so none of it had ever reached anyone using it.
+    """
+    text = _file_tab(window)
+    assert text.strip(), "the File tab is empty"
+    assert window.structure.issues is not None
+
+
+def test_the_file_tab_reports_a_broken_file(window, qapp):
+    if not NPD.is_file():
+        pytest.skip("the reference structure is not present")
+    window.load(str(NPD))
+    qapp.processEvents()
+
+    text = _file_tab(window)
+    assert "P1" in text
+    assert "not positive definite" in text
+    codes = {f.code for f in window.structure.issues}
+    assert "npd-displacement" in codes
+
+
+def test_the_file_tab_states_the_provenance(window):
+    text = _file_tab(window)
+    assert "Where this came from" in text
+    assert Path(window.structure.source_path).name in text
+
+
+def test_the_file_tab_gives_the_displacement_table(window, qapp):
+    if not NPD.is_file():
+        pytest.skip("the reference structure is not present")
+    window.load(str(NPD))
+    qapp.processEvents()
+
+    text = _file_tab(window)
+    assert "Displacement" in text
+    for label in ("Bi1", "O1", "O2", "O3"):
+        assert label in text
+    # the site whose tensor is not an ellipsoid shows eigenvalues, not an
+    # r.m.s. it does not have
+    assert "eigenvalues" in text
+
+
+def test_the_file_tab_passes_no_verdict(window, qapp):
+    """The standing rule, on the one panel most tempted to break it."""
+    if not NPD.is_file():
+        pytest.skip("the reference structure is not present")
+    window.load(str(NPD))
+    qapp.processEvents()
+
+    low = _file_tab(window).lower()
+    for word in ("unusable", "unreliable", "bad file", "wrong", "invalid",
+                 "should be", "do not trust", "poor"):
+        assert word not in low, word
+
+
+# ---------------------------------------------------------------------------
+# a restored session's theme
+# ---------------------------------------------------------------------------
+
+def test_a_new_window_themes_the_panels_that_draw_their_own_text(window):
+    """Five panels compose HTML by hand and fall back to near-black.
+
+    That is right for the four light themes, which is why it never showed, and
+    unreadable on the two dark ones.
+    """
+    assert window.utilities.theme is not None
+    assert window.exafs_panel.theme is not None
+    assert window.view.theme is not None
+
+
+def test_restoring_a_session_applies_its_theme_everywhere(window, qapp, tmp_path):
+    """The restore set `self.theme` and told the theme panel, and stopped.
+
+    The viewport kept the theme it opened with and the HTML panels kept none,
+    so a session saved on Dark came back as dark panels with black text in
+    them.
+    """
+    from facet.core import exporters, theme as theme_mod
+
+    dark = theme_mod.PRESETS["Dark"]()
+    assert not dark.is_light_background
+
+    window._apply_theme_everywhere(dark)
+    window.view.set_theme(dark)
+    path = tmp_path / "dark.json"
+    exporters.save_session(window.project, path, theme=window.theme)
+
+    from facet.ui.preview import PreviewWindow
+
+    fresh = PreviewWindow()
+    try:
+        assert fresh.theme.is_light_background      # opens light
+        fresh.restore_session(exporters.load_session(path))
+        qapp.processEvents()
+
+        assert not fresh.theme.is_light_background
+        assert fresh.view.theme.name == dark.name
+        assert fresh.utilities.theme.name == dark.name
+        assert fresh.exafs_panel.theme.name == dark.name
+
+        # and the ink the panels will actually write with is light
+        from facet.ui import chrome
+        ink = chrome.text_hex(fresh.utilities.theme)
+        ground = chrome.ui_colors(fresh.utilities.theme).base
+        assert chrome.contrast(_rgb(ink), _rgb(ground)) > 4.5, (
+            f"ink {ink} on {ground}")
+    finally:
+        dispose(fresh)
+
+
+def _rgb(hex_colour: str):
+    h = hex_colour.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def test_only_the_tab_on_screen_is_computed(window, qapp):
+    """Ten tabs recomputed on every change cost 3.8 s on a 484-atom structure.
+
+    `update_for` runs on every move of the bond-valence threshold, every change
+    of site and every rebuild, so the window froze for seconds a step over
+    figures that were behind another tab. The tab on screen is brought up to
+    date at once; the rest when they are shown.
+    """
+    panel = window.utilities
+    titles = [panel.tabs.tabText(i) for i in range(panel.tabs.count())]
+    assert set(panel.REFRESHERS) == set(titles), (
+        "a tab with no refresher would never be computed at all")
+
+    window._on_threshold(0.02)
+    qapp.processEvents()
+    current = panel.tabs.tabText(panel.tabs.currentIndex())
+    assert current not in panel._stale
+    assert panel._stale == set(titles) - {current}
+
+    other = next(t for t in titles if t != current)
+    panel.tabs.setCurrentIndex(titles.index(other))
+    qapp.processEvents()
+    assert other not in panel._stale
+
+    panel.refresh_every_tab()
+    assert panel._stale == set()
+
+
+def test_a_tab_can_be_asked_for_without_being_shown(window, qapp):
+    """An export needs a tab's contents and must not have to show it."""
+    panel = window.utilities
+    window._on_threshold(0.03)
+    qapp.processEvents()
+    assert "Angles" in panel._stale
+
+    panel.refresh_tab("Angles")
+    assert "Angles" not in panel._stale
+    panel.refresh_tab("Angles")            # asking twice is not an error
+    panel.refresh_tab("not a tab")         # nor is asking for one that is gone

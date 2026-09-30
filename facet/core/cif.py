@@ -257,6 +257,7 @@ def _read_sites(blk, st) -> list[Site]:
             frac=frac,
             occupancy=float(s.occ) if s.occ else 1.0,
             u_iso=float(s.u_iso) if getattr(s, "u_iso", None) else None,
+            u_aniso=_aniso(s),
             frac_esd=esd_by_label.get(s.label),
         )
         assembly, group = disorder_by_label.get(s.label, ("", ""))
@@ -265,6 +266,28 @@ def _read_sites(blk, st) -> list[Site]:
         site.ox, site.ox_source = _oxidation_from_symbol(s.type_symbol, sym)
         sites.append(site)
     return sites
+
+
+def _aniso(site) -> np.ndarray | None:
+    """The six anisotropic components of a gemmi site, or None.
+
+    gemmi reads both the ``U_ij`` and the ``B_ij`` loops and reports ``U``
+    either way, which is the whole reason the parse goes through it: the two
+    differ by 8*pi^2, and a file that gives B is a file old enough that nothing
+    else about it can be assumed either.
+
+    The order is the CIF's -- U11 U22 U33 U12 U13 U23 -- and not Voigt order,
+    which would put U23 before U13. All zero means the site has no tensor: an
+    atom that genuinely does not move is not a thing a refinement produces.
+    """
+    aniso = getattr(site, "aniso", None)
+    if aniso is None:
+        return None
+    values = np.array([aniso.u11, aniso.u22, aniso.u33,
+                       aniso.u12, aniso.u13, aniso.u23], float)
+    if not np.all(np.isfinite(values)) or not np.any(values):
+        return None
+    return values
 
 
 # A charge on a CIF type symbol is a suffix on the bare element: 'Bi3+',

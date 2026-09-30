@@ -18,6 +18,7 @@ from enum import IntEnum
 
 import numpy as np
 
+from . import adp as adp_mod
 from . import elements
 
 
@@ -117,6 +118,7 @@ def check(structure, results=None, v_bond: float = 0.075) -> HealthReport:
     _check_occupancy(structure, report)
     _check_charge(structure, report)
     _check_esds(structure, report)
+    _check_displacement(structure, report)
     _check_formula(structure, report)
     if results:
         _check_valences(results, report, v_bond)
@@ -314,6 +316,108 @@ def _check_esds(structure, report: HealthReport) -> None:
                 Level.NOTE, "esd",
                 f"coordinate uncertainty reaches {worst:.3f} Å", site.label,
                 worst, 0.03))
+
+
+# Measured over the 388 sites carrying a tensor in the reference collection.
+# The anisotropy ratio sits below 2.33 at the 95th percentile and then jumps to
+# 8.19 at the 99th, so 4 separates the outliers from the bulk without cutting
+# into it, and 2.5 is where "worth knowing" begins.
+ANISOTROPY_CHECK = 4.0
+ANISOTROPY_NOTE = 2.5
+# U_eq reaches only 0.096 A^2 anywhere in that collection, so no absolute
+# threshold can be calibrated from it. A site is compared with the rest of its
+# own structure instead -- which is how a displacement table is read anyway,
+# and which needs no view about temperature, element or instrument.
+U_EQ_RATIO = 5.0
+U_EQ_FLOOR = 0.02            # below this, a large ratio is two small numbers
+
+
+def _check_displacement(structure, report: HealthReport) -> None:
+    """What the anisotropic displacement parameters say about the refinement.
+
+    A displacement tensor is a covariance matrix: it must be positive definite.
+    One that is not describes a hyperboloid rather than an ellipsoid, and the
+    site carrying it was refined where the data did not constrain it -- which
+    bears on every distance measured from that site. The usual name is a
+    non-positive-definite, or NPD, atom.
+
+    Positive-definiteness is tested on the file's own components rather than on
+    the Cartesian tensor, and deliberately: the transform between them is a
+    congruence, which by Sylvester's law of inertia cannot change the signs of
+    the eigenvalues. So this finding does not depend on the conversion being
+    right, and says something about the file rather than about FACET.
+
+    Nothing here says a structure is unusable. A large displacement parameter
+    can be a real one -- a genuinely mobile site, a high-temperature
+    measurement, an unresolved disorder that the refinement absorbed -- and
+    which of those it is, is not something a file can be asked.
+    """
+    tensors = []
+    for site in structure.sites:
+        if getattr(site, "u_aniso", None) is None:
+            continue
+        u = np.asarray(site.u_aniso, float)
+        raw = np.array([[u[0], u[3], u[4]],
+                        [u[3], u[1], u[5]],
+                        [u[4], u[5], u[2]]])
+        values = np.linalg.eigvalsh(raw)
+        smallest = float(values.min())
+        if smallest < -adp_mod.NEGLIGIBLE_U:
+            report.findings.append(Finding(
+                Level.IMPOSSIBLE, "npd-displacement",
+                f"displacement tensor is not positive definite: its smallest "
+                f"eigenvalue is {smallest:.6f} Å², so it describes a "
+                f"hyperboloid rather than an ellipsoid",
+                site.label, smallest, 0.0))
+            continue
+        if smallest <= adp_mod.NEGLIGIBLE_U:
+            # Different from a negative eigenvalue, and worth saying so: the
+            # components are written as zero in the file, which is what an
+            # unrefined parameter looks like rather than a refinement that went
+            # wrong. The consequence is the same -- there is no ellipsoid.
+            flat = int(np.sum(values <= adp_mod.NEGLIGIBLE_U))
+            report.findings.append(Finding(
+                Level.CHECK, "unrefined-displacement",
+                f"displacement tensor has {flat} zero "
+                f"eigenvalue{'s' if flat > 1 else ''}: the file gives no "
+                f"displacement along "
+                f"{'those directions' if flat > 1 else 'that direction'}",
+                site.label, smallest, 0.0))
+            continue
+        shape = adp_mod.ellipsoid(structure.cell.orth, u)
+        tensors.append((site, shape))
+        if shape.anisotropy > ANISOTROPY_CHECK:
+            report.findings.append(Finding(
+                Level.CHECK, "anisotropic-displacement",
+                f"displacement ellipsoid {shape.anisotropy:.1f} times longer "
+                f"than it is wide "
+                f"({shape.rms.min():.3f} to {shape.rms.max():.3f} Å r.m.s.)",
+                site.label, shape.anisotropy, ANISOTROPY_CHECK))
+        elif shape.anisotropy > ANISOTROPY_NOTE:
+            report.findings.append(Finding(
+                Level.NOTE, "elongated-displacement",
+                f"displacement ellipsoid {shape.anisotropy:.1f} times longer "
+                f"than it is wide",
+                site.label, shape.anisotropy, ANISOTROPY_NOTE))
+
+    # One site moving far more than the rest of its own structure. Compared
+    # against the median of the others rather than against a constant, so it
+    # needs no view about temperature, element or instrument -- and against the
+    # median rather than the mean, so that one outlier cannot hide a second.
+    if len(tensors) >= 4:
+        equivalents = np.array([e.u_equivalent for _, e in tensors])
+        for i, (site, shape) in enumerate(tensors):
+            others = np.delete(equivalents, i)
+            typical = float(np.median(others))
+            value = float(shape.u_equivalent)
+            if typical <= 0 or value < U_EQ_FLOOR:
+                continue
+            if value / typical > U_EQ_RATIO:
+                report.findings.append(Finding(
+                    Level.CHECK, "large-displacement",
+                    f"U_eq {value:.4f} Å² against {typical:.4f} Å² for the "
+                    f"rest of the structure ({value / typical:.1f} times)",
+                    site.label, value, typical * U_EQ_RATIO))
 
 
 def _check_valences(results, report: HealthReport, v_bond: float) -> None:

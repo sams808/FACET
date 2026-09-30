@@ -26,8 +26,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import bv_report, cn_methods, utilities
+from ..core import adp, bv_report, cn_methods, quality, utilities
 from . import chrome
+
+
+def _escape(text: str) -> str:
+    """A file's own strings go into HTML. A reference field with an ampersand
+    or an angle bracket in it would otherwise eat the rest of the table."""
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
 
 
 def _table(headers: list[str]) -> QTableWidget:
@@ -73,10 +80,21 @@ class UtilitiesPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
+        # Which tabs hold figures from a structure that has since changed. A
+        # tab is computed when it is shown and not before; see update_for.
+        self._stale: set[str] = set()
+        self.tabs.currentChanged.connect(self._on_tab_shown)
 
         self.summary = QTextBrowser()
         self.summary.setFrameShape(QTextBrowser.NoFrame)
         self.tabs.addTab(self.summary, "Cell")
+
+        # What the file itself looks like: where it came from, and what the
+        # health checks measured. Second, not last, because it is the thing to
+        # read before trusting any of the numbers on the other tabs.
+        self.file_report = QTextBrowser()
+        self.file_report.setFrameShape(QTextBrowser.NoFrame)
+        self.tabs.addTab(self.file_report, "File")
 
         self.angles = _table(["ligand A", "ligand B", "angle / °",
                               "d(A) / Å", "d(B) / Å"])
@@ -296,21 +314,62 @@ class UtilitiesPanel(QWidget):
         self.v_list = (v_list if v_list is not None else bv.V_LIST_DEFAULT)
         if structure is None:
             self.summary.setHtml("")
+            self.file_report.setHtml("")
             for t in (self.angles, self.shells, self.reflections,
                       self.connectivity, self.cutoffs, self.stability,
                       self.valences):
                 t.setRowCount(0)
             self.balance.setText("")
             return
-        self._refresh_summary()
-        self._refresh_angles()
-        self._refresh_shells()
-        self._refresh_reflections()
-        self._refresh_connectivity()
-        self._refresh_methods()
-        self._refresh_cutoffs()
-        self._refresh_stability()
-        self._refresh_anions()
+        # Every tab is now out of date; the one on screen is brought up to
+        # date at once and the rest when they are shown. Recomputing all ten
+        # took 3.8 s on a 484-atom structure and this is called on every move
+        # of the threshold, so the window froze for seconds at a time over
+        # figures that were behind another tab.
+        self._stale = set(self.REFRESHERS)
+        self._refresh_current()
+
+    # What computes each tab, by the name on it. A tab with no entry here --
+    # there are none today -- would simply never be marked stale.
+    REFRESHERS = {
+        "Cell": "_refresh_summary",
+        "File": "_refresh_file",
+        "Angles": "_refresh_angles",
+        "Shells": "_refresh_shells",
+        "Reflections": "_refresh_reflections",
+        "CN methods": "_refresh_methods",
+        "Connectivity": "_refresh_connectivity",
+        "Cutoffs": "_refresh_cutoffs",
+        "Stability": "_refresh_stability",
+        "Anions": "_refresh_anions",
+    }
+
+    def _on_tab_shown(self, index: int) -> None:
+        self._refresh_current()
+
+    def _refresh_current(self) -> None:
+        """Bring the tab on screen up to date, if it is not already."""
+        index = self.tabs.currentIndex()
+        if index < 0 or self.structure is None:
+            return
+        self.refresh_tab(self.tabs.tabText(index))
+
+    def refresh_tab(self, title: str) -> None:
+        """Compute one tab now, whether or not it is the one on screen.
+
+        Public because a caller that wants a tab's contents without showing it
+        -- an export, a test -- needs a way to ask for them that does not
+        depend on which tab happens to be in front.
+        """
+        if title not in self._stale or self.structure is None:
+            return
+        self._stale.discard(title)
+        getattr(self, self.REFRESHERS[title])()
+
+    def refresh_every_tab(self) -> None:
+        """All of them, for a caller that needs the whole panel populated."""
+        for title in list(self._stale):
+            self.refresh_tab(title)
 
     def _refresh_summary(self) -> None:
         s = self.structure
@@ -379,6 +438,131 @@ class UtilitiesPanel(QWidget):
           <tr><td>Bond strain index</td><td align='right'>{bsi:.4f} v.u.</td></tr>
         </table>
         """)
+
+    def _refresh_file(self) -> None:
+        """Provenance, then every health check, then the displacement table.
+
+        The findings are stated as what was measured and what it was compared
+        against. None of them says whether the structure is usable: that
+        depends on the question being asked of it, and a file that is useless
+        for a bond-valence sum can be perfectly good for indexing a powder
+        pattern.
+        """
+        s = self.structure
+        report = quality.check(s, self.results, self.v_bond)
+        s.issues = list(report.findings)
+
+        ink = chrome.text_hex(self.theme)
+        muted = chrome.muted_hex(self.theme)
+        rows = [f"<div style='color:{ink}; font-size:9pt'>"]
+
+        rows.append("<h3 style='margin-bottom:2px'>Where this came from</h3>")
+        rows.append("<table cellspacing='0' cellpadding='2'>")
+        for name, value in (("file", s.source_path or "—"),
+                            ("name", s.name or "—"),
+                            ("formula", s.formula or "—"),
+                            ("space group", s.spacegroup_hm or "—"),
+                            ("database code", s.database_code or "—"),
+                            ("reference", s.reference or "—"),
+                            ("year", str(s.year) if s.year else "—")):
+            rows.append(f"<tr><td style='color:{muted}'>{name}</td>"
+                        f"<td>{_escape(str(value))}</td></tr>")
+        rows.append("</table>")
+
+        rows.append("<h3 style='margin-bottom:2px'>Checks</h3>")
+        if not report.findings:
+            rows.append(f"<p style='color:{muted}'>Every check ran and none of "
+                        f"them measured anything outside its ordinary "
+                        f"range.</p>")
+        else:
+            rows.append(f"<p style='color:{muted}'>What each check measured, "
+                        f"and the value it was compared against. None of these "
+                        f"says whether the structure is usable — that depends "
+                        f"on what is being asked of it.</p>")
+            colours = {quality.Level.IMPOSSIBLE: self._level_colour(2),
+                       quality.Level.CHECK: self._level_colour(1),
+                       quality.Level.NOTE: muted}
+            headings = {quality.Level.IMPOSSIBLE:
+                        "No structure has been reported with this",
+                        quality.Level.CHECK: "Outside what is usually seen",
+                        quality.Level.NOTE: "Worth knowing"}
+            for level in (quality.Level.IMPOSSIBLE, quality.Level.CHECK,
+                          quality.Level.NOTE):
+                here = [f for f in report.findings if f.level == level]
+                if not here:
+                    continue
+                rows.append(f"<h4 style='margin-bottom:2px; "
+                            f"color:{colours[level]}'>{headings[level]}"
+                            f"</h4><table cellspacing='0' cellpadding='2'>")
+                for f in here:
+                    where = f"{_escape(f.where)}" if f.where else ""
+                    against = ("" if f.reference is None
+                               else f"<span style='color:{muted}'> — compared "
+                                    f"against {f.reference:g}</span>")
+                    rows.append(f"<tr><td style='color:{muted}'>{where}</td>"
+                                f"<td>{_escape(f.message)}{against}</td></tr>")
+                rows.append("</table>")
+
+        rows.append(self._displacement_html(ink, muted))
+        rows.append("</div>")
+        self.file_report.setHtml("".join(rows))
+
+    def _displacement_html(self, ink: str, muted: str) -> str:
+        """Per-site displacement parameters, where the file gave a tensor.
+
+        U_eq is comparable with the U_iso a file quotes. The three r.m.s.
+        values are the displacements along the principal axes of the ellipsoid,
+        which is the part that no single number carries: a site can have an
+        ordinary U_eq and still be four times longer than it is wide.
+        """
+        s = self.structure
+        shapes = [(site, adp.for_site(s.cell, site)) for site in s.sites]
+        shapes = [(site, e) for site, e in shapes if e is not None]
+        if not shapes:
+            isotropic = sum(1 for site in s.sites if site.u_iso)
+            if isotropic:
+                return (f"<h3 style='margin-bottom:2px'>Displacement</h3>"
+                        f"<p style='color:{muted}'>The file gives isotropic "
+                        f"displacement parameters only, for {isotropic} of "
+                        f"{len(s.sites)} sites.</p>")
+            return (f"<h3 style='margin-bottom:2px'>Displacement</h3>"
+                    f"<p style='color:{muted}'>The file gives no displacement "
+                    f"parameters.</p>")
+
+        out = ["<h3 style='margin-bottom:2px'>Displacement</h3>",
+               f"<p style='color:{muted}'>Anisotropic parameters, converted to "
+               f"Cartesian axes and diagonalised. U<sub>eq</sub> is one third "
+               f"of the trace, which is the quantity comparable with a quoted "
+               f"U<sub>iso</sub>.</p>",
+               "<table cellspacing='0' cellpadding='2'>",
+               f"<tr style='color:{muted}'><td>site</td>"
+               f"<td>U<sub>eq</sub> / Å²</td>"
+               f"<td>r.m.s. along the principal axes / Å</td>"
+               f"<td>longest / shortest</td></tr>"]
+        for site, e in shapes:
+            if e.is_ellipsoid:
+                lengths = " · ".join(f"{v:.3f}" for v in e.rms)
+                ratio = f"{e.anisotropy:.2f}"
+            else:
+                lengths = " · ".join(
+                    f"{v:+.4f}" for v in e.eigenvalues) + " (eigenvalues, Å²)"
+                ratio = "—"
+            out.append(f"<tr><td>{_escape(site.label)}</td>"
+                       f"<td>{e.u_equivalent:.4f}</td>"
+                       f"<td>{lengths}</td><td>{ratio}</td></tr>")
+        out.append("</table>")
+        return "".join(out)
+
+    def _level_colour(self, level: int) -> str:
+        """The levels take the theme's own colours rather than a red chosen
+        here, so that they stay legible on every theme including the light
+        default. Only the most severe is given the emphasis colour; using it
+        for both would make the distinction between them invisible."""
+        from . import chrome
+
+        if level >= 2 and self.theme is not None:
+            return chrome._hex(self.theme.selection_color)
+        return chrome.text_hex(self.theme)
 
     def _refresh_angles(self) -> None:
         if self.site_result is None:
