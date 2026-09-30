@@ -18,6 +18,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import dispose
+
 from facet.gl import stereo as S
 from facet.gl.camera import Camera
 
@@ -370,7 +372,7 @@ def test_the_view_renders_a_stereo_pair_on_whatever_tier(qapp, structure):
     assert (left.width(), left.height()) == (160, 120)
     combined = S.combine(left, right, S.Mode.ANAGLYPH)
     assert not combined.isNull()
-    widget.close()
+    dispose(widget)
 
 
 def test_grab_image_honours_the_stereo_mode(qapp, structure):
@@ -389,7 +391,7 @@ def test_grab_image_honours_the_stereo_mode(qapp, structure):
     widget.set_stereo(S.Mode.OFF)
     plain = widget.grab_image(120, 90, supersample=1)
     assert plain.width() <= 130
-    widget.close()
+    dispose(widget)
 
 
 def test_stereo_off_is_the_default_and_costs_one_render(qapp):
@@ -398,7 +400,7 @@ def test_stereo_off_is_the_default_and_costs_one_render(qapp):
     widget = StructureView()
     assert widget.stereo is S.Mode.OFF
     assert not widget.stereo.needs_two_eyes
-    widget.close()
+    dispose(widget)
 
 
 # ===========================================================================

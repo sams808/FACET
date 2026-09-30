@@ -11,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
+from conftest import dispose
 from PySide6.QtCore import QPoint
 
 SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs\1526458_Bi2O3.cif")
@@ -94,7 +96,7 @@ class TestGLView:
         if v.caps is None:
             pytest.skip("no OpenGL context available in this environment")
         yield v
-        v.close()
+        dispose(v)
 
     def test_a_tier_was_selected_and_described(self, view):
         assert view.caps is not None

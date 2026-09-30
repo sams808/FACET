@@ -16,6 +16,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import dispose
+
 SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
               r"\1526458_Bi2O3.cif")
 
@@ -369,7 +371,7 @@ class TestGLPlanes:
         if widget.caps is None:
             pytest.skip("no OpenGL context available in this environment")
         yield widget
-        widget.close()
+        dispose(widget)
 
     def test_a_plane_changes_the_image(self, view, qapp, structure):
         from facet.core import planes as planes_mod

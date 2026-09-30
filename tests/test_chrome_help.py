@@ -12,6 +12,8 @@ import re
 
 import pytest
 
+from conftest import dispose
+
 from facet.core import theme as T
 from facet.ui import chrome
 
@@ -274,7 +276,7 @@ def window(qapp):
     w = PreviewWindow()
     w.show()
     yield w
-    w.close()
+    dispose(w)
 
 
 def test_every_theme_in_the_menu_can_be_chosen(window, qapp):

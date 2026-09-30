@@ -13,6 +13,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import dispose
+
 SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
               r"\1526458_Bi2O3.cif")
 
@@ -222,7 +224,7 @@ def test_the_view_exports_through_its_own_method(qapp, tmp_path):
         pdf = widget.save_vector(tmp_path / "from_view.pdf")
         assert Path(pdf).read_bytes()[:5] == b"%PDF-"
     finally:
-        widget.close()
+        dispose(widget)
 
 
 def test_exporting_with_nothing_loaded_is_refused(qapp, tmp_path):
@@ -233,7 +235,7 @@ def test_exporting_with_nothing_loaded_is_refused(qapp, tmp_path):
         with pytest.raises(ValueError, match="nothing to export"):
             widget.save_vector(tmp_path / "nothing.svg")
     finally:
-        widget.close()
+        dispose(widget)
 
 
 def test_the_export_includes_the_labels_when_they_are_on(qapp, tmp_path):
@@ -266,4 +268,4 @@ def test_the_export_includes_the_labels_when_they_are_on(qapp, tmp_path):
                                                errors="replace")
         assert len(with_labels) > len(without), "the labels were not exported"
     finally:
-        widget.close()
+        dispose(widget)
