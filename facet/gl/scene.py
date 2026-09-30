@@ -37,11 +37,25 @@ class Style(Enum):
     SPACE_FILLING = "space-filling"
     STICK = "stick"
     WIREFRAME = "wireframe"
+    ELLIPSOIDS = "displacement ellipsoids"
 
 
 # Colour a sub-threshold contact is blended towards. Neutral grey rather than a
 # warning colour: these contacts are not errors, they are the contested ones.
 _FADE_TO = np.array([0.42, 0.44, 0.48], np.float32)
+
+# What an atom is drawn as in the ellipsoid style when the file gives it no
+# displacement parameter at all. Small, and deliberately not the atom's display
+# radius: in this style a drawn size is a measurement, and an atom with nothing
+# behind it must not look like one with a very isotropic tensor. It is marked
+# unmeasured as well, so nothing has to infer that from the size.
+FALLBACK_ELLIPSOID_RADIUS = 0.08
+
+# How much thinner bonds are drawn in the ellipsoid style. Measured against the
+# ellipsoids themselves: the semi-axes in the reference structures run 0.10 to
+# 0.26 A, and an ordinary bond is drawn at about 0.11 A radius, so at full
+# width a bond is as thick as the atom it joins.
+ELLIPSOID_BOND_SCALE = 0.35
 
 
 @dataclass
@@ -56,6 +70,19 @@ class Scene:
     atom_site: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int32))
     atom_label: list[str] = field(default_factory=list)
     atom_element: list[str] = field(default_factory=list)
+    # The displacement ellipsoid of each atom: a 3x3 matrix carrying a unit
+    # sphere onto the drawn surface, in world coordinates. None everywhere but
+    # the ellipsoid style. Per atom rather than per site because the overlay
+    # merge concatenates site indices from different structures without
+    # offsetting them, so atom_site is not a key there.
+    atom_shape: np.ndarray | None = None
+    # Which of those came from an anisotropic tensor, as against an isotropic
+    # parameter or nothing at all. It is what decides whether the principal
+    # axes are drawn on the ellipsoid: a sphere built from U_iso has no
+    # principal axes to draw, and a cross on it would assert a direction the
+    # file never gave.
+    atom_anisotropic: np.ndarray | None = None
+    ellipsoid_probability: float = 0.50
 
     # --- bonds -----------------------------------------------------------
     bond_a: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), np.float32))
@@ -338,6 +365,12 @@ class Scene:
         # the radii from scratch, so without this it silently reverts every
         # bond to the unscaled width the moment the threshold is touched.
         scale = float(getattr(self.theme, "bond_scale", 1.0) or 1.0)
+        if self.style is Style.ELLIPSOIDS:
+            # Thin sticks, as every ellipsoid plot since ORTEP has drawn them.
+            # A 50% ellipsoid is a tenth of an angstrom across and an ordinary
+            # bond is drawn wider than that, so at full width the bonds are the
+            # picture and the ellipsoids are specks hanging off them.
+            scale *= ELLIPSOID_BOND_SCALE
         self.bond_radius = bond_radius_for(v, self.v_bond) * scale
 
         # fade everything below the threshold towards neutral, proportionally,
@@ -391,7 +424,8 @@ def build_scene(structure: Structure,
                 overrides=None,
                 show_vectors: bool = False,
                 show_void_cones: bool = False,
-                vector_scale: float = 0.6) -> Scene:
+                vector_scale: float = 0.6,
+                ellipsoid_probability: float = 0.50) -> Scene:
     """Build a drawable scene for a structure.
 
     `results` is reused when supplied, so opening a structure does not analyse
@@ -412,6 +446,8 @@ def build_scene(structure: Structure,
     scene.show_vectors = bool(show_vectors)
     scene.show_void_cones = bool(show_void_cones)
     scene.vector_scale = float(vector_scale)
+    # set before the atoms are built: it decides how large every ellipsoid is
+    scene.ellipsoid_probability = float(ellipsoid_probability)
 
     _build_atoms(structure, scene, style, theme, results)
     _build_bonds(structure, scene, theme, params, v_list)
@@ -515,6 +551,10 @@ def apply_slab(structure: Structure, scene: Scene, slab) -> None:
     scene.atom_site = scene.atom_site[index]
     scene.atom_label = [scene.atom_label[i] for i in index]
     scene.atom_element = [scene.atom_element[i] for i in index]
+    if scene.atom_shape is not None:
+        scene.atom_shape = scene.atom_shape[index]
+    if scene.atom_anisotropic is not None:
+        scene.atom_anisotropic = scene.atom_anisotropic[index]
     if len(scene.structure_of):
         scene.structure_of = scene.structure_of[index]
     scene.n_cell_atoms = cell_atoms
@@ -623,6 +663,12 @@ def _replicate(structure: Structure, scene: Scene) -> None:
     scene.atom_site = np.tile(scene.atom_site, n_copies)
     scene.atom_label = scene.atom_label * n_copies
     scene.atom_element = scene.atom_element * n_copies
+    if scene.atom_shape is not None:
+        # tiled, not transformed: a lattice translation moves an atom and
+        # leaves its displacement tensor exactly as it was
+        scene.atom_shape = np.tile(scene.atom_shape, (n_copies, 1, 1))
+    if scene.atom_anisotropic is not None:
+        scene.atom_anisotropic = np.tile(scene.atom_anisotropic, n_copies)
     scene.atom_index = np.arange(len(scene.atom_radius), dtype=np.int32)
     scene.n_cell_atoms = scene.n_cell_atoms * n_copies
 
@@ -676,6 +722,7 @@ def _add_bonded_images(structure: Structure, scene: Scene) -> None:
     tree = cKDTree(np.array(known, float))
     extra_pos, extra_col, extra_rad = [], [], []
     extra_label, extra_element, extra_site = [], [], []
+    extra_shape, extra_anisotropic = [], []
     added: list[np.ndarray] = []
 
     TOL = 0.05          # angstrom; far below any real interatomic distance
@@ -695,10 +742,22 @@ def _add_bonded_images(structure: Structure, scene: Scene) -> None:
             label = scene.atom_label[source]
             element = scene.atom_element[source]
             site = int(scene.atom_site[source])
+            shape = (None if scene.atom_shape is None
+                     else scene.atom_shape[source])
+            measured = (False if scene.atom_anisotropic is None
+                        else bool(scene.atom_anisotropic[source]))
         else:
             colour = scene._bond_base_b[i]
             radius, label, element, site = 0.3, "", "", -1
+            # An image with no atom behind it gets the fallback shape and is
+            # marked unmeasured, like any other atom whose file said nothing.
+            shape = (None if scene.atom_shape is None
+                     else np.eye(3, dtype=np.float32)
+                     * FALLBACK_ELLIPSOID_RADIUS)
+            measured = False
 
+        extra_shape.append(shape)
+        extra_anisotropic.append(measured)
         extra_pos.append(end)
         extra_col.append(colour)
         extra_rad.append(radius)
@@ -720,6 +779,11 @@ def _add_bonded_images(structure: Structure, scene: Scene) -> None:
     scene.atom_index = np.arange(len(scene.atom_radius), dtype=np.int32)
     scene.atom_label.extend(extra_label)
     scene.atom_element.extend(extra_element)
+    if scene.atom_shape is not None:
+        scene.atom_shape = np.concatenate(
+            [scene.atom_shape, np.array(extra_shape, np.float32)])
+        scene.atom_anisotropic = np.concatenate(
+            [scene.atom_anisotropic, np.array(extra_anisotropic, bool)])
 
 
 def _build_atoms(structure: Structure, scene: Scene, style: Style,
@@ -748,6 +812,57 @@ def _build_atoms(structure: Structure, scene: Scene, style: Style,
     scene.atom_radius = (scene.atom_radius * (0.55 + 0.45 * np.clip(occ, 0, 1))
                          * float(theme.atom_scale))
     scene.n_cell_atoms = len(atoms)
+    if style is Style.ELLIPSOIDS:
+        _build_ellipsoids(structure, scene)
+
+
+def _build_ellipsoids(structure: Structure, scene: Scene) -> None:
+    """One transform per atom, from the site's displacement parameters.
+
+    Three cases, kept distinguishable because they say different things:
+
+    * an anisotropic tensor -- the ellipsoid it describes;
+    * only U_iso -- a sphere of radius sqrt(U_iso) times the probability
+      factor, which is what the file supports and no more;
+    * a tensor that is not positive definite, or nothing at all -- a small
+      fixed sphere, marked as not measured, because the alternative is to
+      draw a shape the file does not contain.
+
+    Nothing here is scaled by occupancy or by the theme's atom size, as the
+    radii above are. An ellipsoid is a measurement in angstroms, not a display
+    radius, and scaling it would make it a picture of something else. The
+    probability is the size control for this style.
+    """
+    from ..core import adp
+
+    scale = adp.scale_for(scene.ellipsoid_probability)
+    shapes = np.zeros((len(structure.atoms), 3, 3), np.float32)
+    measured = np.zeros(len(structure.atoms), bool)
+    # one ellipsoid per site, then handed to that site's atoms: every atom of
+    # a site is the same site, and the tensor is in Cartesian axes already
+    per_site = {}
+    for i, site in enumerate(structure.sites):
+        shape = adp.for_site(structure.cell, site)
+        if shape is not None and shape.is_ellipsoid:
+            per_site[i] = (shape.transform(scene.ellipsoid_probability), True)
+        elif site.u_iso:
+            radius = float(np.sqrt(max(site.u_iso, 0.0))) * scale
+            per_site[i] = (np.eye(3) * radius, False)
+        else:
+            per_site[i] = (np.eye(3) * FALLBACK_ELLIPSOID_RADIUS, False)
+
+    for j, atom in enumerate(structure.atoms):
+        matrix, is_measured = per_site.get(
+            atom.site_index, (np.eye(3) * FALLBACK_ELLIPSOID_RADIUS, False))
+        shapes[j] = matrix
+        measured[j] = is_measured
+    scene.atom_shape = shapes
+    scene.atom_anisotropic = measured
+    # The drawn radius becomes the ellipsoid's own largest semi-axis, so that
+    # everything measuring an atom on screen -- picking, the label offset, the
+    # billboard -- has a size that matches what is drawn.
+    scene.atom_radius = np.maximum(
+        np.linalg.norm(shapes, axis=1).max(axis=1), 1e-3).astype(np.float32)
 
 
 def _atom_colors(structure: Structure, atoms, theme, results) -> np.ndarray:
@@ -1021,6 +1136,7 @@ def merge_scenes(scenes: list[Scene], offsets=None) -> Scene:
     out.show_void_cones = False
 
     atom_pos, atom_rad, atom_col, atom_site = [], [], [], []
+    atom_shape, atom_anisotropic = [], []
     structure_of = []
     bond_a, bond_b, base_a, base_b = [], [], [], []
     bond_v, bond_d, bond_pairs = [], [], []
@@ -1034,6 +1150,12 @@ def merge_scenes(scenes: list[Scene], offsets=None) -> Scene:
         atom_rad.append(scene.atom_radius)
         atom_col.append(scene.atom_color)
         atom_site.append(scene.atom_site)
+        atom_shape.append(
+            scene.atom_shape if scene.atom_shape is not None
+            else np.zeros((scene.n_atoms, 3, 3), np.float32))
+        atom_anisotropic.append(
+            scene.atom_anisotropic if scene.atom_anisotropic is not None
+            else np.zeros(scene.n_atoms, bool))
         out.atom_label.extend(scene.atom_label)
         out.atom_element.extend(scene.atom_element)
         structure_of.extend([index] * scene.n_atoms)
@@ -1064,6 +1186,13 @@ def merge_scenes(scenes: list[Scene], offsets=None) -> Scene:
     out.atom_color = np.vstack(atom_col).astype(np.float32)
     out.atom_site = np.concatenate(atom_site).astype(np.int32)
     out.atom_index = np.arange(len(out.atom_radius), dtype=np.int32)
+    # Only when at least one of the merged scenes had them; a zero matrix drawn
+    # as an ellipsoid is an invisible atom, which is why the ones that had none
+    # contribute zeros and the whole array is dropped unless someone did.
+    if any(sc.atom_shape is not None for sc in scenes):
+        out.atom_shape = np.vstack(atom_shape).astype(np.float32)
+        out.atom_anisotropic = np.concatenate(atom_anisotropic)
+        out.ellipsoid_probability = scenes[0].ellipsoid_probability
     out.structure_of = np.array(structure_of, np.int32)
     out.n_cell_atoms = sum(s.n_cell_atoms for s in scenes)
 

@@ -30,6 +30,13 @@ ATTRIBUTES = {
     "aNormal": 6,
     "aColorB": 7,     # tube: the second half's colour
     "aParam": 8,      # tube: fraction along the bond
+    # The rows of M^-1 for a displacement ellipsoid, where M carries a unit
+    # sphere onto the drawn surface. Three vec3 attributes rather than one
+    # mat3, because a mat3 attribute takes three consecutive locations anyway
+    # and naming them separately keeps the buffer code uniform.
+    "aShapeX": 9,
+    "aShapeY": 10,
+    "aShapeZ": 11,
 }
 
 FRAG_OUTPUTS = ("oColor", "oPos", "oNormal")
@@ -144,6 +151,129 @@ void main() {
     oNormal = vec4(n, 1.0);
 }
 """
+
+# ---------------------------------------------------------------------------
+# displacement ellipsoids
+# ---------------------------------------------------------------------------
+# The sphere impostor, generalised. A point p in view space lies on the surface
+# when |A (p - c)| = 1, with A = M^-1 R^T: M^-1 undoes the ellipsoid and R^T
+# undoes the view rotation, so the intersection is the ordinary ray-sphere
+# quadratic once the ray has been carried through A. The silhouette stays exact
+# at any magnification, as it does for the spheres, which matters more here --
+# an ellipsoid is read by its shape, and a faceted one is read as the wrong
+# shape.
+
+ELLIPSOID_VS = """
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec3 aCenter;
+layout(location=2) in float aRadius;
+layout(location=3) in vec3 aColor;
+layout(location=4) in vec3 aId;
+layout(location=9) in vec3 aShapeX;
+layout(location=10) in vec3 aShapeY;
+layout(location=11) in vec3 aShapeZ;
+
+uniform mat4 uView;
+uniform mat4 uProj;
+
+out vec3 vCenterView;
+out vec3 vColor;
+out vec3 vRayView;
+out vec3 vId;
+out mat3 vA;
+
+void main() {
+    vec4 centre = uView * vec4(aCenter, 1.0);
+    vCenterView = centre.xyz;
+    vColor = aColor;
+    vId = aId;
+    // rows of M^-1, so the matrix whose ROWS are these is mat3 by columns
+    // transposed -- written out rather than transposed twice
+    mat3 inv_shape = mat3(vec3(aShapeX.x, aShapeY.x, aShapeZ.x),
+                          vec3(aShapeX.y, aShapeY.y, aShapeZ.y),
+                          vec3(aShapeX.z, aShapeY.z, aShapeZ.z));
+    vA = inv_shape * transpose(mat3(uView));
+    // aRadius is the largest semi-axis, so this quad covers the silhouette
+    // whatever the orientation; 1.15 for the perspective enlargement, as the
+    // spheres use.
+    vec3 p = centre.xyz + vec3(aCorner * aRadius * 1.15, 0.0);
+    vRayView = p;
+    gl_Position = uProj * vec4(p, 1.0);
+}
+"""
+
+ELLIPSOID_FS = """
+in vec3 vCenterView;
+in vec3 vColor;
+in vec3 vRayView;
+in vec3 vId;
+in mat3 vA;
+
+uniform mat4 uProj;
+uniform vec3 uLight;
+uniform int uPicking;
+
+layout(location=0) out vec4 oColor;
+layout(location=1) out vec4 oPos;
+layout(location=2) out vec4 oNormal;
+
+void main() {
+    vec3 rd = normalize(vRayView);
+    vec3 d = vA * rd;
+    vec3 o = -(vA * vCenterView);
+
+    float a = dot(d, d);
+    float b = dot(o, d);
+    float c = dot(o, o) - 1.0;
+    float h = b * b - a * c;
+    if (h < 0.0 || a <= 0.0) discard;
+
+    float t = (-b - sqrt(h)) / a;
+    if (t <= 0.0) discard;
+    vec3 p = rd * t;
+    vec3 u = vA * (p - vCenterView);        // on the unit sphere
+    // gradient of |A(p-c)|^2 is 2 A^T A (p-c)
+    vec3 n = normalize(transpose(vA) * u);
+
+    vec4 clip = uProj * vec4(p, 1.0);
+    gl_FragDepth = 0.5 * (clip.z / clip.w) + 0.5;
+
+    if (uPicking == 1) {
+        oColor = vec4(vId, 1.0);
+        oPos = vec4(p, 1.0);
+        oNormal = vec4(n, 1.0);
+        return;
+    }
+
+    float diff = max(dot(n, uLight), 0.0);
+    vec3 half_v = normalize(uLight + vec3(0.0, 0.0, 1.0));
+    float spec = pow(max(dot(n, half_v), 0.0), 48.0);
+    float rim = pow(1.0 - max(dot(n, vec3(0.0, 0.0, 1.0)), 0.0), 2.4);
+    vec3 col = vColor * (0.26 + 0.74 * diff)
+             + vec3(0.30) * spec
+             + vColor * 0.16 * rim;
+
+    // The octant boundaries: the three great circles of the unit sphere in the
+    // ellipsoid's own frame, which are where a component of u passes through
+    // zero. They are what makes an ellipsoid read as a solid with an
+    // orientation rather than as a flat oval, and they are the convention
+    // every crystallographic drawing program has followed since ORTEP. Drawn
+    // by darkening the surface rather than by adding geometry, so they are
+    // depth-correct for free: only the near half of each circle is ever
+    // reached, because the far half is behind the surface that was hit.
+    // Width in the fragment's own terms, so they stay one line wide at any
+    // magnification instead of thickening as the atom grows.
+    vec3 w = fwidth(u) * 2.0;
+    vec3 edge = smoothstep(vec3(0.0), w, abs(u));
+    float octant = min(edge.x, min(edge.y, edge.z));
+    col *= mix(0.30, 1.0, octant);
+
+    oColor = vec4(col, 1.0);
+    oPos = vec4(p, 1.0);
+    oNormal = vec4(n, 1.0);
+}
+"""
+
 
 # ---------------------------------------------------------------------------
 # bonds: low-poly tubes, split at the midpoint so each half takes its own colour

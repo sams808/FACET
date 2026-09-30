@@ -51,6 +51,8 @@ class PainterRenderer:
 
     background = _qcolor(theme_mod.FALLBACK_BACKGROUND)
 
+    _ellipses = None            # set per frame by render()
+
     def __init__(self):
         self.fog_amount = theme_mod.FALLBACK_FOG
         self.depth_cue = self.fog_amount > 0.0
@@ -90,6 +92,7 @@ class PainterRenderer:
 
         atoms = camera.project(scene.atom_position, width, height)
         self._near, self._far = self._depth_range(scene, camera, width, height)
+        self._ellipses = self._project_ellipsoids(scene, camera, width, height)
 
         items: list[tuple[float, object]] = []
         self._collect_cell(items, scene, camera, width, height)
@@ -154,16 +157,94 @@ class PainterRenderer:
         return (lo, hi) if hi > lo else (lo, lo + 1.0)
 
     # -- collection --------------------------------------------------------
+    def _project_ellipsoids(self, scene: Scene, camera: Camera,
+                            width: int, height: int):
+        """Each atom's ellipsoid as a drawn ellipse: ``(a, b, degrees)``.
+
+        An ellipsoid is the image of the unit ball under its 3x3 transform, so
+        its outline is the image of that ball under ``B = J M``, where ``J`` is
+        the 2x3 Jacobian of the projection at the atom's centre. That image is
+        the ellipse whose matrix is ``B B^T``: the semi-axes are the singular
+        values of ``B`` and the orientation is the first eigenvector.
+
+        ``J`` is measured by differencing the camera's own ``project`` rather
+        than written out again here, so there is one projection in the
+        application and not two that can drift apart. Exact for an orthographic
+        projection; for a perspective one it is the local linearisation, which
+        is the approximation this renderer already makes for a sphere.
+        """
+        if scene.atom_shape is None or scene.n_atoms == 0:
+            return None
+        centres = np.asarray(scene.atom_position, float)
+        base = camera.project(centres, width, height)[:, :2]
+        # one step along each world axis, sized to the scene so that the
+        # difference is well conditioned at any zoom
+        step = max(float(np.max(np.abs(scene.atom_shape))) * 0.25, 1e-4)
+        jacobian = np.empty((scene.n_atoms, 2, 3))
+        for k in range(3):
+            offset = np.zeros(3)
+            offset[k] = step
+            moved = camera.project(centres + offset, width, height)[:, :2]
+            jacobian[:, :, k] = (moved - base) / step
+
+        b = jacobian @ np.asarray(scene.atom_shape, float)      # (n, 2, 3)
+        conic = b @ np.transpose(b, (0, 2, 1))                  # (n, 2, 2)
+        values, vectors = np.linalg.eigh(conic)
+        semi = np.sqrt(np.clip(values, 0.0, None))
+        angles = np.degrees(np.arctan2(vectors[:, 1, 1], vectors[:, 0, 1]))
+        # eigh sorts ascending, so column 1 is the major axis
+        return np.stack([semi[:, 1], semi[:, 0], angles], axis=1)
+
     def _collect_atoms(self, items, scene: Scene, projected: np.ndarray,
                        width: int, height: int) -> None:
         for i in range(scene.n_atoms):
             x, y, z = projected[i]
             if z >= 0:
                 continue
+            if self._ellipses is not None:
+                major, minor, angle = self._ellipses[i]
+                if major < 0.4 or (x + major < 0 or x - major > width
+                                   or y + major < 0 or y - major > height):
+                    continue
+                items.append((z, self._ellipsoid_drawer(
+                    x, y, major, minor, angle, scene.atom_color[i], z,
+                    bool(scene.atom_anisotropic[i])
+                    if scene.atom_anisotropic is not None else True)))
+                continue
             r = self.radius_at(float(scene.atom_radius[i]), z)
             if r < 0.4 or x + r < 0 or x - r > width or y + r < 0 or y - r > height:
                 continue
             items.append((z, self._atom_drawer(x, y, r, scene.atom_color[i], z)))
+
+    def _ellipsoid_drawer(self, x, y, major, minor, angle, rgb, view_z,
+                          anisotropic):
+        """One displacement ellipsoid, with its principal axes crossed on it.
+
+        The cross is what makes an ellipsoid readable as a three-dimensional
+        shape rather than as a flat oval, and it is what every crystallographic
+        drawing program puts there. An atom the file gave no tensor for is
+        drawn as a plain circle with no cross, so that the two cannot be
+        mistaken for each other.
+        """
+        def draw(painter: QPainter):
+            shade = self._cue(_qcolor(rgb), view_z)
+            painter.save()
+            painter.translate(QPointF(x, y))
+            painter.rotate(float(angle))
+            grad = QRadialGradient(
+                QPointF(-major * 0.35, -minor * 0.35), major * 1.5)
+            grad.setColorAt(0.0, shade.lighter(165))
+            grad.setColorAt(0.45, shade)
+            grad.setColorAt(1.0, shade.darker(190))
+            painter.setBrush(QBrush(grad))
+            painter.setPen(QPen(shade.darker(260), max(0.6, major * 0.06)))
+            painter.drawEllipse(QPointF(0.0, 0.0), float(major), float(minor))
+            if anisotropic and major > 2.5:
+                painter.setPen(QPen(shade.darker(300), max(0.5, major * 0.05)))
+                painter.drawLine(QPointF(-major, 0.0), QPointF(major, 0.0))
+                painter.drawLine(QPointF(0.0, -minor), QPointF(0.0, minor))
+            painter.restore()
+        return draw
 
     def _atom_drawer(self, x, y, r, rgb, view_z):
         def draw(painter: QPainter):

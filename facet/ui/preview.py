@@ -320,11 +320,29 @@ class PreviewWindow(QMainWindow):
 
         self.style_box = QComboBox()
         for s in (Style.BALL_AND_STICK, Style.SPACE_FILLING,
-                  Style.STICK, Style.WIREFRAME):
+                  Style.STICK, Style.WIREFRAME, Style.ELLIPSOIDS):
             self.style_box.addItem(s.value, s)
-        self.style_box.activated.connect(lambda _=0: self._rebuild())
+        self.style_box.activated.connect(lambda _=0: self._on_style())
         row.addWidget(QLabel("Style"))
         row.addWidget(self.style_box)
+
+        # Only shown in the ellipsoid style, because it means nothing in the
+        # others -- and it is not a display preference: it names the surface
+        # being drawn, which is something a figure has to state.
+        self.probability_box = QComboBox()
+        for fraction in (0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99):
+            self.probability_box.addItem(f"{fraction:.0%}", fraction)
+        self.probability_box.setCurrentIndex(2)          # 50%, the convention
+        self.probability_box.activated.connect(lambda _=0: self._rebuild())
+        self.probability_label = QLabel("at")
+        self.probability_label.setToolTip(
+            "The fraction of the displacement distribution the drawn surface "
+            "encloses")
+        self.probability_box.setToolTip(self.probability_label.toolTip())
+        row.addWidget(self.probability_label)
+        row.addWidget(self.probability_box)
+        self.probability_label.hide()
+        self.probability_box.hide()
 
         self.poly_box = QComboBox()
         for m in (PolyhedraMode.SELECTED, PolyhedraMode.ALL, PolyhedraMode.NONE):
@@ -876,7 +894,9 @@ class PreviewWindow(QMainWindow):
                 overrides=entry.overrides,
                 show_vectors=self.show_vectors,
                 show_void_cones=(self.show_void_cones and entry is active),
-                vector_scale=self.vector_scale))
+                vector_scale=self.vector_scale,
+                ellipsoid_probability=self.probability_box.currentData()
+                or 0.50))
 
         self.scene = (scenes[0] if len(scenes) == 1
                       else merge_scenes(scenes, [e.offset for e in entries]))
@@ -1050,6 +1070,13 @@ class PreviewWindow(QMainWindow):
         """The tabulation threshold. Unlike the bond threshold this DOES
         re-run the neighbour search, so it is a spin box rather than a drag."""
         self.project.set_list_threshold(value)
+        self._rebuild()
+
+    def _on_style(self) -> None:
+        """A style change, and the controls that belong to only one style."""
+        ellipsoids = self.style_box.currentData() is Style.ELLIPSOIDS
+        self.probability_label.setVisible(ellipsoids)
+        self.probability_box.setVisible(ellipsoids)
         self._rebuild()
 
     def _on_poly_mode(self) -> None:

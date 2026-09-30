@@ -52,7 +52,7 @@ def sphere_vertices(scene: Scene) -> dict[str, np.ndarray]:
     """
     n = scene.n_atoms
     if n == 0:
-        return _empty_sphere()
+        return empty_sphere()
 
     corner = np.tile(_QUAD, (n, 1))
     repeat = VERTS_PER_SPHERE
@@ -65,7 +65,50 @@ def sphere_vertices(scene: Scene) -> dict[str, np.ndarray]:
     }
 
 
-def _empty_sphere() -> dict[str, np.ndarray]:
+def ellipsoid_vertices(scene: Scene) -> dict[str, np.ndarray]:
+    """Billboard quads carrying each atom's inverse shape matrix.
+
+    The inverse is computed here rather than in the shader: it is one
+    inversion per atom on the CPU against one per fragment on the GPU, and a
+    singular matrix can be dealt with honestly here -- an atom whose shape has
+    collapsed is given a small sphere instead of an infinity that would paint
+    the whole screen.
+    """
+    n = scene.n_atoms
+    if n == 0 or scene.atom_shape is None:
+        return empty_ellipsoid()
+
+    shapes = np.asarray(scene.atom_shape, float).copy()
+    # A degenerate shape has no inverse. It can only arise from a tensor the
+    # file gave as zero, and the honest drawing of it is a small sphere.
+    tiny = np.abs(np.linalg.det(shapes)) < 1e-12
+    if tiny.any():
+        shapes[tiny] = np.eye(3) * 0.02
+    inverse = np.linalg.inv(shapes)
+    # the largest semi-axis, which is the radius the billboard must cover
+    radius = np.linalg.norm(shapes, axis=1).max(axis=1)
+
+    repeat = VERTS_PER_SPHERE
+    return {
+        "aCorner": np.tile(_QUAD, (n, 1)),
+        "aCenter": np.repeat(scene.atom_position, repeat, axis=0),
+        "aRadius": np.repeat(radius, repeat).reshape(-1, 1),
+        "aColor": np.repeat(scene.atom_color, repeat, axis=0),
+        "aId": np.repeat(id_to_rgb(scene.atom_index), repeat, axis=0),
+        "aShapeX": np.repeat(inverse[:, 0, :], repeat, axis=0),
+        "aShapeY": np.repeat(inverse[:, 1, :], repeat, axis=0),
+        "aShapeZ": np.repeat(inverse[:, 2, :], repeat, axis=0),
+    }
+
+
+def empty_ellipsoid() -> dict[str, np.ndarray]:
+    out = empty_sphere()
+    for name in ("aShapeX", "aShapeY", "aShapeZ"):
+        out[name] = np.zeros((0, 3), np.float32)
+    return out
+
+
+def empty_sphere() -> dict[str, np.ndarray]:
     return {"aCorner": np.zeros((0, 2), np.float32),
             "aCenter": np.zeros((0, 3), np.float32),
             "aRadius": np.zeros((0, 1), np.float32),

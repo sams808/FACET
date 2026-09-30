@@ -16,6 +16,11 @@ from conftest import dispose
 from PySide6.QtCore import QPoint
 
 SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs\1526458_Bi2O3.cif")
+# A structure with anisotropic displacement parameters. SAMPLE has none, so an
+# ellipsoid test driven from it would draw the same fallback sphere every time.
+ANISO_SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif"
+                    r"\1004091_BiNa3O8P2.cif")
+
 pytestmark = pytest.mark.skipif(not SAMPLE.exists(),
                                 reason="sample structure not present")
 
@@ -664,3 +669,129 @@ def test_the_shader_light_does_not_depend_on_the_camera():
     assert "@ light" not in source, (
         "the light is being transformed by the camera again; it must stay a "
         "view-space constant")
+
+
+class TestEllipsoids:
+    """The GL tier's displacement ellipsoids, against the software tier's."""
+
+    @pytest.fixture(scope="class")
+    def pair(self, app):
+        from facet.core import cif, theme as theme_mod
+        from facet.gl.camera import Camera
+        from facet.gl.scene import Style, build_scene
+        from facet.gl.view import StructureView
+
+        # A structure that actually has anisotropic parameters: the usual
+        # sample has none, and every atom would be drawn as the same fallback
+        # sphere -- a comparison that would pass without an ellipsoid in it.
+        aniso = ANISO_SAMPLE
+        if not aniso.is_file():
+            pytest.skip("no structure with displacement parameters to hand")
+        structure = cif.read(aniso)
+        theme = theme_mod.Theme()
+        scene = build_scene(structure, style=Style.ELLIPSOIDS, theme=theme,
+                            cell_range=(1, 1, 1))
+        assert scene.atom_anisotropic.any(), "this sample has no tensors"
+        # Atoms only. The two tiers draw a bond as a tube and as a
+        # quadrilateral, and with the thin sticks this style uses the
+        # difference between those dominates any pixel comparison -- which
+        # would make this a test of the bonds rather than of the ellipsoids.
+        scene.bond_a = scene.bond_a[:0]
+        scene.bond_b = scene.bond_b[:0]
+        scene.bond_radius = scene.bond_radius[:0]
+        scene.bond_color_a = scene.bond_color_a[:0]
+        scene.bond_color_b = scene.bond_color_b[:0]
+        scene.cell_segments = scene.cell_segments[:0]
+        camera = Camera()
+        camera.frame(scene.center, scene.radius * 0.6)
+
+        view = StructureView()
+        view.resize(520, 420)
+        view.set_theme(theme)
+        view.set_scene(scene)
+        view.show()
+        for _ in range(20):
+            app.processEvents()
+        if view.caps is None:
+            pytest.skip("no OpenGL context available in this environment")
+        view.camera = camera
+        yield view, scene, camera, theme
+        dispose(view)
+
+    def test_the_two_tiers_draw_the_same_ellipsoids(self, pair):
+        """Two implementations that share nothing but the scene.
+
+        One intersects a ray with the transformed unit sphere in a fragment
+        shader; the other projects the tensor to a conic and asks QPainter for
+        an ellipse. Agreement is evidence; disagreement says which pixels.
+        """
+        from PySide6.QtGui import QImage, QPainter
+
+        from facet.gl.painter import PainterRenderer
+
+        view, scene, camera, theme = pair
+        width, height = 520, 420
+        gl_image = view.grab_image(width, height, supersample=1)
+
+        renderer = PainterRenderer()
+        renderer.apply_theme(theme)
+        soft = QImage(width, height, QImage.Format_ARGB32)
+        painter = QPainter(soft)
+        try:
+            renderer.render(painter, scene, camera, width, height)
+        finally:
+            painter.end()
+
+        def ink(image):
+            a = _rgb_array(image).astype(int)
+            return np.abs(a - a[2, 2]).sum(axis=2) > 40
+
+        g, s = ink(gl_image), ink(soft)
+        assert g.sum() > 500 and s.sum() > 500, "one of the tiers drew nothing"
+        overlap = float((g & s).sum()) / float((g | s).sum())
+        # The software tier also draws the principal axes across each
+        # ellipsoid, which the GL tier shows as octant boundaries on the
+        # surface instead, so the two are not expected to match pixel for
+        # pixel -- only to put the same shapes in the same places.
+        assert overlap > 0.70, f"the tiers agree on only {100 * overlap:.0f}%"
+        inside = float((g & s).sum()) / float(g.sum())
+        assert inside > 0.95, (
+            f"{100 * (1 - inside):.0f}% of the GL tier's ink is where the "
+            f"software tier drew nothing")
+
+        for mask in (g, s):
+            ys, xs = np.nonzero(mask)
+            assert abs(xs.mean() - width / 2) < width * 0.12
+            assert abs(ys.mean() - height / 2) < height * 0.12
+
+    def test_an_atom_can_still_be_picked(self, pair):
+        """The pick pass draws the ellipsoids, or every atom becomes unclickable.
+
+        They are the atoms in this style: leaving them out of that pass would
+        leave nothing in it at all.
+        """
+        view, scene, camera, _ = pair
+        projected = camera.project(scene.atom_position,
+                                   view.width(), view.height())
+        tried = hit = 0
+        for i in range(scene.n_atoms):
+            x, y, z = projected[i]
+            if z >= 0 or not (0 <= x < view.width() and 0 <= y < view.height()):
+                continue
+            tried += 1
+            if view.pick_at(QPoint(int(x), int(y))) is not None:
+                hit += 1
+        assert tried > 5
+        assert hit == tried, f"{tried - hit} of {tried} atoms picked nothing"
+
+    def test_only_one_of_the_two_atom_buffers_is_filled(self, pair):
+        """An atom is a sphere or an ellipsoid, never both at once.
+
+        Uploading both leaves a second copy of every atom in the buffer, drawn
+        on top of the first -- which is invisible when they coincide and wrong
+        the moment they do not.
+        """
+        view, scene, _, _ = pair
+        assert view._renderer is not None
+        assert view._renderer._counts.get("ellipsoid", 0) > 0
+        assert view._renderer._counts.get("sphere", 0) == 0

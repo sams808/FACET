@@ -26,7 +26,7 @@ done; what remains planned is listed as such.
 | Wireframe | ✓ | ✓ | **partial** | draws as thin sticks; no true line mode |
 | Polyhedral | ✓ | ✓ | **done** | per site, or every cation at once |
 | Mixed polyhedral + ball-and-stick | ✓ | ✓ | **done** | the default when a site is selected |
-| Thermal ellipsoids | ✓ | ✓ | **partial** | the tensor is read, diagonalised and reported per site; not yet drawn |
+| Thermal ellipsoids | ✓ | ✓ | **done** | any probability from 10 % to 99 %, with octant boundaries; reported per site on the File tab |
 | Dot-surface / mesh | ✓ | ✓ | out of scope | superseded by ambient occlusion for depth reading |
 | Per-atom style overrides | ✓ | ✓ | **done** | colour, size, visibility and label, per single atom; right-click it |
 
@@ -239,11 +239,6 @@ listed so that what is missing stays visible rather than being discovered.
 
 **Planned**
 
-- *Thermal ellipsoids*. The tensor is read from the file, converted to
-  Cartesian axes, diagonalised, and reported per site on the File tab —
-  U<sub>eq</sub>, the principal r.m.s. displacements and the axis ratio — and
-  the health checks state when one is not positive definite. What remains is
-  drawing it.
 - *Symmetry tools*: the operator list, transforming to another setting or cell,
   and searching for higher symmetry. Not selected for this round.
 - *Scripting and batch*: the Library workspace, for running an analysis over a

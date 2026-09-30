@@ -15,7 +15,11 @@ the paper. The depth sorting it does for transparency is exactly the painter's
 algorithm an SVG needs, since SVG has no depth buffer either.
 
 What this cannot do is carry over the OpenGL tier's ambient occlusion and
-outlines: those are screen-space effects with no vector equivalent. An exported
+outlines: those are screen-space effects with no vector equivalent. Nor does it
+draw a displacement ellipsoid's octant boundaries the way the OpenGL tier does
+-- that is surface shading, and here they become the ellipse's two principal
+axes drawn across it, which says the same thing with the lines a vector format
+has. An exported
 figure is therefore the flat-shaded version of the view, which is what a journal
 figure usually wants anyway. Say so rather than let it be a surprise --
 :func:`describe_differences` is there to be shown to the user.

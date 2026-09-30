@@ -535,6 +535,30 @@ redraws the structure — moving the threshold, changing the style, cutting a
 slab — disturbs it, but if the same atom moves, as it can between disorder
 configurations, the centre stays where it was rather than following.</p>
 
+<h2>Displacement ellipsoids</h2>
+<p>The <b>Style</b> list has an entry for them. Each atom is drawn as the
+surface enclosing a chosen fraction of its displacement distribution — 50% by
+default, which is the crystallographic convention and what every other program
+draws unless told otherwise. The fraction is chosen beside the style, and it is
+shown there rather than hidden in a menu because it is part of what the picture
+says: a 50% and a 99% ellipsoid of the same atom differ by more than a factor of
+two.</p>
+<p>The lines across each ellipsoid are the boundaries of its octants, drawn
+where its three principal planes cut the surface. They are what makes it read as
+a solid with an orientation rather than as a flat oval, and they are the
+convention ORTEP set. An atom drawn without them is one the file gave no
+anisotropic tensor for: it is a sphere from <i>U</i><sub>iso</sub>, or, where
+there was nothing at all, a small fixed sphere. Those have no principal axes,
+and marking axes on them would assert a direction the file never gave.</p>
+<p {note}>Unlike every other style, the drawn size here is a measurement rather
+than a convention. It is not scaled by occupancy and not scaled by the theme's
+atom size, both of which would make it a picture of something else. Bonds are
+drawn thin in this style, because a 50% ellipsoid is about a tenth of an
+angstrom across and an ordinary bond is drawn wider than that.</p>
+<p>A tensor that is not positive definite describes no ellipsoid at all. Such a
+site falls back to its isotropic parameter and is listed on the <b>File</b>
+tab under the checks, with the eigenvalue that makes it impossible.</p>
+
 <h2>Lighting</h2>
 <p>The light is fixed to the viewer, not to the crystal: turning the structure
 does not turn the lamp with it, so looking along &minus;c is lit exactly as

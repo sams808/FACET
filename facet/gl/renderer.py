@@ -145,6 +145,7 @@ class Renderer:
     def _build_programs(self) -> None:
         spec = [
             ("sphere", shaders.SPHERE_VS, shaders.SPHERE_FS, 3),
+            ("ellipsoid", shaders.ELLIPSOID_VS, shaders.ELLIPSOID_FS, 3),
             ("tube", shaders.TUBE_VS, shaders.TUBE_FS, 3),
             ("poly", shaders.POLY_VS, shaders.POLY_FS, 1),
             ("line", shaders.LINE_VS, shaders.LINE_FS, 1),
@@ -225,8 +226,17 @@ class Renderer:
         self._tube_sides = buffers.tube_sides_for(
             scene, budget=400_000 if self.caps.tier is Tier.FULL else 120_000)
 
-        sph = buffers.sphere_vertices(scene)
-        self._make_vao("sphere", sph, len(sph["aCorner"]))
+        # One of the two, never both: an atom is drawn as a sphere or as its
+        # displacement ellipsoid, and uploading the other leaves a second copy
+        # of every atom in the buffer to be drawn on top of the first.
+        if scene.atom_shape is not None:
+            ell = buffers.ellipsoid_vertices(scene)
+            self._make_vao("ellipsoid", ell, len(ell["aCorner"]))
+            self._make_vao("sphere", buffers.empty_sphere(), 0)
+        else:
+            sph = buffers.sphere_vertices(scene)
+            self._make_vao("sphere", sph, len(sph["aCorner"]))
+            self._make_vao("ellipsoid", buffers.empty_ellipsoid(), 0)
 
         tube = buffers.tube_vertices(scene, self._tube_sides)
         self._make_vao("tube", tube, len(tube["aPosition"]))
@@ -335,6 +345,7 @@ class Renderer:
 
         if scene is not None:
             self._draw_spheres(view, proj, light_view, picking)
+            self._draw_ellipsoids(view, proj, light_view, picking)
             if not picking:
                 # Atoms are the only pickable thing, so they are the only thing
                 # drawn into the pick pass. A bond used to be drawn there with
@@ -382,6 +393,20 @@ class Renderer:
         self._vaos["sphere"].bind()
         self.gl.glDrawArrays(GL_TRIANGLES, 0, self._counts["sphere"])
         self._vaos["sphere"].release()
+        p.release()
+
+    def _draw_ellipsoids(self, view, proj, light, picking) -> None:
+        if not self._counts.get("ellipsoid"):
+            return
+        p = self._programs["ellipsoid"]
+        p.bind()
+        self._set_matrix(p, "uView", view)
+        self._set_matrix(p, "uProj", proj)
+        self.gl.glUniform3f(p.uniformLocation("uLight"), *light)
+        self.gl.glUniform1i(p.uniformLocation("uPicking"), 1 if picking else 0)
+        self._vaos["ellipsoid"].bind()
+        self.gl.glDrawArrays(GL_TRIANGLES, 0, self._counts["ellipsoid"])
+        self._vaos["ellipsoid"].release()
         p.release()
 
     def _draw_tubes(self, view, proj, light, picking) -> None:
