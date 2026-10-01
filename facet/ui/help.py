@@ -514,6 +514,24 @@ supersampling. <i>File &rsaquo; Export as vector</i> writes SVG or PDF — real
 vector geometry, not a bitmap in a wrapper, so it can be edited in a drawing
 program and scales without pixels. The vector exporter is the same code path as
 the software renderer, so what it writes is what the fallback tier draws.</p>
+<h2>Anion sites</h2>
+<p>By default the site list holds the cations, and the anions appear only as
+their ligands. <b>Anion sites</b>, under the list, analyses each anion as a site
+in its own right: its coordination number, its contacts, its plateau and its own
+bond-valence sum, counted from the cations around it.</p>
+<p>It is the other half of the same check, and it catches things the cation sums
+do not. An oxygen whose sum comes to 1.4 is either missing a bond to something
+the file leaves out — a hydrogen, usually — or is not where the refinement put
+it. Cation and anion totals count the same bonds from opposite ends, so their
+agreement is a check on the arithmetic rather than a restatement of it.</p>
+<p {note}>The search is done around the anion rather than gathered from the
+cation results. A cation site's contact list belongs to one representative atom
+of that site, and an anion is reached by cations from every equivalent position
+— most of which are not that representative. Summing the cation lists gives each
+anion only the fraction of its bonds that happen to touch a representative,
+which on α-Bi₂O₃ came to 0.66 v.u. for an O²⁻: low enough to look like a finding
+rather than an error.</p>
+
 <h2>What the view turns about</h2>
 <p>By default the view rotates about the middle of the drawn cell block. Right-
 click an atom and choose <i>Rotate about &lt;label&gt;</i> to turn about that
@@ -619,8 +637,13 @@ equivalents</b> in the derived quantities, so PDF peak widths and
 and reported on the File tab, and is not yet drawn as an ellipsoid.</li>
 <li><b>It does not compute XANES</b>, and it does not compute &chi;(<i>k</i>)
 from geometry alone. See the EXAFS section for what it does instead.</li>
-<li><b>It ships no bond-valence compilation</b> beyond a small built-in set, and
-no diffraction card database. Both are read from files you supply.</li>
+<li><b>It ships one bond-valence table, not a compilation.</b> Brese &amp;
+O'Keeffe's Table 2 — 108 cations against O, F and Cl — with a few pairs to the
+heavier anions from their Table 3. Larger accumulated sets, and the newer
+refits, are read from files you supply. A pair outside the table falls back to
+the O'Keeffe–Brese estimator and is labelled as estimated wherever it is used:
+the estimator differs from a fitted value by 0.05 Å on average and by as much as
+0.21 Å, which is a factor of 0.57 to 1.48 on every bond valence.</li>
 <li><b>It does not correct measured data.</b> No absorption, no background
 subtraction, no <i>Q</i>-space corrections.</li>
 </ul>

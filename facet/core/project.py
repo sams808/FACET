@@ -105,17 +105,20 @@ class Entry:
         return f"{self.name}  ·  {sg}"
 
     def results(self, params: bv.ParameterSet, v_bond: float,
-                v_list: float) -> list:
+                v_list: float, anions: bool = False) -> list:
         """Analysis for this entry, cached.
 
         The cache key deliberately excludes `v_bond`: contacts are found down
         to `v_list`, and the bond threshold only classifies what was already
         found. Including it would re-run the neighbour search on every drag.
+        It does include `anions`, because that changes which sites are in the
+        list rather than how they are classified.
         """
-        key = (id(params), round(v_list, 6))
+        key = (id(params), round(v_list, 6), bool(anions))
         if self._results is None or self._results_key != key:
             self._results = coordination.analyse_structure(
-                self.structure, params, v_bond=v_bond, v_list=v_list)
+                self.structure, params, v_bond=v_bond, v_list=v_list,
+                cations_only=not anions)
             self._results_key = key
         return self._results
 
@@ -132,6 +135,11 @@ class Project:
     def __init__(self):
         self.entries: list[Entry] = []
         self.active: int | None = None
+        # Whether the anions are analysed as sites in their own right as well
+        # as being the ligands of the cations. Off by default: the cations are
+        # what a coordination analysis is usually about, and in a phosphate the
+        # anions outnumber them three to one.
+        self.include_anions = False
 
         self.params: bv.ParameterSet = bv.DEFAULT
         self.v_bond: float = bv.V_BOND_DEFAULT
@@ -234,7 +242,16 @@ class Project:
             e.invalidate()
 
     def results_for(self, entry: Entry) -> list:
-        return entry.results(self.params, self.v_bond, self.v_list)
+        return entry.results(self.params, self.v_bond, self.v_list,
+                             self.include_anions)
+
+    def set_include_anions(self, on: bool) -> None:
+        """Analyse the anions as sites too, not only as ligands."""
+        on = bool(on)
+        if on == self.include_anions:
+            return
+        self.include_anions = on
+        self.invalidate_all()
 
     # -- layout ------------------------------------------------------------
     def set_overlay(self, on: bool, spacing: float | None = None) -> None:

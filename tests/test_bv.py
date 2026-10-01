@@ -137,7 +137,9 @@ def test_known_poor_estimates_really_are_poor():
         cation, ox, anion = key
         est = bv.estimate_r0(cation, anion)
         assert est is not None
-        assert abs(est - bv._FITTED[key]) > 0.20, (
+        fitted = bv.DEFAULT.get(cation, ox, anion)
+        assert fitted is not None and fitted.fitted
+        assert abs(est - fitted.r0) > 0.20, (
             f"{cation}{ox:+d}-{anion} now agrees with the estimator; "
             "drop it from ESTIMATOR_KNOWN_POOR")
 
@@ -151,15 +153,17 @@ def test_fitted_beats_estimated_and_both_are_labelled():
     fitted = bv.DEFAULT.get("Si", 4, "O")
     assert fitted.fitted and "Brese" in fitted.source
 
-    # Rh-O has no fitted entry here, so the estimator must cover it and say so
-    est = bv.DEFAULT.get("Rh", 3, "O")
+    # The built-in set is Table 2 (oxides, fluorides, chlorides) plus a few
+    # pairs to the heavier anions. Rh-S is in none of it, so the estimator has
+    # to cover it and has to say that it did.
+    est = bv.DEFAULT.get("Rh", 3, "S")
     assert est is not None and not est.fitted and "estimated" in est.source
 
 
 def test_estimator_can_be_refused():
     strict = bv.ParameterSet(allow_estimated=False)
     assert strict.get("Si", 4, "O") is not None
-    assert strict.get("Rh", 3, "O") is None
+    assert strict.get("Rh", 3, "S") is None
 
 
 def test_user_override_is_recorded_as_such():

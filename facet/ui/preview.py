@@ -116,6 +116,14 @@ class PreviewWindow(QMainWindow):
         self.site_list.setToolTip(
             "Double-click a site to turn the view about it")
 
+        self.anion_check = QCheckBox("Anion sites")
+        self.anion_check.setToolTip(
+            "Analyse each anion as a site in its own right -- its coordination "
+            "number, its contacts and its own bond-valence sum, counted from "
+            "the cations around it. Off by default: in a phosphate the anions "
+            "outnumber the cations three to one.")
+        self.anion_check.toggled.connect(self._on_include_anions)
+
         self.structure_panel = StructureList()
         self.structure_panel.set_project(self.project)
         self.structure_panel.activeChanged.connect(self._on_structure_row)
@@ -216,7 +224,13 @@ class PreviewWindow(QMainWindow):
         structures.setMinimumWidth(210)
 
         sites = QDockWidget("Sites", self)
-        sites.setWidget(self.site_list)
+        site_box = QWidget()
+        site_layout = QVBoxLayout(site_box)
+        site_layout.setContentsMargins(0, 0, 0, 0)
+        site_layout.setSpacing(4)
+        site_layout.addWidget(self.site_list)
+        site_layout.addWidget(self.anion_check)
+        sites.setWidget(site_box)
         sites.setFeatures(QDockWidget.DockWidgetMovable
                           | QDockWidget.DockWidgetFloatable)
         self.addDockWidget(Qt.LeftDockWidgetArea, sites)
@@ -990,6 +1004,25 @@ class PreviewWindow(QMainWindow):
             return
         self._center_on_atom(index, self.scene.atom_label[index])
 
+    def _on_include_anions(self, on: bool) -> None:
+        """Add the anions to the site list, or take them out again.
+
+        The selected site may be one of the anions that is about to vanish, so
+        the selection is dropped rather than left pointing at a site index that
+        now means a different site.
+        """
+        self.project.set_include_anions(on)
+        self.site_index = None
+        self._rebuild()
+        # the list is filled on load and on a threshold change, neither of
+        # which this is
+        self._fill_site_list()
+        self.statusBar().showMessage(
+            "Anion sites are analysed as well as the cations. An anion's "
+            "bond-valence sum counts the cations around it, so it is the other "
+            "half of the same check." if on
+            else "Cation sites only.", 9000)
+
     def _on_site_double_click(self, item) -> None:
         row = self.site_list.row(item)
         if 0 <= row < len(getattr(self, "_rows", [])):
@@ -1588,8 +1621,11 @@ class PreviewWindow(QMainWindow):
         bonded = [c for c in r.contacts if c.has_valence and c.valence > v]
         cn = len(bonded)
         bvs = sum(c.valence * c.occupancy for c in bonded)
+        # against the magnitude: a sum of positive terms is compared with the
+        # size of the charge, not its sign. An anion reading 1.05 against -1 is
+        # 0.05 over, not 2.05.
         discrepancy = ("" if r.ox is None
-                       else f" ({bvs - r.ox:+.2f} against {r.ox:+d})")
+                       else f" ({bvs - abs(r.ox):+.2f} against {r.ox:+d})")
         # The R0 uncertainty is systematic: it scales the whole sum rather
         # than averaging out, so a discrepancy smaller than it is not a
         # measurement of anything.

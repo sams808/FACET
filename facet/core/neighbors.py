@@ -65,6 +65,17 @@ class Contacts:
                         dtype=bool)
         return self.mask(keep)
 
+    def cations_only(self, structure: Structure) -> "Contacts":
+        """Drop anion-anion contacts: the mirror of :meth:`anions_only`.
+
+        What an anion's own bond-valence sum is defined over. The nearest
+        neighbours of an oxygen are usually other oxygens, so leaving them in
+        would swamp the sum with terms that are not bonds.
+        """
+        keep = np.array([not structure.sites[s].is_anion
+                         for s in self.neighbor_site], dtype=bool)
+        return self.mask(keep)
+
     def within(self, rmax: float) -> "Contacts":
         return self.mask(self.distance <= rmax)
 

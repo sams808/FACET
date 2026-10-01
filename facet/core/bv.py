@@ -89,47 +89,235 @@ class BVParam:
 # ---------------------------------------------------------------------------
 # Brese & O'Keeffe, Acta Cryst. B47 (1991) 192, Table 2. b = 0.37 throughout.
 #
-# This is deliberately NOT a copy of the whole published table. It holds the
-# pairs FACET has been validated on -- the bismuth set was audited against
-# Sleight's independent compilation (Physica C 514 (2015) 152) during the
-# 2026-08-31 Na-Bi-O work and reproduced to 0.001 A -- plus common pairs whose
-# values are widely reproduced. Anything absent falls through to the estimator,
-# which is a better outcome than a mistyped "fitted" value.
+# What Table 2 above does not cover. Table 2 is oxides, fluorides and chlorides
+# only, so the other anions are entered by hand from Table 3 of the same paper
+# -- the bismuth set among them, audited against Sleight's independent
+# compilation (Physica C 514 (2015) 152) during the 2026-08-31 Na-Bi-O work and
+# reproduced to 0.001 A. Entries here win over Table 2, so an individual pair
+# can still be corrected or audited. Anything absent from both falls through to
+# the estimator, which is a better outcome than a mistyped "fitted" value.
 #
 # `tests/test_bv.py` cross-checks every entry here against the estimator and
 # fails on any that disagree by more than 0.20 A, which catches transcription
 # errors without requiring the estimator to be accurate.
 _BO1991 = "Brese & O'Keeffe, Acta Cryst. B47 (1991) 192, Table 2"
 
+# ---------------------------------------------------------------------------
+# Brese & O'Keeffe (1991) Table 2, in full
+# ---------------------------------------------------------------------------
+# "Recommended bond-valence parameters for oxides, fluorides and chlorides":
+# 108 cations, each with R0 for O, F and Cl, b = 0.37 throughout.
+#
+# FACET used to carry 60 pairs entered by hand, of which 47 were oxides and six
+# were fluorides -- so a fluoride structure nearly always fell through to the
+# estimator. Measured over the pairs where both a fitted value and an estimate
+# exist, the estimator is out by 0.05 A rms and by as much as 0.21 A, which is
+# a factor of 0.57 to 1.48 on every bond valence. For fluorides it is high by
+# 0.038 A on average, so it inflates them systematically. Cryolite's Al came
+# out at 3.51 v.u. against +3 for exactly that reason: R0 estimated at 1.609
+# where this table gives 1.545.
+#
+# Transcribed from the paper by span position rather than by OCR token order --
+# its text layer spells the decimal point as any of . - " ' and the Roman
+# numeral oxidation states as whatever letters they resemble -- and checked
+# four ways: against the 53 pairs FACET had already entered by hand, against
+# the paper's own relation R(F) = 0.021 + 0.940 R(O), against the elements and
+# oxidation states being real, and by reading all four bands of the rendered
+# page. tests/test_bv_table2.py re-derives it from the paper when it is there.
+
+_TABLE2: dict[tuple[str, int], dict[str, float]] = {
+    ("Ac", 3): {"O": 2.24, "F": 2.13, "Cl": 2.63},
+    ("Ag", 1): {"O": 1.805, "F": 1.8, "Cl": 2.09},
+    ("Al", 3): {"O": 1.651, "F": 1.545, "Cl": 2.03},
+    ("Am", 3): {"O": 2.11, "F": 2, "Cl": 2.48},
+    ("As", 3): {"O": 1.789, "F": 1.7, "Cl": 2.16},
+    ("As", 5): {"O": 1.767, "F": 1.62, "Cl": 2.14},
+    ("Au", 3): {"O": 1.833, "F": 1.81, "Cl": 2.17},
+    ("B", 3): {"O": 1.371, "F": 1.31, "Cl": 1.74},
+    ("Ba", 2): {"O": 2.29, "F": 2.19, "Cl": 2.69},
+    ("Be", 2): {"O": 1.381, "F": 1.28, "Cl": 1.76},
+    ("Bi", 3): {"O": 2.09, "F": 1.99, "Cl": 2.48},
+    ("Bi", 5): {"O": 2.06, "F": 1.97, "Cl": 2.44},
+    ("Bk", 3): {"O": 2.08, "F": 1.96, "Cl": 2.46},
+    ("Br", 7): {"O": 1.81, "F": 1.72, "Cl": 2.19},
+    ("C", 4): {"O": 1.39, "F": 1.32, "Cl": 1.76},
+    ("Ca", 2): {"O": 1.967, "F": 1.842, "Cl": 2.37},
+    ("Cd", 2): {"O": 1.904, "F": 1.811, "Cl": 2.23},
+    ("Ce", 3): {"O": 2.151, "F": 2.036, "Cl": 2.52},
+    ("Ce", 4): {"O": 2.028, "F": 1.995, "Cl": 2.41},
+    ("Cf", 3): {"O": 2.07, "F": 1.95, "Cl": 2.45},
+    ("Cl", 7): {"O": 1.632, "F": 1.55, "Cl": 2},
+    ("Cm", 3): {"O": 2.23, "F": 2.12, "Cl": 2.62},
+    ("Co", 2): {"O": 1.692, "F": 1.64, "Cl": 2.01},
+    ("Co", 3): {"O": 1.7, "F": 1.62, "Cl": 2.05},
+    ("Cr", 2): {"O": 1.73, "F": 1.67, "Cl": 2.09},
+    ("Cr", 3): {"O": 1.724, "F": 1.64, "Cl": 2.08},
+    ("Cr", 6): {"O": 1.794, "F": 1.74, "Cl": 2.12},
+    ("Cs", 1): {"O": 2.42, "F": 2.33, "Cl": 2.79},
+    ("Cu", 1): {"O": 1.593, "F": 1.6, "Cl": 1.85},
+    ("Cu", 2): {"O": 1.679, "F": 1.6, "Cl": 2},
+    ("Dy", 3): {"O": 2.036, "F": 1.922, "Cl": 2.41},
+    ("Er", 3): {"O": 2.01, "F": 1.906, "Cl": 2.39},
+    ("Eu", 2): {"O": 2.147, "F": 2.04, "Cl": 2.53},
+    ("Eu", 3): {"O": 2.076, "F": 1.961, "Cl": 2.455},
+    ("Fe", 2): {"O": 1.734, "F": 1.65, "Cl": 2.06},
+    ("Fe", 3): {"O": 1.759, "F": 1.67, "Cl": 2.09},
+    ("Ga", 3): {"O": 1.73, "F": 1.62, "Cl": 2.07},
+    ("Gd", 3): {"O": 2.065, "F": 1.95, "Cl": 2.445},
+    ("Ge", 4): {"O": 1.748, "F": 1.66, "Cl": 2.14},
+    ("H", 3): {"O": 0.95, "F": 0.92, "Cl": 1.28},
+    ("Hf", 4): {"O": 1.923, "F": 1.85, "Cl": 2.3},
+    ("Hg", 1): {"O": 1.9, "F": 1.81, "Cl": 2.28},
+    ("Hg", 2): {"O": 1.93, "F": 1.9, "Cl": 2.25},
+    ("Ho", 3): {"O": 2.023, "F": 1.908, "Cl": 2.401},
+    ("I", 5): {"O": 2, "F": 1.9, "Cl": 2.38},
+    ("I", 7): {"O": 1.93, "F": 1.83, "Cl": 2.31},
+    ("In", 3): {"O": 1.902, "F": 1.79, "Cl": 2.28},
+    ("Ir", 5): {"O": 1.916, "F": 1.82, "Cl": 2.3},
+    ("K", 1): {"O": 2.13, "F": 1.99, "Cl": 2.52},
+    ("La", 3): {"O": 2.172, "F": 2.057, "Cl": 2.545},
+    ("Li", 1): {"O": 1.466, "F": 1.36, "Cl": 1.91},
+    ("Lu", 3): {"O": 1.971, "F": 1.876, "Cl": 2.361},
+    ("Mg", 2): {"O": 1.693, "F": 1.581, "Cl": 2.08},
+    ("Mn", 2): {"O": 1.79, "F": 1.698, "Cl": 2.13},
+    ("Mn", 3): {"O": 1.76, "F": 1.66, "Cl": 2.14},
+    ("Mn", 4): {"O": 1.753, "F": 1.71, "Cl": 2.13},
+    ("Mn", 7): {"O": 1.79, "F": 1.72, "Cl": 2.17},
+    ("Mo", 6): {"O": 1.907, "F": 1.81, "Cl": 2.28},
+    ("N", 3): {"O": 1.361, "F": 1.37, "Cl": 1.75},
+    ("N", 5): {"O": 1.432, "F": 1.36, "Cl": 1.8},
+    ("Na", 1): {"O": 1.8, "F": 1.677, "Cl": 2.15},
+    ("Nb", 5): {"O": 1.911, "F": 1.87, "Cl": 2.27},
+    ("Nd", 3): {"O": 2.117, "F": 2.008, "Cl": 2.492},
+    ("Ni", 2): {"O": 1.654, "F": 1.599, "Cl": 2.02},
+    ("Os", 4): {"O": 1.811, "F": 1.72, "Cl": 2.19},
+    ("P", 5): {"O": 1.604, "F": 1.521, "Cl": 1.99},
+    ("Pb", 2): {"O": 2.112, "F": 2.03, "Cl": 2.53},
+    ("Pb", 4): {"O": 2.042, "F": 1.94, "Cl": 2.43},
+    ("Pd", 2): {"O": 1.792, "F": 1.74, "Cl": 2.05},
+    ("Pr", 3): {"O": 2.135, "F": 2.022, "Cl": 2.5},
+    ("Pt", 2): {"O": 1.768, "F": 1.68, "Cl": 2.05},
+    ("Pt", 4): {"O": 1.879, "F": 1.759, "Cl": 2.17},
+    ("Pu", 3): {"O": 2.11, "F": 2, "Cl": 2.48},
+    ("Rb", 1): {"O": 2.26, "F": 2.16, "Cl": 2.65},
+    ("Re", 7): {"O": 1.97, "F": 1.86, "Cl": 2.23},
+    ("Rh", 3): {"O": 1.791, "F": 1.71, "Cl": 2.17},
+    ("Ru", 4): {"O": 1.834, "F": 1.74, "Cl": 2.21},
+    ("S", 4): {"O": 1.644, "F": 1.6, "Cl": 2.02},
+    ("S", 6): {"O": 1.624, "F": 1.56, "Cl": 2.03},
+    ("Sb", 3): {"O": 1.973, "F": 1.9, "Cl": 2.35},
+    ("Sb", 5): {"O": 1.942, "F": 1.8, "Cl": 2.3},
+    ("Sc", 3): {"O": 1.849, "F": 1.76, "Cl": 2.23},
+    ("Se", 4): {"O": 1.811, "F": 1.73, "Cl": 2.22},
+    ("Se", 6): {"O": 1.788, "F": 1.69, "Cl": 2.16},
+    ("Si", 4): {"O": 1.624, "F": 1.58, "Cl": 2.03},
+    ("Sm", 3): {"O": 2.088, "F": 1.977, "Cl": 2.466},
+    ("Sn", 2): {"O": 1.984, "F": 1.925, "Cl": 2.36},
+    ("Sn", 4): {"O": 1.905, "F": 1.84, "Cl": 2.28},
+    ("Sr", 2): {"O": 2.118, "F": 2.019, "Cl": 2.51},
+    ("Ta", 5): {"O": 1.92, "F": 1.88, "Cl": 2.3},
+    ("Tb", 3): {"O": 2.049, "F": 1.936, "Cl": 2.427},
+    ("Te", 4): {"O": 1.977, "F": 1.87, "Cl": 2.37},
+    ("Te", 6): {"O": 1.917, "F": 1.82, "Cl": 2.3},
+    ("Th", 4): {"O": 2.167, "F": 2.07, "Cl": 2.55},
+    ("Tl", 1): {"O": 2.172, "F": 2.15, "Cl": 2.56},
+    ("Tl", 3): {"O": 2.003, "F": 1.88, "Cl": 2.32},
+    ("Tl", 4): {"O": 1.815, "F": 1.76, "Cl": 2.19},
+    ("Tm", 3): {"O": 2, "F": 1.842, "Cl": 2.38},
+    ("U", 4): {"O": 2.112, "F": 2.034, "Cl": 2.48},
+    ("U", 6): {"O": 2.075, "F": 1.966, "Cl": 2.46},
+    ("V", 3): {"O": 1.743, "F": 1.702, "Cl": 2.19},
+    ("V", 4): {"O": 1.784, "F": 1.7, "Cl": 2.16},
+    ("V", 5): {"O": 1.803, "F": 1.71, "Cl": 2.16},
+    ("W", 6): {"O": 1.921, "F": 1.83, "Cl": 2.27},
+    ("Y", 3): {"O": 2.014, "F": 1.904, "Cl": 2.4},
+    ("Yb", 3): {"O": 1.985, "F": 1.875, "Cl": 2.371},
+    ("Zn", 2): {"O": 1.704, "F": 1.62, "Cl": 2.01},
+    ("Zr", 4): {"O": 1.937, "F": 1.854, "Cl": 2.33},
+}
+
+# Printed in italics in the original. The table's caption defines those as
+# interpolated from the linear relations of its Table 1 rather than determined
+# directly from structures -- the paper's own distinction, kept because it is
+# the sort of thing a reader should be able to see.
+_TABLE2_INTERPOLATED: set[tuple[str, int, str]] = {
+    ("Ac", 3, "Cl"),
+    ("Ac", 3, "F"),
+    ("Am", 3, "Cl"),
+    ("Am", 3, "F"),
+    ("As", 5, "Cl"),
+    ("Be", 2, "Cl"),
+    ("Bi", 5, "Cl"),
+    ("Bk", 3, "Cl"),
+    ("Bk", 3, "F"),
+    ("Br", 7, "F"),
+    ("Ce", 4, "Cl"),
+    ("Cl", 7, "Cl"),
+    ("Cl", 7, "F"),
+    ("Cm", 3, "Cl"),
+    ("Cm", 3, "F"),
+    ("Co", 3, "F"),
+    ("Cr", 2, "O"),
+    ("Cu", 1, "F"),
+    ("Hf", 4, "Cl"),
+    ("Hg", 1, "Cl"),
+    ("Hg", 1, "F"),
+    ("I", 5, "Cl"),
+    ("I", 5, "F"),
+    ("I", 7, "Cl"),
+    ("In", 3, "Cl"),
+    ("Mn", 3, "Cl"),
+    ("Mn", 4, "Cl"),
+    ("Mn", 7, "Cl"),
+    ("Mo", 6, "F"),
+    ("N", 5, "Cl"),
+    ("N", 5, "F"),
+    ("Os", 4, "Cl"),
+    ("Os", 4, "F"),
+    ("Pb", 4, "F"),
+    ("Pt", 2, "F"),
+    ("Rh", 3, "Cl"),
+    ("S", 4, "Cl"),
+    ("Sc", 3, "Cl"),
+    ("Se", 6, "Cl"),
+    ("Sn", 2, "Cl"),
+    ("Te", 6, "Cl"),
+    ("Th", 4, "Cl"),
+    ("Tl", 1, "Cl"),
+    ("Tl", 3, "Cl"),
+    ("Tl", 4, "Cl"),
+    ("V", 3, "Cl"),
+    ("V", 4, "Cl"),
+}
+
+# Values FACET carried before this transcription that are NOT the values in
+# Table 2, although Table 2 was the source cited for them. Five differ only in
+# the decimal place the paper prints; five differ in substance, and Ag(I)-O is
+# one the paper says explicitly that it changed from Brown & Altermatt (1985)
+# by more than 0.02 A. FACET now uses Table 2, so that every value and its
+# citation agree. They are recorded because anyone comparing a number with one
+# computed earlier, or with another program, needs to know which was used --
+# and because Brown & Altermatt is as legitimate a source as this one.
+SUPERSEDED: dict[tuple[str, int, str], float] = {
+    ("Ag", 1, "O"): 1.842,      # Table 2: 1.805, every valence x0.905
+    ("B", 3, "F"): 1.281,       # Table 2: 1.31,  x1.082
+    ("Ba", 2, "O"): 2.285,      # Table 2: 2.29,  x1.014
+    ("Cs", 1, "O"): 2.417,      # Table 2: 2.42,  x1.008
+    ("K", 1, "O"): 2.132,       # Table 2: 2.13,  x0.995
+    ("Na", 1, "O"): 1.803,      # Table 2: 1.80,  x0.992
+    ("P", 5, "O"): 1.617,       # Table 2: 1.604, x0.966
+    ("Rb", 1, "O"): 2.263,      # Table 2: 2.26,  x0.992
+    ("W", 6, "O"): 1.917,       # Table 2: 1.921, x1.011
+    ("Y", 3, "O"): 2.019,       # Table 2: 2.014, x0.987
+}
+
+
 _FITTED: dict[tuple[str, int, str], float] = {
-    # --- bismuth: the audited set -------------------------------------------
-    ("Bi", 3, "O"): 2.09, ("Bi", 5, "O"): 2.06,
-    ("Bi", 3, "F"): 1.99, ("Bi", 5, "F"): 1.97,
-    ("Bi", 3, "Cl"): 2.48, ("Bi", 3, "Br"): 2.60, ("Bi", 3, "I"): 2.76,
+    # Bismuth to the heavier anions, from Table 3 of the same paper. Audited
+    # against Sleight's compilation and reproduced to 0.001 A.
+    ("Bi", 3, "Br"): 2.60, ("Bi", 3, "I"): 2.76,
     ("Bi", 3, "S"): 2.55, ("Bi", 3, "Se"): 2.67, ("Bi", 3, "Te"): 2.88,
     ("Bi", 3, "N"): 2.09,
-    # --- alkali / alkaline earth oxides -------------------------------------
-    ("Li", 1, "O"): 1.466, ("Na", 1, "O"): 1.803, ("K", 1, "O"): 2.132,
-    ("Rb", 1, "O"): 2.263, ("Cs", 1, "O"): 2.417,
-    ("Mg", 2, "O"): 1.693, ("Ca", 2, "O"): 1.967, ("Sr", 2, "O"): 2.118,
-    ("Ba", 2, "O"): 2.285,
-    ("Na", 1, "F"): 1.677, ("Ca", 2, "F"): 1.842,
-    # --- network formers ----------------------------------------------------
-    ("B", 3, "O"): 1.371, ("Si", 4, "O"): 1.624, ("P", 5, "O"): 1.617,
-    ("Ge", 4, "O"): 1.748, ("As", 5, "O"): 1.767, ("S", 6, "O"): 1.624,
-    ("C", 4, "O"): 1.390, ("Al", 3, "O"): 1.651, ("Ga", 3, "O"): 1.730,
-    ("Si", 4, "F"): 1.58, ("B", 3, "F"): 1.281,
-    # --- transition metals --------------------------------------------------
-    ("Ti", 4, "O"): 1.815, ("V", 5, "O"): 1.803, ("Cr", 3, "O"): 1.724,
-    ("Mn", 2, "O"): 1.790, ("Fe", 3, "O"): 1.759, ("Fe", 2, "O"): 1.734,
-    ("Co", 2, "O"): 1.692, ("Ni", 2, "O"): 1.654, ("Cu", 2, "O"): 1.679,
-    ("Zn", 2, "O"): 1.704, ("Zr", 4, "O"): 1.937, ("Nb", 5, "O"): 1.911,
-    ("Mo", 6, "O"): 1.907, ("Ta", 5, "O"): 1.920, ("W", 6, "O"): 1.917,
-    ("Y", 3, "O"): 2.019, ("Sc", 3, "O"): 1.849, ("Hf", 4, "O"): 1.923,
-    # --- heavy main group ---------------------------------------------------
-    ("Pb", 2, "O"): 2.112, ("Sn", 4, "O"): 1.905, ("Sb", 5, "O"): 1.942,
-    ("In", 3, "O"): 1.902, ("Cd", 2, "O"): 1.904, ("Ag", 1, "O"): 1.842,
-    ("La", 3, "O"): 2.172, ("Th", 4, "O"): 2.167, ("U", 6, "O"): 2.075,
 }
 
 # Anion formal charges assumed when pairing. The bond-valence model is defined
@@ -203,7 +391,12 @@ class ParameterSet:
         self.source = source
         self.b = b
         self.allow_estimated = allow_estimated
+        # Two layers for the built-in set: the hand-entered pairs, and the
+        # whole of Table 2 behind them. A loaded file replaces both, because a
+        # published compilation is meant to be used as a whole rather than
+        # merged with another one.
         self._fitted = dict(_FITTED if fitted is None else fitted)
+        self._table2 = dict(_TABLE2) if fitted is None else {}
         # Published sets give b per pair, not one universal value. Brese and
         # O'Keeffe's 0.37 A is a fitted average, and using it where a compilation
         # states something else changes every valence -- so a loaded set's own b
@@ -231,6 +424,19 @@ class ParameterSet:
             return BVParam(c, int(ox), a, self._anion_charge(a), r0,
                            self._fitted_b.get(key, self.b), self.source, True)
 
+        row = self._table2.get((c, int(ox)))
+        if row is not None and a in row:
+            # The paper's own distinction: a value it printed in italics was
+            # interpolated from its linear relations rather than determined
+            # from structures. Still a published, fitted-set value -- but the
+            # source says which it is, because it is the sort of thing a reader
+            # should be able to see.
+            interpolated = (c, int(ox), a) in _TABLE2_INTERPOLATED
+            source = self.source + (" (interpolated in the original)"
+                                    if interpolated else "")
+            return BVParam(c, int(ox), a, self._anion_charge(a), row[a],
+                           self.b, source, True)
+
         # The estimator has no oxidation-state dependence; it is a property of
         # the element pair. That is one of its limitations, and the reason a
         # fitted value is preferred wherever one exists.
@@ -247,7 +453,10 @@ class ParameterSet:
 
     def pairs(self):
         """Every fitted pair in the set, as ``(cation, ox, anion)`` keys."""
-        return sorted(set(self._fitted) | set(self._overrides))
+        out = set(self._fitted) | set(self._overrides)
+        for (cation, ox), row in self._table2.items():
+            out.update((cation, ox, anion) for anion in row)
+        return sorted(out)
 
     def override(self, cation: str, cation_ox: int, anion: str,
                  r0: float, b: float | None = None, source: str = "user") -> None:
@@ -262,7 +471,8 @@ class ParameterSet:
 
     @property
     def n_fitted(self) -> int:
-        return len(self._fitted)
+        """How many pairs the set covers without resorting to the estimator."""
+        return len(self.pairs())
 
     def with_b(self, b: float) -> "ParameterSet":
         """The same set with one universal b, overriding any per-pair values.

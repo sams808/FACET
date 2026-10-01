@@ -110,6 +110,7 @@ done; what remains planned is listed as such.
 | Several CN definitions side by side | – | – | **done** | ten native rules plus eight pymatgen strategies, with the spread |
 | φ, the scale-free stereoactivity index | – | – | **done** |
 | Oxidation state by bond-valence self-consistency | – | – | **done** |
+| **Anions analysed as sites, not only as ligands** | – | – | **done** | coordination number, contacts, plateau, φ and the anion's own bond-valence sum, counted from the cations around it |
 | Parameter-set switching with citations | – | – | **done** | reads the IUCr bvparm distribution, softBV-style tables and its own JSON; per-pair b is kept, and every value carries its provenance |
 | **Bond-valence vector drawn (the "lone pair")** | – | – | **done** | a lobe along −V/\|V\| with V = Σ v_i û_i, length φ × mean bond length × a display scale; φ = 0 draws nothing. Presented as the vector sum, which is what can be measured |
 | **Void cone drawn** | – | – | **done** | the measured half-angle about the void axis, on the sites whose polyhedra are shown; the degeneracy of the axis is stated |

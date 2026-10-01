@@ -243,7 +243,7 @@ def test_the_manual_says_what_is_not_done(qapp):
 
     limits = next(b for k, _t, b in _sections() if k == "limits").lower()
     for claim in ("does not refine", "does not judge", "xanes",
-                  "ships no bond-valence compilation"):
+                  "ships one bond-valence table, not a compilation"):
         assert claim in limits, claim
 
 

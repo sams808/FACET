@@ -235,9 +235,16 @@ def analyse_site(structure: Structure, contacts: Contacts,
     params = params or bv.DEFAULT
     site = structure.sites[contacts.center_site]
 
+    # An anion centre is the same calculation with the roles exchanged: keep
+    # the cations rather than the anions, and look the parameter up in the
+    # other direction. Without both, an anion site comes back with no contacts
+    # and a sum of nan, which is what it used to do.
+    centre_is_anion = site.is_anion
+
     all_contacts = contacts
     if anions_only:
-        contacts = contacts.anions_only(structure)
+        contacts = (contacts.cations_only(structure) if centre_is_anion
+                    else contacts.anions_only(structure))
 
     rows: list[ContactRow] = []
     used_estimate = False
@@ -245,9 +252,16 @@ def analyse_site(structure: Structure, contacts: Contacts,
 
     for i in range(len(contacts)):
         anion = contacts.elements[i]
-        p = params.get(site.element, site.ox, anion)
+        if centre_is_anion:
+            # the pair is (the neighbouring cation, its charge, this anion)
+            neighbour = structure.sites[int(contacts.neighbor_site[i])]
+            p = params.get(neighbour.element, neighbour.ox, site.element)
+            pair_name = f"{anion}-{site.element}"
+        else:
+            p = params.get(site.element, site.ox, anion)
+            pair_name = f"{site.element}-{anion}"
         if p is None:
-            missing_pairs.add(f"{site.element}-{anion}")
+            missing_pairs.add(pair_name)
             valence = None
         else:
             valence = float(p.valence(contacts.distance[i]))
@@ -341,7 +355,13 @@ def _fill_valence_quantities(r: SiteResult) -> None:
             r.bvs_random = unc["random"]
             r.bvs_uncertainty = unc["total"]
         if r.ox is not None:
-            r.valence_discrepancy = r.bvs - r.ox
+            # against the magnitude of the charge: a bond-valence sum is a
+            # sum of positive terms, so an anion's -2 is matched by a sum near
+            # +2. Subtracting the signed charge made every anion look over-
+            # bonded by twice its charge, which was invisible while only
+            # cations were analysed and feeds the global instability index and
+            # the valence-discrepancy colouring as soon as they are not.
+            r.valence_discrepancy = r.bvs - abs(r.ox)
 
 
 def _fill_cation_contacts(structure: Structure, contacts: Contacts,
