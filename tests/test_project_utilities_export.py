@@ -10,11 +10,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import bv, cif, coordination, exporters, project as P, utilities
 
 CIFS = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs")
-SAMPLE = CIFS / "1526458_Bi2O3.cif"
-SECOND = CIFS / "7023719_BiPO4.cif"
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
+SECOND = sample_cif("7023719", "7023719_BiPO4.cif")
 
 pytestmark = pytest.mark.skipif(not SAMPLE.exists(),
                                 reason="sample structures not present")

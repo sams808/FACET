@@ -11,6 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core.utilities import torsion_angle
 
 # The central bond along +x, with the two outer atoms placed at chosen
@@ -121,8 +123,7 @@ def test_the_structure_form_and_the_point_form_are_the_same_function():
 
     from facet.core import cif, utilities
 
-    sample = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif"
-                  r"\1004091_BiNa3O8P2.cif")
+    sample = sample_cif("1004091", "1004091_BiNa3O8P2.cif")
     if not sample.is_file():
         pytest.skip("the reference structure is not present")
     structure = cif.read(sample)

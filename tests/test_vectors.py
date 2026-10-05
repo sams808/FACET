@@ -14,12 +14,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import bv, coordination
 from facet.gl import vectors as V
 from facet.gl.scene import Scene, build_scene, merge_scenes
 
 CIFS = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs")
-SAMPLE = CIFS / "1526458_Bi2O3.cif"
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 
 
 @pytest.fixture(scope="module")

@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import adp, bv_report, cn_methods, quality, utilities
+from ..core import adp, bv_report, cn_methods, network, quality, utilities
 from . import chrome
 
 
@@ -95,6 +95,18 @@ class UtilitiesPanel(QWidget):
         self.file_report = QTextBrowser()
         self.file_report.setFrameShape(QTextBrowser.NoFrame)
         self.tabs.addTab(self.file_report, "File")
+
+        self.apriori = _table(["site", "CN", "\u0394 topol", "\u0394 cryst",
+                               "a priori / v.u.", "observed / v.u."])
+        self.tabs.addTab(self._wrap(
+            self.apriori,
+            "Bond valences the bond topology alone would give, from the "
+            "valence-sum and loop rules. \u0394 topol is the spread of those "
+            "about their mean -- variation the connectivity requires. "
+            "\u0394 cryst is how far the observed valences sit from them -- "
+            "variation it does not account for. Both in valence units, as mean "
+            "absolute deviations. Gagn\u00e9 & Hawthorne, IUCrJ 7 (2020) 581."),
+            "A priori")
 
         self.angles = _table(["ligand A", "ligand B", "angle / °",
                               "d(A) / Å", "d(B) / Å"])
@@ -315,6 +327,7 @@ class UtilitiesPanel(QWidget):
         if structure is None:
             self.summary.setHtml("")
             self.file_report.setHtml("")
+            self.apriori.setRowCount(0)
             for t in (self.angles, self.shells, self.reflections,
                       self.connectivity, self.cutoffs, self.stability,
                       self.valences):
@@ -334,6 +347,7 @@ class UtilitiesPanel(QWidget):
     REFRESHERS = {
         "Cell": "_refresh_summary",
         "File": "_refresh_file",
+        "A priori": "_refresh_apriori",
         "Angles": "_refresh_angles",
         "Shells": "_refresh_shells",
         "Reflections": "_refresh_reflections",
@@ -506,6 +520,60 @@ class UtilitiesPanel(QWidget):
         rows.append(self._displacement_html(ink, muted))
         rows.append("</div>")
         self.file_report.setHtml("".join(rows))
+
+    def _refresh_apriori(self) -> None:
+        """A priori bond valences and the two indices, site by site.
+
+        A structure whose bond topology does not close has no answer here: the
+        valence-sum rule cannot hold at every site of a cell that is not charge
+        balanced, and a number produced anyway would look like the others. The
+        reason is shown in the table instead of a row of figures.
+        """
+        if self.structure is None:
+            self.apriori.setRowCount(0)
+            return
+        try:
+            rows = network.analyse(self.structure, self._with_anions(),
+                                   self.v_bond)
+            reason = ""
+        except ValueError as error:
+            rows, reason = [], str(error)
+        except Exception as error:
+            rows, reason = [], f"{type(error).__name__}: {error}"
+
+        if reason:
+            self.apriori.setRowCount(1)
+            self.apriori.setSpan(0, 0, 1, self.apriori.columnCount())
+            item = QTableWidgetItem(f"No a priori bond valences: {reason}")
+            item.setFlags(Qt.ItemIsEnabled)
+            self.apriori.setItem(0, 0, item)
+            return
+        self.apriori.clearSpans()
+
+        def numbers(values):
+            return " \u00b7 ".join(f"{v:.3f}" for v in values)
+
+        _fill(self.apriori, [
+            [r.label, r.coordination, f"{r.delta_topol:.3f}",
+             f"{r.delta_cryst:.3f}", numbers(r.a_priori), numbers(r.observed)]
+            for r in rows])
+
+    def _with_anions(self):
+        """An analysis covering the anions, which the topology needs.
+
+        The panel's own `results` may be the cations only; the bond counts have
+        to be taken from the anion end as well or there is nothing to check
+        them against.
+        """
+        from ..core import coordination
+
+        if self.results and any(
+                self.structure.sites[r.site_index].is_anion
+                for r in self.results):
+            return self.results
+        return coordination.analyse_structure(
+            self.structure, self.params, v_bond=self.v_bond,
+            v_list=self.v_list, cations_only=False)
 
     def _displacement_html(self, ink: str, muted: str) -> str:
         """Per-site displacement parameters, where the file gave a tensor.

@@ -17,11 +17,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import bv, cif, coordination, network
 
 CIFS = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif")
-BI2O3 = CIFS / "Bi" / "cifs" / "1526458_Bi2O3.cif"
-CRYOLITE = CIFS / "9004097_Cryolite.cif"
+BI2O3 = sample_cif("1526458", "1526458_Bi2O3.cif")
+CRYOLITE = sample_cif("9004097", "9004097_Cryolite.cif")
 
 
 # ---------------------------------------------------------------------------

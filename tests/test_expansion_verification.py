@@ -15,11 +15,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import bv, bv_report, cif, coordination, polyhedra, quality
 
 BI_DIR = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi")
-FM3M = BI_DIR / "cifs" / "Bi0.92 O1.54 Si0.08 - 04-008-3529.cif"
-EQUAL_SHELL = BI_DIR / "cifs" / "1010311_Bi2O3.cif"
+FM3M = sample_cif("04-008-3529", "Bi0.92 O1.54 Si0.08 - 04-008-3529.cif")
+EQUAL_SHELL = sample_cif("1010311", "1010311_Bi2O3.cif")
 
 
 def _build(spacegroup, rows, a=5.6402, number=None, with_ops=None):
@@ -275,7 +277,7 @@ def test_repeated_findings_collapse_to_one_with_a_count():
 
     That is not more information, it is the same information made unreadable.
     """
-    path = BI_DIR / "cifs" / "1519099_Na3Bi(PO4)2.cif"
+    path = sample_cif("1519099", "1519099_Na3Bi(PO4)2.cif")
     if not path.is_file():
         pytest.skip("the structure is not present")
     report = quality.check(cif.read(path))
@@ -296,8 +298,14 @@ def test_the_formula_check_finds_real_non_stoichiometry():
     """
     if not BI_DIR.is_dir():
         pytest.skip("the collection is not present")
-    flagged = []
+    # Counted as structures, not as files. The collection holds some of them
+    # under more than one path -- `_duplicates` keeps the redundant copies of
+    # the reorganised folder, and `study/` has its own copy of several -- so a
+    # count of paths would report the same structure more than once.
+    flagged = set()
     for path in sorted(BI_DIR.rglob("*.cif")):
+        if "_duplicates" in path.parts:
+            continue
         try:
             structure = cif.read(path)
         except Exception:
@@ -306,8 +314,8 @@ def test_the_formula_check_finds_real_non_stoichiometry():
             continue
         report = quality.check(structure)
         if any(f.code == "formula-mismatch" for f in report.findings):
-            flagged.append(path.name)
-    assert len(flagged) <= 3, f"too many structures flagged: {flagged}"
+            flagged.add((structure.formula, structure.spacegroup_hm))
+    assert len(flagged) <= 3, f"too many structures flagged: {sorted(flagged)}"
 
 
 def test_the_formula_parser_handles_the_forms_these_files_use():
@@ -327,7 +335,7 @@ def test_the_formula_parser_handles_the_forms_these_files_use():
 
 def test_the_charge_balance_closes_for_a_well_formed_file():
     """Two searches from opposite directions over the same bonds."""
-    path = BI_DIR / "cifs" / "1526458_Bi2O3.cif"
+    path = sample_cif("1526458", "1526458_Bi2O3.cif")
     if not path.is_file():
         pytest.skip("the structure is not present")
     structure = cif.read(path)

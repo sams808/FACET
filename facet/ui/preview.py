@@ -1632,14 +1632,34 @@ class PreviewWindow(QMainWindow):
         uncertainty = ("" if r.bvs_uncertainty != r.bvs_uncertainty
                        else f" &plusmn; {r.bvs_uncertainty:.2f}")
 
-        rows = "".join(
-            f"<tr><td>{c.label}</td>"
-            f"<td align='right'>{c.distance:.4f}</td>"
-            f"<td align='right'>{c.valence:.4f}</td>"
-            f"<td align='center'>{'&#9679;' if c.valence > v else '&#9675;'}</td>"
-            f"<td style='color:{muted}'>"
-            f"{'' if (c.param and c.param.fitted) else 'est.'}</td></tr>"
-            for c in r.contacts if c.has_valence)
+        # What the bond topology alone would give for each bond. Computed
+        # from an analysis that covers the anions, cached on the entry, and
+        # only when a panel asks for it -- see Entry.network.
+        entry = self.project.current
+        apriori_rows, apriori_reason = (
+            self.project.network_for(entry) if entry is not None else ({}, ""))
+        split = apriori_rows.get(r.site_index)
+        a_priori_of = {}
+        if split is not None:
+            bonded = [c for c in r.contacts
+                      if c.has_valence and c.valence >= v]
+            for contact, value in zip(bonded, split.a_priori):
+                a_priori_of[id(contact)] = value
+
+        def contact_row(c) -> str:
+            ideal = a_priori_of.get(id(c))
+            ideal_cell = ("&mdash;" if ideal is None else f"{ideal:.4f}")
+            return (
+                f"<tr><td>{c.label}</td>"
+                f"<td align='right'>{c.distance:.4f}</td>"
+                f"<td align='right'>{c.valence:.4f}</td>"
+                f"<td align='right' style='color:{muted}'>{ideal_cell}</td>"
+                f"<td align='center'>"
+                f"{'&#9679;' if c.valence > v else '&#9675;'}</td>"
+                f"<td style='color:{muted}'>"
+                f"{'' if (c.param and c.param.fitted) else 'est.'}</td></tr>")
+
+        rows = "".join(contact_row(c) for c in r.contacts if c.has_valence)
 
         plateau = r.current_plateau
         plateau_row = (
@@ -1655,6 +1675,26 @@ class PreviewWindow(QMainWindow):
         notes = "".join(
             f"<p style='color:{muted};font-size:11px;margin:3px 0'>{n}</p>"
             for n in r.notes)
+
+        # Gagne & Hawthorne's split of bond-length variation: the part the
+        # bond topology requires, and the part it does not account for. Their
+        # means over the transition-metal oxides are 0.102 and 0.113 v.u.
+        if split is not None:
+            apriori_block = (
+                f"<tr><td>&Delta;<sub>topol</sub> <span style='color:{muted}'>"
+                f"(the topology requires)</span></td>"
+                f"<td align='right'>{split.delta_topol:.3f} v.u.</td></tr>"
+                f"<tr><td>&Delta;<sub>cryst</sub> <span style='color:{muted}'>"
+                f"(it does not account for)</span></td>"
+                f"<td align='right'>{split.delta_cryst:.3f} v.u.</td></tr>")
+        elif apriori_reason:
+            reason = (apriori_reason.replace("&", "&amp;")
+                      .replace("<", "&lt;").replace(">", "&gt;"))
+            apriori_block = (
+                f"<tr><td colspan='2' style='color:{muted};font-size:11px'>"
+                f"No a priori bond valences: {reason}</td></tr>")
+        else:
+            apriori_block = ""
 
         param = next((c.param for c in r.contacts if c.param), None)
         provenance = ""
@@ -1694,13 +1734,15 @@ class PreviewWindow(QMainWindow):
           <tr><td>Spread within the polyhedron</td>
               <td align='right'>{r.shape.get('spread') or float('nan'):.4f} Å</td></tr>
           {plateau_row}
+          {apriori_block}
         </table>
         {notes}
         <h4 style='margin-bottom:2px'>Contacts</h4>
         <table width='100%' cellspacing='0' cellpadding='2' style='font-size:11px'>
           <tr style='color:{muted}'>
             <th align='left'>atom</th><th align='right'>d / Å</th>
-            <th align='right'>v / v.u.</th><th></th><th></th></tr>
+            <th align='right'>v / v.u.</th>
+            <th align='right'>a priori</th><th></th><th></th></tr>
           {rows}
         </table>
         {provenance}

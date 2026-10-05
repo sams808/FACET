@@ -51,11 +51,36 @@ def _num(s):
         return None
 
 
+_BY_NAME: dict[str, Path] = {}
+
+
 def _find_cif(name: str) -> Path | None:
-    for d in CIF_DIRS:
-        p = d / name
-        if p.exists():
-            return p
+    """The survey names files flatly; the collection is in folders now.
+
+    Searched recursively and cached. `_duplicates` is skipped -- it holds the
+    redundant copies the collection keeps for reference, and a fixture that
+    picked one up would be reading a file nothing else reads.
+    """
+    if not _BY_NAME:
+        for d in CIF_DIRS:
+            if not d.is_dir():
+                continue
+            for path in d.rglob("*.cif"):
+                if "_duplicates" in path.parts:
+                    continue
+                _BY_NAME.setdefault(path.name, path)
+    direct = _BY_NAME.get(name)
+    if direct is not None:
+        return direct
+    # the kept copy may carry a more descriptive name; match on the database
+    # code in the one the survey asked for
+    import re
+
+    code = re.search(r"\d{6,8}", name)
+    if code:
+        for stem, path in _BY_NAME.items():
+            if code.group(0) in stem:
+                return path
     return None
 
 

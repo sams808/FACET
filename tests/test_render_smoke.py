@@ -12,14 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from conftest import dispose
+from conftest import dispose, sample_cif
 from PySide6.QtCore import QPoint
 
-SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs\1526458_Bi2O3.cif")
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 # A structure with anisotropic displacement parameters. SAMPLE has none, so an
 # ellipsoid test driven from it would draw the same fallback sphere every time.
-ANISO_SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif"
-                    r"\1004091_BiNa3O8P2.cif")
+ANISO_SAMPLE = sample_cif("1004091", "1004091_BiNa3O8P2.cif")
 
 pytestmark = pytest.mark.skipif(not SAMPLE.exists(),
                                 reason="sample structure not present")

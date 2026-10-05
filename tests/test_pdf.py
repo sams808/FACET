@@ -26,6 +26,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import cif
 from facet.core import diffraction as dif
 from facet.core import pdf as P
@@ -400,7 +402,7 @@ def test_the_heavy_pairs_dominate_an_xray_pdf_and_not_a_neutron_one():
     Bi-O. This is why the trustworthy Bi-O structures are neutron refinements,
     and it is computed here rather than asserted.
     """
-    sample = BI_CIF_DIR / "cifs" / "1526458_Bi2O3.cif"
+    sample = sample_cif("1526458", "1526458_Bi2O3.cif")
     if not sample.is_file():
         pytest.skip("the sample structure is not present")
     structure = cif.read(str(sample))

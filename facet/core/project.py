@@ -51,6 +51,9 @@ class Entry:
     disorder: disorder_mod.Disorder | None = field(default=None, repr=False)
 
     _results: list | None = field(default=None, repr=False)
+    # (by site index, reason it is empty) for the a priori valences
+    _network: tuple | None = field(default=None, repr=False)
+    _network_key: tuple | None = field(default=None, repr=False)
     _results_key: tuple | None = field(default=None, repr=False)
     _configuration: Structure | None = field(default=None, repr=False)
     _configuration_key: tuple | None = field(default=None, repr=False)
@@ -122,9 +125,40 @@ class Entry:
             self._results_key = key
         return self._results
 
+    def network(self, params: bv.ParameterSet, v_bond: float,
+                v_list: float):
+        """A priori bond valences and the two indices, cached.
+
+        ``(by site index, reason)``: the mapping is empty and the reason set
+        when the bond topology does not close, which is a property of the file
+        rather than a failure here.
+
+        Needs its own analysis because the topology has to be counted from the
+        anion end as well, and the ordinary results may be cations only. Lazy:
+        a session that never opens the a priori tab never runs it.
+        """
+        key = (id(params), round(v_bond, 6), round(v_list, 6))
+        if self._network is None or self._network_key != key:
+            from . import coordination, network as network_mod
+
+            try:
+                full = coordination.analyse_structure(
+                    self.structure, params, v_bond=v_bond, v_list=v_list,
+                    cations_only=False)
+                rows = network_mod.analyse(self.structure, full, v_bond)
+                self._network = ({r.site_index: r for r in rows}, "")
+            except ValueError as error:
+                self._network = ({}, str(error))
+            except Exception as error:           # a reader or parameter fault
+                self._network = ({}, f"{type(error).__name__}: {error}")
+            self._network_key = key
+        return self._network
+
     def invalidate(self) -> None:
         self._results = None
         self._results_key = None
+        self._network = None
+        self._network_key = None
         self._configuration = None
         self._configuration_key = None
 
@@ -240,6 +274,10 @@ class Project:
     def invalidate_all(self) -> None:
         for e in self.entries:
             e.invalidate()
+
+    def network_for(self, entry: Entry):
+        """A priori valences and indices for one entry, by site index."""
+        return entry.network(self.params, self.v_bond, self.v_list)
 
     def results_for(self, entry: Entry) -> list:
         return entry.results(self.params, self.v_bond, self.v_list,

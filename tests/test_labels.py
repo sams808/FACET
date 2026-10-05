@@ -10,9 +10,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.gl import labels as L
 
-SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs\1526458_Bi2O3.cif")
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 
 
 def _measure(text: str) -> tuple[float, float]:

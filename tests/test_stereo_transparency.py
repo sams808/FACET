@@ -18,13 +18,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from conftest import dispose
+from conftest import dispose, sample_cif
 
 from facet.gl import stereo as S
 from facet.gl.camera import Camera
 
-SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
-              r"\1526458_Bi2O3.cif")
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 
 
 @pytest.fixture(scope="module")

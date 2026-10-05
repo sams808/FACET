@@ -18,12 +18,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import bv, bv_files, bv_report, cif, coordination
 
 BI_DIR = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi")
-SAMPLE = BI_DIR / "cifs" / "1526458_Bi2O3.cif"
-BII3_P3 = BI_DIR / "cifs" / "1010622_BiI3-P3.cif"
-BII3_R3 = BI_DIR / "cifs" / "1010622_BiI3-R-3H.cif"
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
+BII3_P3 = sample_cif("1010622", "1010622_BiI3-P3.cif")
+BII3_R3 = sample_cif("1010622", "1010622_BiI3-R-3H.cif")
 
 
 @pytest.fixture(scope="module")

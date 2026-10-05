@@ -20,10 +20,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import cif, exafs, exporters
 
 BI_CIF_DIR = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi")
-SAMPLE = BI_CIF_DIR / "cifs" / "1526458_Bi2O3.cif"
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 LARCH_FEFF = Path(r"C:\Users\samso\AppData\Local\Programs\Python\Python311"
                   r"\Lib\site-packages\larch\bin\win64\feff8l.bat")
 

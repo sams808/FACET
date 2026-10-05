@@ -12,11 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import bv
 from facet.gl import camera as cam
 from facet.gl.scene import Scene, Style, bond_radius_for
 
-SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs\1526458_Bi2O3.cif")
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 
 
 # --- quaternions -------------------------------------------------------------

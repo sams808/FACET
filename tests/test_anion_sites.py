@@ -17,11 +17,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import bv, bv_report, cif, coordination
 
-CRYOLITE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\9004097_Cryolite.cif")
-PHOSPHATE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif"
-                 r"\1004091_BiNa3O8P2.cif")
+CRYOLITE = sample_cif("9004097", "9004097_Cryolite.cif")
+PHOSPHATE = sample_cif("1004091", "1004091_BiNa3O8P2.cif")
 
 pytestmark = pytest.mark.skipif(not CRYOLITE.is_file(),
                                 reason="the reference structures are not present")

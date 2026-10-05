@@ -17,12 +17,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from conftest import dispose
+from conftest import dispose, sample_cif
 
-SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
-              r"\1526458_Bi2O3.cif")
-SECOND = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
-              r"\1004091_BiNa3O8P2.cif")
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
+SECOND = sample_cif("1004091", "1004091_BiNa3O8P2.cif")
 
 pytestmark = pytest.mark.skipif(not SAMPLE.is_file(),
                                 reason="the sample structure is not present")
@@ -619,7 +617,7 @@ def test_centring_on_a_site_that_is_not_drawn_says_so(window, qapp):
 # the health checks, which never ran
 # ---------------------------------------------------------------------------
 
-NPD = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\7023720_BiPO4.cif")
+NPD = sample_cif("7023720", "7023720_BiPO4.cif")
 
 
 def _file_tab(window):
@@ -796,3 +794,81 @@ def test_a_tab_can_be_asked_for_without_being_shown(window, qapp):
     assert "Angles" not in panel._stale
     panel.refresh_tab("Angles")            # asking twice is not an error
     panel.refresh_tab("not a tab")         # nor is asking for one that is gone
+
+
+# ---------------------------------------------------------------------------
+# a priori bond valences in the interface
+# ---------------------------------------------------------------------------
+
+def test_the_site_panel_shows_the_split(window, qapp):
+    """The two indices, and what each bond would be from the topology alone."""
+    window.site_list.setCurrentRow(0)
+    qapp.processEvents()
+    text = window.analysis.toPlainText()
+    assert "topol" in text and "cryst" in text
+    assert "a priori" in text
+
+    rows, reason = window.project.network_for(window.project.current)
+    assert reason == "", reason
+    site = rows[window.site_index]
+    assert f"{site.delta_topol:.3f}" in text
+    assert f"{site.delta_cryst:.3f}" in text
+    # the a priori valences of a site sum to its formal charge
+    assert sum(site.a_priori) == pytest.approx(abs(site.ox), abs=1e-9)
+
+
+def test_the_tools_tab_lists_every_site(window, qapp):
+    panel = window.utilities
+    titles = [panel.tabs.tabText(i) for i in range(panel.tabs.count())]
+    assert "A priori" in titles
+    panel.tabs.setCurrentIndex(titles.index("A priori"))
+    qapp.processEvents()
+
+    rows, _ = window.project.network_for(window.project.current)
+    assert panel.apriori.rowCount() == len(rows) > 0
+    labels = {panel.apriori.item(i, 0).text()
+              for i in range(panel.apriori.rowCount())}
+    assert labels == {r.label for r in rows.values()}
+
+
+def test_a_structure_whose_topology_does_not_close_says_so(window, qapp):
+    """Not a blank table and not a number: the reason it cannot be computed.
+
+    gamma-Bi2O3 as COD 2100844 gives it: the cell carries a net charge of +2 e,
+    so the valence-sum rule cannot hold at every site at once and the network
+    equations have no solution. A real file rather than a seeded cache, because
+    the seeding is what the panel's own rebuild undoes.
+    """
+    unbalanced = sample_cif("2100844", "2100844_Bi2O3.cif")
+    if not unbalanced.is_file():
+        pytest.skip("no structure with an unbalanced cell to hand")
+
+    window.load(str(unbalanced))
+    qapp.processEvents()
+    rows, reason = window.project.network_for(window.project.current)
+    assert not rows and "net charge" in reason
+
+    window.site_list.setCurrentRow(0)
+    qapp.processEvents()
+    text = window.analysis.toPlainText()
+    assert "No a priori bond valences" in text
+    assert "net charge" in text
+
+    panel = window.utilities
+    titles = [panel.tabs.tabText(i) for i in range(panel.tabs.count())]
+    panel.tabs.setCurrentIndex(titles.index("A priori"))
+    qapp.processEvents()
+    assert panel.apriori.rowCount() == 1
+    assert "No a priori bond valences" in panel.apriori.item(0, 0).text()
+
+
+def test_the_a_priori_analysis_is_computed_once(window, qapp):
+    """It needs a second pass over the structure, so it is cached."""
+    entry = window.project.current
+    first = window.project.network_for(entry)
+    again = window.project.network_for(entry)
+    assert first is again
+
+    window.project.set_list_threshold(window.project.v_list * 1.5)
+    third = window.project.network_for(window.project.current)
+    assert third is not first

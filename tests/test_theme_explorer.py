@@ -7,9 +7,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import theme as T
 
-SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs\1526458_Bi2O3.cif")
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 
 
 # --- palettes and overrides --------------------------------------------------
@@ -427,8 +429,7 @@ def _si_result():
 
     from facet.core import bv, cif, coordination
 
-    sample = _Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
-                   r"\9011871_bismutoferrite.cif")
+    sample = sample_cif("9011871", "9011871_bismutoferrite.cif")
     if not sample.is_file():
         _pytest.skip("the sample structure is not present")
     structure = cif.read(str(sample))
@@ -531,7 +532,11 @@ def test_no_contact_is_drawn_outside_the_plot(qapp):
     widget = CutoffExplorer()
     widget.resize(1148, 230)
     checked = 0
-    for path in sorted(folder.glob("*.cif"))[:18]:
+    # 30 files, not 18. The collection was reorganised into folders by
+    # chemical system and deduplicated, so the first 18 by sort order are no
+    # longer the same 18 and cover fewer sites than they did.
+    for path in sorted(p for p in folder.rglob("*.cif")
+                       if "_duplicates" not in p.parts)[:30]:
         try:
             structure = cif.read(str(path))
             results = coordination.analyse_structure(structure, bv.DEFAULT)

@@ -22,6 +22,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import cif
 from facet.core import planes as P
 from facet.core.utilities import d_spacing
@@ -436,8 +438,7 @@ def test_an_invalid_slab_keeps_everything(cubic):
 @pytest.fixture(scope="module")
 def bi_structure():
     """A real structure with enough atoms for the remapping to matter."""
-    path = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"
-                r"\1526458_Bi2O3.cif")
+    path = sample_cif("1526458", "1526458_Bi2O3.cif")
     if not path.is_file():
         pytest.skip("the Bi CIF collection is not present")
     return cif.read(path)

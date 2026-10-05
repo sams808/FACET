@@ -12,12 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import sample_cif
+
 from facet.core import adp, cif
 from facet.gl.scene import Style, build_scene, merge_scenes
 
-SAMPLE = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif"
-              r"\1004091_BiNa3O8P2.cif")
-NPD = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\7023720_BiPO4.cif")
+SAMPLE = sample_cif("1004091", "1004091_BiNa3O8P2.cif")
+NPD = sample_cif("7023720", "7023720_BiPO4.cif")
 
 pytestmark = pytest.mark.skipif(not SAMPLE.is_file(),
                                 reason="the reference structure is not present")

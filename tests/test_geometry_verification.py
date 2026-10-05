@@ -29,15 +29,19 @@ import itertools
 import math
 from pathlib import Path
 
+import re
+
 import numpy as np
 import pytest
+
+from conftest import sample_cif
 
 from facet.core import bv, cif, coordination, elements, polyhedra, utilities
 from facet.core.neighbors import NeighborFinder, _images_within
 from facet.core.structure import Atom, Cell, Site, Structure
 
 CIFS = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs")
-SAMPLE = CIFS / "1526458_Bi2O3.cif"
+SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 
 
 # ---------------------------------------------------------------------------
@@ -633,7 +637,8 @@ class TestLayer5RealData:
     @pytest.fixture(scope="class")
     def analysed(self):
         out = []
-        for path in sorted(CIFS.glob("*.cif")):
+        for path in sorted(p for p in CIFS.rglob("*.cif")
+                            if "_duplicates" not in p.parts):
             try:
                 s = cif.read(path)
                 out.append((path.name, s, coordination.analyse_structure(s)))
@@ -669,10 +674,16 @@ class TestLayer5RealData:
         """The check has to be quiet on good data, or it is noise."""
         from facet.core import quality
 
-        by_name = {name: (s, r) for name, s, r in analysed}
-        if "1526458_Bi2O3.cif" not in by_name:
+        # Keyed on the database code rather than the file name: the
+        # collection was reorganised and the copy that is kept carries a more
+        # descriptive name than the one this test was written against.
+        by_code = {}
+        for name, structure, r in analysed:
+            for code in re.findall(r"\d{6,8}", name):
+                by_code.setdefault(code, (structure, r))
+        if "1526458" not in by_code:
             pytest.skip("reference structure not present")
-        s, results = by_name["1526458_Bi2O3.cif"]
+        s, results = by_code["1526458"]
         report = quality.check(s, results)
         assert not report.of_level(quality.Level.IMPOSSIBLE)
         assert not report.of_level(quality.Level.CHECK)
