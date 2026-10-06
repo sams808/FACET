@@ -12,7 +12,8 @@ not started · **out of scope** — with a reason.
 Last updated after adding the pair distribution function, the EXAFS shell
 and resolution report, the bond-valence vector overlay, the white default theme
 and the in-application manual. Every feature selected for implementation is
-done; what remains planned is listed as such.
+done; what remains planned is listed as such. Section 14, the analysis of glass
+models from molecular dynamics, is accepted and not yet started.
 
 ---
 
@@ -222,11 +223,47 @@ that already exist. Revisit only if it is actually wanted.
 | Licences and redistribution terms | – | – | **done** | *Help ▸ Licences*, including what the Qt LGPL requires of a build that is passed on |
 | A written statement of what the program does not do | – | – | **done** | a manual section of its own, and `VERIFICATION.md` in the repository |
 
+## 14. Glass models from molecular dynamics
+
+FACET reads and measures the output of a molecular-dynamics run. It does not
+build, run or edit one. This section is not a parity comparison, so it has no
+CrystalMaker or VESTA columns. The order of the work is Phase MD in
+`ROADMAP.md`. Nothing here has been checked against a real model yet.
+
+| Feature | FACET | Note |
+|---|---|---|
+| LAMMPS `data` file | **planned** | atomic and charge atom styles; `Masses` and the box, including the `xy xz yz` tilt line |
+| LAMMPS `dump`, one frame or a trajectory | **planned** | scaled, unscaled and unwrapped coordinates; column order taken from the `ITEM: ATOMS` header; triclinic boxes as the LAMMPS manual defines them |
+| Multi-frame extended XYZ | **planned** | `Lattice=` and `Properties=`; single-frame XYZ reads as it does now |
+| Atom type → element, with its source recorded | **planned** | a map from the user, then an `element` column, then `Masses`; an ambiguous mass match is refused |
+| Skipped frames counted and reported | **planned** | truncated, a different atom count, unreadable: each one is counted, with its reason |
+| Per-atom bond-valence analysis of a whole frame | **planned** | CN at the threshold, bond-valence sum, φ and plateau width for every atom, from one neighbour search per frame; the threshold moves without a new search. Oxidation states are model inputs, not resolved |
+| Distance-cut CN beside the bond-valence CN | **planned** | cutoffs measured from the model, at the first minimum of the partial g(r) |
+| Partial g(r) and N(r), coordination by integration | **planned** | first minimum found automatically, with the method stated; the user can override it |
+| CN distribution per element | **planned** | cut by bond valence and by distance, shown side by side |
+| Bridging, non-bridging, free and tricluster oxygen | **planned** | counted against a set of network formers that the user chooses |
+| Qⁿ per former, and Qⁿ(mX) | **planned** | how many bridges each former has, and to which element they go, e.g. Si–O–Al |
+| N₄ for boron, Al CN 4/5/6 | **planned** | fractions per frame, then averaged |
+| Halide environments | **planned** | which cations each F or Cl is bonded to, as a frequency table of environments |
+| Lone-pair cations | **planned** | distributions of φ, CN and plateau width over every Bi atom: the link to the crystal work |
+| Bond-angle distributions | **planned** | T–O–T and O–T–O per former pair, with the same bond definition as the CN |
+| Frame averaging | **planned** | every descriptor as a mean and a standard deviation across frames, with the number of frames used |
+| Composition and charge of a model | **planned** | oxide mol % when the oxide basis is given; a model that is not neutral with the declared oxidation states is reported |
+| X-ray and neutron G(r), S(q) and F(q) from a model | **planned** | the existing PDF machinery, averaged over frames, overlaid on a measured curve with an R-factor defined in the manual; an element with no scattering length is refused, not set to zero |
+| Model fractions beside NMR fractions | **planned** | Qⁿ, N₄ and Al CN beside fractions the user enters from NMR fits, with the difference |
+| Model workspace | **planned** | type map, frame range and stride, a computation that runs in the background with progress and cancel; histograms and distribution tables in place of the site table |
+| CSV and XLSX export with provenance | **planned** | one sheet per descriptor; file, frames used, type map and its source, oxidation states, parameter set, threshold, g(r) minima and FACET version |
+| Ring statistics | out of scope this round | a documented hook that names R.I.N.G.S. as a program that computes them |
+| Simulated NMR spectra | out of scope this round | requires published shift correlations and their references before it computes anything |
+| Running, building or editing molecular dynamics | out of scope | FACET reads MD output; producing it is a different program |
+
 ## What is left
 
-118 of the 141 tracked features are done, 14 are deliberately out of scope,
-and 9 remain. Every feature selected for this round is implemented; the rest are
-listed so that what is missing stays visible rather than being discovered.
+113 of the 155 tracked features are done, 13 are deliberately out of scope,
+and 29 remain: 4 partial and 25 planned, 21 of the planned ones being the glass
+work of §14. Every feature selected for the crystal side is implemented; the
+rest are listed so that what is missing stays visible rather than being
+discovered. (Counted from the tables, one row per feature.)
 
 **Partial — usable, incomplete**
 
@@ -244,12 +281,20 @@ listed so that what is missing stays visible rather than being discovered.
   and searching for higher symmetry. Not selected for this round.
 - *Scripting and batch*: the Library workspace, for running an analysis over a
   folder and comparing the results.
+- *Glass models from molecular dynamics* (§14): readers for LAMMPS and
+  extended XYZ, a per-atom engine for whole frames, the descriptors glass work
+  reports, and their comparison with scattering and NMR. Phase MD in
+  `ROADMAP.md`.
 
 **Out of scope, with reasons**
 
-Structure editing, molecular dynamics, animation and movie export. FACET reads
-and measures structures; building and evolving them are different programs, and
-half of one of them is worse than none.
+Structure editing, running molecular dynamics, animation and movie export.
+FACET reads and measures structures, including the output of a
+molecular-dynamics run (§14); it does not build, run or edit one. Building and
+evolving structures are different programs, and half of one of them is worse
+than none. Ring statistics and simulated NMR spectra are out of scope for the
+first round of the glass work: the first is a program of its own, and the
+second needs published shift correlations to stand on.
 
 ---
 
