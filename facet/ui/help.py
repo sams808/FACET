@@ -57,7 +57,7 @@ def about_html(renderer: str = "", theme=None) -> str:
   v{__version__}</span></h2>
 <p style="color:{c.muted};margin-top:0"><i>{TAGLINE}.</i></p>
 
-<p>Written by <b>Sam Soudani</b>, in the <b>McCloy</b> group at
+<p>Written by <b>Sami Soudani</b>, in the <b>McCloy</b> group at
 <b>Washington State University</b>.</p>
 <p><a href="https://github.com/sams808/FACET">github.com/sams808/FACET</a>
 &nbsp;·&nbsp; MIT&nbsp;Licence</p>

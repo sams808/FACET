@@ -12,7 +12,7 @@ description = "Coordination analysis from crystal structure files, cut by bond v
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-authors = [{ name = "Sam Souda" }]
+authors = [{ name = "Sami Soudani" }]
 keywords = ["crystallography", "bond valence", "coordination number", "CIF"]
 
 # Kept deliberately small. gemmi parses, spglib supplies symmetry, numpy and
