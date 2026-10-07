@@ -1,0 +1,5 @@
+{
+ "MDAnalysis": "2.10.0 (numpy 2.4.6)",
+ "cp2k_layout.pdb": "composed by make_text_files_more.py from the Fortran formats of CP2K master (motion_utils.F, particle_methods.F)",
+ "pymatgen": "2026.10.2 (numpy 2.5.3)"
+}

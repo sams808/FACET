@@ -32,13 +32,18 @@ class MDModelFile(UnsupportedFormat):
     """An MD model or trajectory: opened with ``md_readers.read_trajectory``.
 
     :func:`read` raises it for LAMMPS data and dump files, multi-frame XYZ,
-    VASP XDATCAR and DL_POLY CONFIG / HISTORY, so that a 10 000-atom frame never
+    VASP XDATCAR, DL_POLY CONFIG / HISTORY, PDB files holding more than one
+    structure and the formats of ``md_formats_base.FORMAT_MODULES`` (by
+    content, and by name where the name is not a crystal one), whatever the
+    file's extension where its content says so, so that a 10 000-atom frame never
     becomes a per-site crystal Structure here: that path runs spglib on every
     file and the crystal window resolves oxidation states from the geometry,
     while an MD model's states are the force field's inputs. A subclass of
     UnsupportedFormat, so every caller that already handles an unreadable file
     handles this one. ``path`` and ``file_format`` (one of
-    ``md_readers.MD_FORMATS``) say what was recognised.
+    ``md_readers.format_names()``, or ``md_readers.PDB_TRAJECTORY`` for a
+    PDB of several structures no format module claims) say what was
+    recognised.
     """
 
     def __init__(self, message: str, *, path: str = "",
@@ -354,7 +359,16 @@ def read_xyz(path: str | Path, cell_padding: float = 6.0) -> Structure:
     if len(lines) < 3:
         raise UnsupportedFormat(f"{path.name}: too short to be an XYZ file")
 
-    count = int(lines[0].split()[0])
+    try:
+        count = int(lines[0].split()[0])
+    except (ValueError, IndexError):
+        from . import md_readers
+
+        looks = md_readers.describe_unread(path, for_readers_read=True)
+        raise UnsupportedFormat(
+            f"{path.name}: line 1 ({lines[0].strip()[:40]!r}) is not the atom "
+            "count an XYZ file starts with" + (f"; {looks}" if looks else "")
+            + ". " + _READS) from None
     comment = lines[1]
 
     positions, symbols = [], []
@@ -367,6 +381,16 @@ def read_xyz(path: str | Path, cell_padding: float = 6.0) -> Structure:
     positions = np.array(positions, float)
     if positions.size == 0:
         raise UnsupportedFormat(f"{path.name}: no coordinates")
+    unnamed = [s for s in symbols if not elements.normalise(s)]
+    if unnamed:
+        raise UnsupportedFormat(
+            f"{path.name}: {len(unnamed)} of its {len(symbols)} atom rows name "
+            f"the atom {unnamed[0]!r}, which is not an element symbol, and the "
+            "crystal reader names atoms by their symbols. A file that numbers "
+            "them (LAMMPS's 'dump xyz' writes each atom's type number when no "
+            "element is set) reads with FACET's MD reader and a type map: "
+            "facet.core.md_readers.read_trajectory(path, type_map={<number>: "
+            "'<element>', ...}), with box_from= when the file states no box")
 
     invented = False
     match = _LATTICE.search(comment)
@@ -595,17 +619,23 @@ def read_shelx(path: str | Path) -> Structure:
 # PDB and mmCIF, through gemmi
 # ---------------------------------------------------------------------------
 
-def read_pdb(path: str | Path) -> Structure:
+def read_pdb(path: str | Path, *, pdb_layout: bool = False) -> Structure:
     """PDB or mmCIF, via gemmi.
 
     A macromolecular file usually has no meaningful small-molecule cell — many
     carry the placeholder P1 1 Å cube — so the cell is taken when it is real
-    and invented around the coordinates when it is not.
+    and invented around the coordinates when it is not. gemmi chooses the
+    layout by the extension; ``pdb_layout`` reads the file as PDB whatever
+    its name (gemmi raised RuntimeError 'Unknown format' for a PDB saved as
+    .txt).
     """
     import gemmi
 
     path = Path(path)
-    doc = gemmi.read_structure(str(path))
+    if pdb_layout:
+        doc = gemmi.read_structure(str(path), format=gemmi.CoorFormat.Pdb)
+    else:
+        doc = gemmi.read_structure(str(path))
     doc.setup_entities()
     if not len(doc):
         raise UnsupportedFormat(f"{path.name}: no models")
@@ -754,73 +784,381 @@ def read(path: str | Path) -> Structure:
     POSCAR and CONTCAR have no extension, so the stem is checked too. A file
     whose extension says nothing is sniffed rather than refused.
 
-    An MD model raises :class:`MDModelFile` instead (see :func:`_md_format`):
-    a multi-frame ``.xyz`` / ``.extxyz`` with ``Lattice=`` is caught before
-    ``read_xyz``, which reads only the first frame, and a file with no crystal
-    extension is checked against the MD formats before ``_sniff``. A
-    multi-frame XYZ without ``Lattice=`` (LAMMPS ``dump xyz``, a molecule's
-    trajectory) has no box for the MD reader and more frames than the crystal
-    reader takes, and is refused with UnsupportedFormat saying so. A
-    single-frame XYZ and every crystal extension take the path they always
-    took.
+    An MD model raises :class:`MDModelFile` instead (see :func:`_md_format`),
+    so that no reader here keeps one frame of a trajectory silently: a
+    multi-frame ``.xyz`` / ``.extxyz`` with ``Lattice=``, an XDATCAR saved as
+    ``.vasp`` / ``.poscar`` / POSCAR, a LAMMPS dump or data file saved under
+    a crystal extension (``.cif`` included when no ``data_`` line opens a CIF
+    block in its first 4 kB), a PDB holding more than one structure, a binary
+    format a format module reads (by its content, or by its extension when
+    the content shows nothing else), a file whose name a format module
+    claims, and any file with no crystal extension that
+    ``md_readers.sniff_md`` recognises. A multi-frame XYZ without
+    ``Lattice=`` (LAMMPS ``dump xyz``, ASE's xyz, CP2K's pos.xyz), and one
+    frame of LAMMPS's ``dump xyz`` or CP2K's XMOL trajectory, are refused
+    with UnsupportedFormat saying how the MD reader opens them (box_from=):
+    the crystal reader would invent a box around a periodic model. A CIF
+    holding several images of one model (ASE writes a trajectory so) is
+    refused, saying how to convert it; a CIF holding several structures is
+    read as its first block with a cell, and a note says so. A missing file
+    raises FileNotFoundError. A single-frame XYZ and every crystal file take
+    the path they always took; when a crystal reader stops on a file whose
+    content a format module's sniff recognises (a LAMMPS YAML dump saved as
+    .vasp), MDModelFile is raised instead, and otherwise its IndexError,
+    RuntimeError (gemmi) or a ValueError that does not name the file becomes
+    UnsupportedFormat naming the file (with what it looks like, when that is
+    known and is not what its name already says).
     """
-    from . import cif as cif_module
-
     path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"{path}: no such file")
     suffix = path.suffix.lower()
     stem = path.name.upper()
 
     if suffix in (".cif", ".mcif"):
-        return cif_module.read(path)
-    if stem.startswith(("POSCAR", "CONTCAR")):
-        return read_poscar(path)
+        return _read_cif(path, suffix, stem)
 
-    found = _md_format(path, suffix)
+    found = _md_format(path, suffix, stem)
     if found is not None:
-        md_format, why = found
-        raise MDModelFile(
-            f"{path.name} {why}. The crystal window does not open it; FACET's "
-            "MD reader does (facet.core.md_readers.read_trajectory), reading "
-            "its frames as arrays and keeping the model's oxidation states, "
-            "where the crystal reader would build one site per atom, search "
-            "its symmetry and resolve oxidation states from the geometry.",
-            path=str(path), file_format=md_format)
+        raise _md_model_file(path, *found)
 
-    reader = READERS.get(suffix)
-    if reader is not None:
-        return reader(path)
-    return _sniff(path)
+    try:
+        if stem.startswith(("POSCAR", "CONTCAR")):
+            return read_poscar(path)
+        reader = READERS.get(suffix)
+        if reader is not None:
+            return reader(path)
+        return _sniff(path)
+    except MDModelFile:
+        raise
+    except (ValueError, IndexError, RuntimeError) as error:
+        routed = _module_format_after_failure(path)
+        if routed is not None:
+            raise _md_model_file(path, *routed) from error
+        if isinstance(error, UnsupportedFormat) or (
+                isinstance(error, ValueError) and path.name in str(error)):
+            raise                   # the reader's own words, naming the file
+        looks = _looks_after_failure(path, suffix, stem)
+        raise UnsupportedFormat(
+            f"{path.name}: the structure reader stopped on it "
+            f"({type(error).__name__}: {error})"
+            + (f"; {looks}" if looks else "") + f". {_READS}") from error
 
 
-def _md_format(path: Path, suffix: str) -> tuple[str, str] | None:
+# The names under which readers.read gives each single-structure kind of
+# md_readers.describe_unread to its reader.
+_KIND_NAMES = (("a CIF", (".cif", ".mcif"), ()),
+               ("a PDB file holding one structure", (".pdb", ".ent"), ()),
+               ("a VASP POSCAR", (".vasp", ".poscar"), ("POSCAR", "CONTCAR")))
+
+
+def _looks_after_failure(path: Path, suffix: str, stem: str) -> str:
+    """What the file looks like, for a crystal reader that stopped on it
+    (gemmi on a CIF saved as .pdb), or '' -- also when the advice would be
+    to save it under the name it already has."""
+    from . import md_readers
+
+    looks = md_readers.describe_unread(path, for_readers_read=True)
+    for kind, suffixes, stems in _KIND_NAMES:
+        if f"it looks like {kind}" in looks and (
+                suffix in suffixes or stem.startswith(stems or ("\0",))):
+            return ""
+    return looks
+
+
+# Format-module formats that a crystal reader may also read: a lone POSCAR
+# stays the crystal reader's (md_formats_text reads it as one frame only when
+# read_trajectory is asked to), so its refusal stays the crystal reader's.
+_CRYSTAL_SHAPED_FORMATS = ("vasp-poscar",)
+
+
+def _module_format_after_failure(path: Path) -> tuple[str, str] | None:
+    """(format, why) for a file under a crystal name that the crystal reader
+    could not read and whose content a format module's sniff recognises (a
+    LAMMPS YAML dump saved as .vasp, a CASTEP .md saved as .pdb or .res);
+    None otherwise. Consulted only after the crystal reader stopped, so a
+    file the crystal reader reads (a POSCAR, a one-model PDB) is never taken
+    from it: _md_format does not consult the format modules for a crystal
+    name. Integration re-run of the recognition corpus, 2026-10-07: such
+    files gave 'no atoms', 'no CELL instruction', or a bare ValueError
+    ("could not convert string to float: 'creator:'") naming no file."""
+    from . import md_readers
+
+    md_format = md_readers.sniff_md(path)
+    if md_format is None or md_format in md_readers.MD_FORMATS \
+            or md_format in _CRYSTAL_SHAPED_FORMATS:
+        return None
+    return md_format, (f"is an MD model ({md_format}) under a crystal file "
+                       "name, which the crystal reader does not read")
+
+
+# What the crystal readers and the MD reader read, for refusals.
+_CRYSTAL_TEXT = ("CIF, POSCAR, XYZ, .vesta, SHELX .res/.ins, PDB/mmCIF and "
+                 "CrystalMaker .cmtx")
+_READS = (f"FACET reads {_CRYSTAL_TEXT} as crystal structures, and MD models "
+          "with facet.core.md_readers.read_trajectory.")
+
+
+def _read_cif(path: Path, suffix: str, stem: str) -> Structure:
+    """A .cif / .mcif file: a binary MD format or MD text under the name is
+    routed (MD text only when no ``data_`` line opens a CIF block in the
+    first 4 kB, so a CIF costs one 4 kB read), NUL bytes are refused in
+    words, a CIF of several images of one model is refused, and a CIF of
+    several structures is read as its first block with a cell, noted."""
+    from . import cif as cif_module
+    from . import md_readers
+
+    if _holds_nul(path):
+        found = _binary_md_format(path)
+        if found is not None:
+            raise _md_model_file(path, *found)
+        _refuse_binary(path, md_readers)
+    block_in_head = _cif_block_in_head(path)
+    if not block_in_head:
+        found = _md_format(path, suffix, stem)
+        if found is not None:
+            raise _md_model_file(path, *found)
+    blocks = _cif_blocks(path)
+    if len(blocks) > 1 and blocks[0][1] \
+            and len({signature for _, signature in blocks}) == 1:
+        names = ", ".join(name for name, _ in blocks[:4]) \
+            + (", ..." if len(blocks) > 4 else "")
+        raise UnsupportedFormat(
+            f"{path.name} holds {len(blocks)} data blocks with a cell ({names}) "
+            "that list the same atoms in the same order: images of one model, "
+            "as ASE writes a trajectory to CIF. The crystal reader takes one "
+            "structure, so it would keep the first image only. ASE writes the "
+            "images as extended XYZ (ase.io.write('out.extxyz', "
+            "ase.io.read(path, index=':'))), which "
+            "facet.core.md_readers.read_trajectory reads as a trajectory; to "
+            "open one image here, save it as a CIF of its own.")
+    try:
+        structure = cif_module.read(path)
+    except (ValueError, RuntimeError) as error:
+        if block_in_head and isinstance(error, ValueError):
+            raise                   # the CIF reader's own words
+        if block_in_head:
+            # gemmi's parser (a duplicate tag, a syntax error)
+            raise UnsupportedFormat(
+                f"{path.name}: gemmi's CIF parser stopped on it ({error})") \
+                from error
+        routed = _module_format_after_failure(path)
+        if routed is not None:
+            raise _md_model_file(path, *routed) from error
+        looks = md_readers.describe_unread(path, for_readers_read=True)
+        raise UnsupportedFormat(
+            f"{path.name}: not read as a CIF ({error})"
+            + (f"; {looks}" if looks else "")
+            + f". {_READS} A file in another format opens once converted to "
+            "one of these (OVITO and ASE write extended XYZ and CIF).") \
+            from error
+    if len(blocks) > 1:
+        names = ", ".join(name for name, _ in blocks[:6]) \
+            + (", ..." if len(blocks) > 6 else "")
+        structure.notes.append(
+            f"the file holds {len(blocks)} data blocks with a cell ({names}); "
+            "the first of them was read, and the others are not")
+    return structure
+
+
+def _cif_block_in_head(path: Path, size: int = 4096) -> bool:
+    """Whether a line starting with data_ (any case, as CIF allows) lies in
+    the first ``size`` bytes."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(size)
+    except OSError:
+        return False
+    return re.search(rb"(?im)^data_", head) is not None
+
+
+def _cif_blocks(path: Path) -> list[tuple[str, tuple[str, ...]]]:
+    """(name, the atom-site labels in order) of every data block that has a
+    cell, when the file holds more than one data block; [] otherwise (one
+    block, or text gemmi does not parse, which cif.read then reports)."""
+    try:
+        with open(path, "rb") as handle:
+            starts = sum(1 for line in handle
+                         if line[:5].lower() == b"data_")
+    except OSError:
+        return []
+    if starts < 2:
+        return []
+    import gemmi
+
+    try:
+        doc = gemmi.cif.read(str(path))
+    except (ValueError, RuntimeError):
+        return []
+    out = []
+    for block in doc:
+        if not block.find_value("_cell_length_a"):
+            continue
+        labels = tuple(block.find_values("_atom_site_label"))
+        out.append((f"data_{block.name}", labels))
+    return out
+
+
+def _pdb_first(path: Path) -> bool:
+    """Whether the first non-blank line of the file is a PDB record that a
+    PDB file starts with (wwPDB format 3.3)."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(4096)
+    except OSError:
+        return False
+    first = next((x for x in head.splitlines() if x.strip()), b"")
+    return first[:6].rstrip().decode("ascii", "replace") in (
+        "HEADER", "REMARK", "CRYST1", "MODEL", "ATOM", "HETATM", "TITLE",
+        "COMPND")
+
+
+# The MD formats that are never a crystal file, whatever the file's name.
+_NOT_CRYSTAL = ("lammps-data", "lammps-dump", "vasp-xdatcar", "dlpoly-config",
+                "dlpoly-history")
+
+
+def _md_model_file(path: Path, md_format: str, why: str) -> MDModelFile:
+    return MDModelFile(
+        f"{path.name} {why}. The crystal window does not open it; FACET's "
+        "MD reader does (facet.core.md_readers.read_trajectory), reading "
+        "its frames as arrays and keeping the model's oxidation states, "
+        "where the crystal reader would build one site per atom, search "
+        "its symmetry and resolve oxidation states from the geometry.",
+        path=str(path), file_format=md_format)
+
+
+def _holds_nul(path: Path, size: int = 4096) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            return b"\x00" in handle.read(size)
+    except OSError:
+        return False
+
+
+def _binary_md_format(path: Path) -> tuple[str, str] | None:
+    """(format, why) for a binary format a format module reads, by the
+    file's first bytes or, when they show nothing else, its extension;
+    None otherwise."""
+    from . import md_readers
+
+    found = md_readers.binary_md_match(path)
+    if found is None:
+        return None
+    spec, by_content = found
+    if by_content:
+        return spec.name, (f"is a binary MD file: {spec.description} "
+                           f"({spec.name})")
+    return spec.name, (f"has the name of {spec.description} ({spec.name}), a "
+                       "binary format FACET's MD reader reads (its first "
+                       "bytes do not show another format)")
+
+
+def _md_format(path: Path, suffix: str, stem: str = "") -> tuple[str, str] | None:
     """(the MD format :func:`read` refuses this file as, why), or None.
 
-    ``.xyz`` / ``.extxyz``: only when a second frame follows the first, or
-    when the file is gzip-compressed with ``Lattice=`` (see below). Any other
-    crystal extension: never. Everything else (``.data``, ``.lmp``,
-    ``.dump``, ``.lammpstrj``, ``.gz``, ``data.*``, ``dump.*``, XDATCAR,
-    HISTORY, CONFIG, no extension): when ``md_readers.sniff_md`` recognises
-    the first 4 kB, so a LAMMPS input script named ``.lmp`` and a junk file
-    still reach ``_sniff`` and its message; a gzip-compressed XYZ with
-    ``Lattice=`` is the MD reader's even with one frame, because the crystal
-    reader reads plain text only. Raises UnsupportedFormat for a multi-frame
-    XYZ without ``Lattice=``, which neither reader opens.
+    In this order:
+
+    * a binary format a format module reads, by its first bytes, or by its
+      extension when the file is not empty and its first bytes show no
+      crystal structure (``md_readers.binary_md_match``): a binary file
+      never reaches a crystal reader, and a CIF renamed .dcd reaches it;
+    * a crystal name (an extension of :data:`READERS`, or a POSCAR / CONTCAR
+      stem): the built-in MD formats are sniffed from the first 4 kB (a VASP
+      or extended XYZ header with long lines is followed past it), and a
+      LAMMPS dump or data file, an XDATCAR or a DL_POLY file is routed
+      whatever its name (an XDATCAR saved as .vasp would otherwise give its
+      first configuration as a POSCAR, a dump saved as .xyz a ValueError);
+      an XYZ-shaped file is routed when a second frame follows the first,
+      or when it is gzip-compressed with ``Lattice=``, and refused when its
+      comment line is LAMMPS's 'dump xyz' or CP2K's XMOL one (a periodic
+      model that states no box); a file holding more than one PDB structure
+      (MODEL records, or ATOM records after an END record) is routed; a
+      file holding binary bytes that nothing recognised is refused, because
+      a text reader would fail on it with an error that is not
+      UnsupportedFormat. A format module's sniff is not consulted for a
+      crystal name: a single-model PDB or a POSCAR is a crystal file;
+    * any other name: ``md_readers.sniff_md`` (the built-in formats, then
+      the format modules), then a format module's extension or stem
+      (``md_readers.named_md_format``) for a file that is not empty and
+      shows no crystal structure, so a LAMMPS input script named ``.lmp``
+      and a junk file still reach ``_sniff`` and its message.
+
+    Raises UnsupportedFormat for an XYZ without ``Lattice=`` that the MD
+    reader opens only with ``box_from=``, and for a multi-frame XYZ whose
+    lines end with CR alone.
     """
     from . import md_readers
 
-    if suffix in (".xyz", ".extxyz"):
-        if md_readers.is_multiframe_xyz(path):
-            return "extxyz", _multiframe_xyz_reason(path, md_readers)
-        return _gzipped_xyz(path, md_readers)
-    if suffix in READERS:
+    binary = _binary_md_format(path)
+    if binary is not None:
+        return binary
+    crystal = suffix in READERS or stem.startswith(("POSCAR", "CONTCAR"))
+    if crystal:
+        if suffix == ".cmdf":
+            return None
+        md_format = md_readers.sniff_md(path, registered=False)
+        if md_format in _NOT_CRYSTAL:
+            return md_format, (f"is an MD model ({md_format}) under a crystal "
+                               "file name, which the crystal reader would "
+                               "read as one structure or not at all")
+        xyz_name = suffix in (".xyz", ".extxyz")
+        if xyz_name or md_format == "extxyz":
+            if md_readers.is_multiframe_xyz(path):
+                return "extxyz", _multiframe_xyz_reason(path, md_readers)
+            _refuse_boxless_frame(path, md_readers)
+            if xyz_name:
+                gzipped = _gzipped_xyz(path, md_readers)
+                if gzipped is not None:
+                    return gzipped
+        if (suffix in (".pdb", ".ent") or _pdb_first(path)) \
+                and md_readers.pdb_model_count(path) >= 2:
+            return md_readers.pdb_trajectory_format(path), (
+                "holds more than one structure (MODEL records, or ATOM records "
+                "after an END record): a trajectory, of which the crystal "
+                "reader would keep only the first")
+        _refuse_binary(path, md_readers)
         return None
     md_format = md_readers.sniff_md(path)
-    if md_format != "extxyz":
-        return None if md_format is None else (
-            md_format, f"is an MD model ({md_format})")
-    if md_readers.is_multiframe_xyz(path):
-        return "extxyz", _multiframe_xyz_reason(path, md_readers)
-    return _gzipped_xyz(path, md_readers)
+    if md_format == "extxyz":
+        if md_readers.is_multiframe_xyz(path):
+            return "extxyz", _multiframe_xyz_reason(path, md_readers)
+        _refuse_boxless_frame(path, md_readers)
+        return _gzipped_xyz(path, md_readers)
+    if md_format is not None:
+        return md_format, f"is an MD model ({md_format})"
+    named = md_readers.named_md_format(path)
+    if named is not None and md_readers._name_may_route(path):
+        return named.name, (f"has the name of {named.description} "
+                            f"({named.name}), a format FACET's MD reader reads")
+    return None
+
+
+def _refuse_binary(path: Path, md_readers) -> None:
+    """UnsupportedFormat for a file with a crystal extension whose first
+    bytes hold a NUL byte, as binary files and UTF-16 text do (PowerShell
+    5.1's Out-File writes UTF-16) and no text format FACET reads does; a
+    text reader would fail on it with an error that is not
+    UnsupportedFormat. Says what the file looks like when that is known."""
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(md_readers.SNIFF_BYTES)
+    except OSError:
+        return
+    if b"\x00" not in raw or raw[:2] == b"\x1f\x8b":
+        return
+    looks = md_readers.describe_unread(path, for_readers_read=True)
+    utf16 = raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+    raise UnsupportedFormat(
+        f"{path.name} holds NUL bytes, as "
+        + ("UTF-16 text does (it starts with a UTF-16 byte-order mark): save "
+           "it as UTF-8 or ASCII text" if utf16 else
+           "binary data and UTF-16 text do, which no text structure format "
+           "holds")
+        + (f" ({looks})" if looks and not utf16 else "")
+        + f". FACET reads {_CRYSTAL_TEXT} as crystal structures, and "
+        f"{md_readers.readable_formats()} as MD models "
+        "(facet.core.md_readers.read_trajectory).")
 
 
 def _gzipped_xyz(path: Path, md_readers) -> tuple[str, str] | None:
@@ -838,18 +1176,52 @@ def _gzipped_xyz(path: Path, md_readers) -> tuple[str, str] | None:
     return None
 
 
+_BOX_FROM = ("FACET's MD reader (facet.core.md_readers.read_trajectory) reads "
+             "periodic models only: it reads this file given a box, "
+             "box_from=<another MD file of the same run, such as its LAMMPS "
+             "data file or CP2K PROJECT-1.cell file> or the box as (3, 3) rows "
+             "in Å, which holds every frame in that one box (a constant "
+             "volume)")
+
+
+def _refuse_boxless_frame(path: Path, md_readers) -> None:
+    """UnsupportedFormat for one frame of LAMMPS's 'dump xyz' or CP2K's XMOL
+    trajectory: a periodic model that states no box, which the crystal
+    reader would place in an invented box (surfaces in a periodic glass),
+    and whose LAMMPS type numbers it would not read as elements."""
+    if md_readers.xyz_has_lattice(path):
+        return
+    writer = md_readers.plain_xyz_writer(path)
+    if writer is None:
+        return
+    raise UnsupportedFormat(
+        f"{path.name} is a frame of {writer} (its comment line is the one that "
+        "program writes), which states no periodic box (no Lattice=). The "
+        "crystal reader would place its atoms in an invented box, which puts "
+        f"surfaces into a periodic model. {_BOX_FROM}; LAMMPS type numbers in "
+        "place of element names take type_map={<number>: '<element>', ...}. "
+        "A LAMMPS run writes the box with 'dump custom' or 'dump extxyz'.")
+
+
 def _multiframe_xyz_reason(path: Path, md_readers) -> str:
     """Why a multi-frame XYZ goes to the MD reader; UnsupportedFormat when it
-    has no Lattice=, because then neither reader opens it."""
+    has no Lattice=, because then neither reader opens it, and when its
+    lines end with CR alone, which the MD reader refuses."""
+    if md_readers.cr_only_line_endings(path):
+        raise UnsupportedFormat(
+            f"{path.name} holds more than one XYZ frame, and its lines end with "
+            "CR alone (classic Mac OS line endings). The crystal reader takes "
+            "one structure per file (it would keep only the first frame), and "
+            "FACET's MD reader (facet.core.md_readers.read_trajectory) reads "
+            "LF and CRLF line endings: convert the file's line endings, and "
+            "the MD reader opens it.")
     if not md_readers.xyz_has_lattice(path):
         raise UnsupportedFormat(
             f"{path.name} holds more than one XYZ frame and no periodic box (no "
             "Lattice= on its first comment line). The crystal reader takes one "
-            "structure per file, and FACET's MD reader "
-            "(facet.core.md_readers.read_trajectory) reads periodic models only. "
-            "To open one frame, save it as an .xyz file of its own; a LAMMPS "
-            "run writes the box with 'dump custom' or 'dump extxyz' (its "
-            "'dump xyz' writes none).")
+            f"structure per file, and {_BOX_FROM}. To open one frame here, "
+            "save it as an .xyz file of its own; a LAMMPS run writes the box "
+            "with 'dump custom' or 'dump extxyz' (its 'dump xyz' writes none).")
     return ("holds more than one XYZ frame, and the crystal reader takes one "
             "structure per file (it would keep only the first frame)")
 
@@ -864,8 +1236,6 @@ def _is_float(token: str) -> bool:
 
 def _sniff(path: Path) -> Structure:
     """Identify a file by looking at it."""
-    from . import cif as cif_module
-
     try:
         head = path.read_text(encoding="utf-8", errors="replace")[:4000]
     except OSError as exc:
@@ -874,12 +1244,18 @@ def _sniff(path: Path) -> Structure:
     if "#VESTA_FORMAT_VERSION" in head:
         return read_vesta(path)
     if re.search(r"^data_", head, re.MULTILINE):
-        return cif_module.read(path)
+        # as a .cif: images of one trajectory are refused, several
+        # structures noted
+        return _read_cif(path, path.suffix.lower(), path.name.upper())
     if re.search(r"^CELL\s", head, re.MULTILINE) and \
             re.search(r"^SFAC\s", head, re.MULTILINE):
         return read_shelx(path)
-    if head.lstrip().startswith(("ATOM  ", "HETATM", "HEADER", "CRYST1")):
-        return read_pdb(path)
+    if head.lstrip().startswith(("ATOM  ", "HETATM", "HEADER", "CRYST1")) or (
+            _pdb_first(path)
+            and re.search(r"^(ATOM  |HETATM)", head, re.MULTILINE)):
+        # gemmi chooses PDB or mmCIF by the extension; this name has none
+        # it knows
+        return read_pdb(path, pdb_layout=True)
 
     lines = [ln for ln in head.splitlines() if ln.strip()]
     # An XYZ starts with a bare atom count and its third line is
@@ -903,6 +1279,14 @@ def _sniff(path: Path) -> Structure:
             return read_poscar(path)
         except (ValueError, IndexError):
             pass
+    from . import md_readers
+
+    looks = md_readers.describe_unread(path, for_readers_read=True)
     raise UnsupportedFormat(
-        f"{path.name}: the format was not recognised. FACET reads CIF, POSCAR, "
-        "XYZ, .vesta, SHELX .res/.ins, PDB/mmCIF and CrystalMaker .cmtx.")
+        f"{path.name}: the format was not recognised"
+        + (f" ({looks})" if looks else "")
+        + f". FACET reads {_CRYSTAL_TEXT} as crystal structures, and MD models "
+        f"and trajectories ({md_readers.readable_formats()}) with "
+        "facet.core.md_readers.read_trajectory. A file in another format "
+        "opens once converted to one of these (OVITO and ASE write extended "
+        "XYZ and CIF).")

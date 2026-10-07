@@ -92,7 +92,10 @@ def test_the_core_engine_imports_without_qt():
         "facet.core.md_model, facet.core.md_readers, facet.core.bulk,"
         "facet.core.md_stats, facet.core.glass, facet.core.md_network,"
         "facet.core.md_order, facet.core.md_scattering,"
-        "facet.core.md_spectroscopy, facet.core.md_dynamics;"
+        "facet.core.md_spectroscopy, facet.core.md_dynamics,"
+        "facet.core.md_formats_base, facet.core.md_formats_lammps,"
+        "facet.core.md_formats_xtc, facet.core.md_formats_binary,"
+        "facet.core.md_formats_text;"
         "bad=[m for m in sys.modules if m.startswith('PySide6')];"
         "print('QT' if bad else 'CLEAN')"
     )

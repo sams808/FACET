@@ -1,0 +1,277 @@
+{
+ "versions": {
+  "python": "3.11.9",
+  "numpy": "2.4.6",
+  "ase": "3.29.0",
+  "gsd": "5.0.1",
+  "netCDF4": "1.7.4",
+  "MDAnalysis": "2.10.0",
+  "ovito": "3.16.1",
+  "mdtraj": "1.11.1.post2",
+  "netcdf-c": "4.9.3"
+ },
+ "files": {
+  "ase_md.traj": "ASE 3.29.0",
+  "ase_masses.traj": "ASE 3.29.0",
+  "ase_masses_later.traj": "ASE 3.29.0",
+  "ase_changed.traj": "ASE 3.29.0",
+  "ase_small.nc": "ASE 3.29.0 (netCDF4 1.7.4, netcdf-c 4.9.3)",
+  "ovito_small.traj": "OVITO 3.16.1",
+  "ovito_ambiguous.gsd": "OVITO 3.16.1",
+  "ovito_face.gsd": "OVITO 3.16.1",
+  "ovito_small.nc": "OVITO 3.16.1",
+  "ovito_xz.nc": "OVITO 3.16.1",
+  "hoomd_small.gsd": "gsd 5.0.1 (gsd.hoomd)",
+  "gsd_v1_synthetic.gsd": "hoomd_small.gsd rewritten by this script in the GSD 1.0 layout (synthetic)",
+  "hoomd_letters.gsd": "gsd 5.0.1 (gsd.hoomd)",
+  "hoomd_mass_labels.gsd": "gsd 5.0.1 (gsd.hoomd)",
+  "hoomd_static.gsd": "gsd 5.0.1 (gsd.hoomd)",
+  "mda_small.nc": "MDAnalysis 2.10.0 NCDFWriter",
+  "lammps_style.nc": "netCDF4 1.7.4, netcdf-c 4.9.3",
+  "amber_style.nc": "netCDF4 1.7.4, netcdf-c 4.9.3",
+  "lammps_float.nc": "netCDF4 1.7.4, netcdf-c 4.9.3",
+  "mdtraj_nm.gsd": "mdtraj 1.11.1.post2 save_gsd (lengths in nm)",
+  "mdtraj.ncrst": "mdtraj 1.11.1.post2 save_netcdfrst"
+ },
+ "records": {
+  "ase_units": {
+   "fs": 0.09822694788464063,
+   "second": 98226947884640.62,
+   "codata": "2014"
+  },
+  "ovito_netcdf_angles": {
+   "orthogonal": {
+    "rows": [
+     [
+      10.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      11.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      12.0
+     ]
+    ],
+    "cell_angles": [
+     90.0,
+     90.0,
+     90.0
+    ],
+    "written_lengths": [
+     10.0,
+     11.0,
+     12.0
+    ],
+    "written_angles": [
+     90.0,
+     90.0,
+     90.0
+    ]
+   },
+   "xy": {
+    "rows": [
+     [
+      10.0,
+      0.0,
+      0.0
+     ],
+     [
+      2.0,
+      11.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      12.0
+     ]
+    ],
+    "cell_angles": [
+     90.0,
+     90.0,
+     79.69515353123397
+    ],
+    "written_lengths": [
+     10.0,
+     11.180339887498949,
+     12.0
+    ],
+    "written_angles": [
+     80.53767779197439,
+     90.0,
+     90.0
+    ]
+   },
+   "xz": {
+    "rows": [
+     [
+      10.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      11.0,
+      0.0
+     ],
+     [
+      2.0,
+      0.0,
+      12.0
+     ]
+    ],
+    "cell_angles": [
+     90.0,
+     80.53767779197439,
+     90.0
+    ],
+    "written_lengths": [
+     10.0,
+     11.0,
+     12.165525060596439
+    ],
+    "written_angles": [
+     90.0,
+     80.53767779197439,
+     90.0
+    ]
+   },
+   "yz": {
+    "rows": [
+     [
+      10.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      11.0,
+      0.0
+     ],
+     [
+      0.0,
+      2.0,
+      12.0
+     ]
+    ],
+    "cell_angles": [
+     80.53767779197439,
+     90.0,
+     90.0
+    ],
+    "written_lengths": [
+     10.0,
+     11.0,
+     12.165525060596439
+    ],
+    "written_angles": [
+     90.0,
+     90.0,
+     79.69515353123397
+    ]
+   },
+   "xz+yz": {
+    "rows": [
+     [
+      10.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      11.0,
+      0.0
+     ],
+     [
+      2.0,
+      3.0,
+      12.0
+     ]
+    ],
+    "cell_angles": [
+     76.14733123923796,
+     80.81531188644529,
+     90.0
+    ],
+    "written_lengths": [
+     10.0,
+     11.0,
+     12.529964086141668
+    ],
+    "written_angles": [
+     87.52082675252662,
+     80.53767779197439,
+     74.74488129694222
+    ]
+   },
+   "xy+xz+yz": {
+    "rows": [
+     [
+      10.0,
+      0.0,
+      0.0
+     ],
+     [
+      2.0,
+      11.0,
+      0.0
+     ],
+     [
+      -1.0,
+      3.0,
+      12.0
+     ]
+    ],
+    "cell_angles": [
+     77.08927991105402,
+     94.62203692583714,
+     79.69515353123397
+    ],
+    "written_lengths": [
+     10.0,
+     11.180339887498949,
+     12.409673645990857
+    ],
+    "written_angles": [
+     82.15361284319142,
+     94.69911946436983,
+     74.74488129694222
+    ]
+   }
+  }
+ },
+ "model": {
+  "symbols": [
+   "Si",
+   "O",
+   "Na",
+   "O",
+   "Si",
+   "O",
+   "Na",
+   "O"
+  ],
+  "ids": [
+   3,
+   5,
+   8,
+   11,
+   12,
+   17,
+   20,
+   21
+  ],
+  "steps": [
+   1000,
+   1010,
+   1020
+  ],
+  "dt_ps": 0.001
+ }
+}

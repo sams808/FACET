@@ -44,6 +44,7 @@ import ast
 import gzip
 import importlib.util
 import itertools
+import json
 import pickle
 import re
 import shutil
@@ -55,7 +56,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from facet.core import elements, md_readers, readers
+from facet.core import elements, md_formats_base, md_readers, readers
 from facet.core.md_model import FrameError
 from facet.core.md_readers import (box_from_dump_bounds, box_from_lammps,
                                    dump_bounds_from_box, lammps_from_box,
@@ -905,15 +906,38 @@ def test_sniff_md_names_each_format(name):
     assert sniff_md(DATA / name) == FILES[name][1]
 
 
-def test_sniff_md_leaves_crystal_files_alone(tmp_path):
+def test_sniff_md_leaves_crystal_files_alone(tmp_path, monkeypatch):
+    """The built-in formats never claim a crystal file, and readers.read
+    keeps a POSCAR a crystal whatever a format module claims. A format
+    module may read a single POSCAR under its VASP name as a one-frame
+    trajectory for read_trajectory (md_formats_text's vasp-poscar does, by
+    its ROUTING section); with no format module present, sniff_md leaves it
+    alone."""
     poscar = (DATA / "XDATCAR_fixed").read_text().splitlines()[:7] + [
         "Direct", "0.1 0.2 0.3", "0.25 0.15 0.45", "0.6 0.7 0.2",
         "0.35 0.9 0.65", "0.85 0.4 0.9"]
-    assert sniff_md(_write(tmp_path, "POSCAR", "\n".join(poscar))) is None
+    path = _write(tmp_path, "POSCAR", "\n".join(poscar))
+    assert sniff_md(path, registered=False) is None
+    structure = readers.read(path)
+    assert len(structure.atoms) == 5
+    claimed = sniff_md(path)
+    if claimed is not None:
+        # only a format module's format, read as one frame of the same atoms
+        assert claimed in [s.name for s in md_readers.format_specs()]
+        with read_trajectory(path) as traj:
+            (frame,) = _frames(traj)
+            assert _gap_mod_one(frame.frac, np.array(
+                [a.frac for a in structure.atoms])) < 1e-12
+    monkeypatch.setattr(md_formats_base, "FORMAT_MODULES", ())
+    assert sniff_md(path) is None
+    monkeypatch.undo()
     cif = ROOT / "tests" / "data" / "crystals" / "quartz_SiO2_cod9013321.cif"
     assert sniff_md(cif) is None
+    # A CONFIG is recognised by its records, whatever its name (defect D5 of
+    # the recognition test: ASE's CONFIG saved as NS2_CONFIG or glass.config
+    # was refused); the name rule this line used to pin is gone.
     config = shutil.copy(DATA / "CONFIG", tmp_path / "model.txt")
-    assert sniff_md(config) is None, "a CONFIG is recognised only by its name"
+    assert sniff_md(config) == "dlpoly-config"
 
 
 def test_a_trajectory_pickles_for_worker_processes():
@@ -1216,16 +1240,18 @@ def _xyz_blocks() -> list[list[str]]:
 @pytest.mark.parametrize("case, n_frames, skipped", [
     ("blank", 4, []),
     ("count too small", 3, [1]),
-    ("count too large", 2, [1, 2]),
+    ("count too large", 3, [1]),
 ])
 def test_every_lost_extended_xyz_frame_is_counted(tmp_path, case, n_frames,
                                                    skipped):
     """The walk used to stop at the first blank line or count that disagreed
     with the rows, with one skipped entry for all the frames after it. Blank
     lines between frames are passed over (the count line delimits frames);
-    a frame whose count disagrees with its rows is skipped, the walk resyncs
-    at the next count line followed by Lattice=, and a frame whose count line
-    the frame before swallowed gets its own position."""
+    a frame whose count disagrees with its rows is skipped, and the walk
+    resyncs at the next count line followed by Lattice=. A count larger
+    than the rows used to swallow the next frame's count and comment lines
+    (2 frames read, positions 1 and 2 skipped); an atom count where a row
+    is expected now ends the frame there, so the next frame reads."""
     blocks = _xyz_blocks()
     if case == "count too small":
         blocks[1][0] = "4"
@@ -1239,6 +1265,11 @@ def test_every_lost_extended_xyz_frame_is_counted(tmp_path, case, n_frames,
     assert traj.n_frames + len(traj.skipped) == 4
     if case == "blank":
         assert any("blank line(s) between frames" in n for n in traj.notes)
+    if case == "count too large":
+        # lines 1-7 frame 0, 8 the count 6, 9 the comment, 10-14 the rows,
+        # 15 frame 2's count
+        assert traj.skipped[1].startswith("5 of its 6 atom rows, then line 15 "
+                                          "('5') starts another frame")
     _frames(traj)
 
 
@@ -1915,3 +1946,952 @@ def test_the_readers_import_without_qt():
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "CLEAN" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# the recognition test's defects D1-D8, observation (b), and box_from
+#
+# The files in tests/data/md/recognition were written by LAMMPS 22 Jul 2025
+# and ASE 3.29.0 (make_recognition_files.py beside them, which imports
+# nothing from FACET); recognition_truth.json holds what the writers were
+# given or held. The CP2K-layout files are written there with CP2K's format
+# strings, as no CP2K is installed. Tolerances follow what each writer keeps:
+# ASE 8 decimals (frac: half a unit, 5e-9, plus the truth file's 1e-10
+# rounding, so 6e-9; positions 5e-8 Å), LAMMPS %g dumps 6
+# significant digits (1e-5 Å), DL_POLY via ASE 10 decimals (1e-9 Å).
+# ---------------------------------------------------------------------------
+
+RECOGNITION = DATA / "recognition"
+TRUTH = json.loads((RECOGNITION / "recognition_truth.json").read_text())
+RUN = TRUTH["lammps_run"]
+RUN_TYPES = {1: "Si", 2: "Na", 3: "O"}
+
+
+def _gap_ang(cart, truth, box) -> float:
+    """The largest distance between positions, modulo the lattice."""
+    box = np.asarray(box, dtype=float)
+    frac = np.linalg.solve(box.T, (np.asarray(cart) - np.asarray(truth)).T).T
+    frac -= np.round(frac)
+    return float(np.linalg.norm(frac @ box, axis=1).max())
+
+
+def _md_model_file(path) -> readers.MDModelFile:
+    with pytest.raises(readers.MDModelFile) as raised:
+        readers.read(path)
+    assert raised.value.path == str(path)
+    assert "read_trajectory" in str(raised.value)
+    return raised.value
+
+
+@pytest.mark.parametrize("name", ["XDATCAR_long", "XDATCAR", "model.txt"])
+def test_d1_an_xdatcar_whose_header_passes_the_sniff_window(tmp_path, name):
+    """ASE writes one symbol per run of equal symbols: 130 alternating atoms
+    put line 8 at byte 4874, past SNIFF_BYTES. Recognised by content under
+    any name, read to ASE's 8 decimals."""
+    path = shutil.copy(RECOGNITION / "XDATCAR_long", tmp_path / name)
+    lines = Path(path).read_text().splitlines()
+    assert sum(len(x) + 1 for x in lines[:7]) > md_readers.SNIFF_BYTES
+    assert sniff_md(path) == "vasp-xdatcar"
+    assert _md_model_file(Path(path)).file_format == "vasp-xdatcar"
+    truth = TRUTH["XDATCAR_long"]
+    with read_trajectory(path) as traj:
+        assert traj.n_frames == 2
+        for k in range(2):
+            frame = traj.frame(k)
+            assert frame.elements.tolist() == truth["symbols"]
+            assert _gap_mod_one(frame.frac, np.array(truth["frac"][k])) < 6e-9
+
+
+def test_d1_a_poscar_with_long_element_lines_is_not_an_xdatcar(tmp_path):
+    lines = (RECOGNITION / "XDATCAR_long").read_text().splitlines()[:7]
+    rows = (RECOGNITION / "XDATCAR_long").read_text().splitlines()[8:138]
+    path = _write(tmp_path, "model.txt", "\n".join(lines + ["Direct"] + rows)
+                  + "\n")
+    assert sniff_md(path) is None
+
+
+@pytest.mark.parametrize("name", ["three_models.pdb", "cp2k_style.pdb"])
+def test_d2_a_pdb_holding_several_structures_goes_to_the_md_reader(name):
+    """ASE's MODEL blocks, and CP2K's END-separated blocks with no MODEL
+    record (C2): readers.read kept the first structure silently."""
+    path = RECOGNITION / name
+    assert md_readers.pdb_model_count(path) == 2       # counting stops at 2
+    assert md_readers.pdb_model_count(path, stop=10) == 3
+    raised = _md_model_file(path)
+    assert raised.file_format == md_readers.pdb_trajectory_format(path)
+    assert "more than one structure" in str(raised)
+
+
+def test_d2_a_single_structure_pdb_still_opens_as_a_crystal(tmp_path):
+    lines = (RECOGNITION / "three_models.pdb").read_text().splitlines()
+    end = lines.index("ENDMDL")
+    one = [x for x in lines[:end] if not x.startswith("MODEL")] + ["END"]
+    path = _write(tmp_path, "one.pdb", "\n".join(one) + "\n")
+    assert md_readers.pdb_model_count(path) == 1
+    structure = readers.read(path)
+    assert len(structure.atoms) == 18
+
+
+@pytest.mark.parametrize("name", ["md.vasp", "md.poscar", "POSCAR",
+                                  "CONTCAR_300K", "md.contcar"])
+def test_d3_an_xdatcar_under_a_crystal_name_goes_to_the_md_reader(tmp_path,
+                                                                  name):
+    """readers.read returned configuration 1 of 3 as a POSCAR."""
+    path = Path(shutil.copy(RECOGNITION / "xdatcar_saved.vasp", tmp_path / name))
+    assert _md_model_file(path).file_format == "vasp-xdatcar"
+    truth = TRUTH["xdatcar_saved.vasp"]
+    with read_trajectory(path) as traj:
+        assert traj.n_frames == 3
+        for k in range(3):
+            assert _gap_mod_one(traj.frame(k).frac,
+                                np.array(truth["frac"][k])) < 6e-9
+
+
+def test_d3_a_poscar_under_a_crystal_name_stays_a_crystal(tmp_path):
+    lines = (RECOGNITION / "xdatcar_saved.vasp").read_text().splitlines()
+    path = _write(tmp_path, "model.vasp",
+                  "\n".join(lines[:7] + ["Direct"] + lines[8:26]) + "\n")
+    structure = readers.read(path)
+    assert len(structure.atoms) == 18
+
+
+def test_d4_a_dump_saved_as_xyz_goes_to_the_md_reader(tmp_path):
+    """read_xyz parsed 'ITEM: TIMESTEP' as an atom count: a bare ValueError,
+    which a caller catching UnsupportedFormat did not catch."""
+    path = RECOGNITION / "dump_saved_as.xyz"
+    raised = _md_model_file(path)
+    assert raised.file_format == "lammps-dump"
+    assert isinstance(raised, readers.UnsupportedFormat)
+    renamed = shutil.copy(path, tmp_path / "dump.lammpstrj")
+    a, b = _frames(read_trajectory(path)), _frames(read_trajectory(renamed))
+    for k, (x, y) in enumerate(zip(a, b, strict=True)):
+        assert np.array_equal(x.cart_ang, y.cart_ang)
+        assert x.elements.tolist() == RUN["elements"]
+        assert _gap_ang(x.cart_ang, RUN["positions"][k], RUN["box"]) < 1e-5
+
+
+@pytest.mark.parametrize("name", ["glass.config", "NS2_CONFIG", "model.txt"])
+def test_d5_a_config_is_recognised_by_its_records(tmp_path, name):
+    path = Path(shutil.copy(RECOGNITION / "glass.config", tmp_path / name))
+    assert sniff_md(path) == "dlpoly-config"
+    assert _md_model_file(path).file_format == "dlpoly-config"
+    (frame,) = _frames(read_trajectory(path))
+    truth = TRUTH["glass.config"]
+    assert frame.elements.tolist() == truth["symbols"]
+    assert _gap_ang(frame.cart_ang, truth["positions"],
+                    TRUTH["xdatcar_saved.vasp"]["box"]) < 1e-9
+
+
+@pytest.mark.parametrize("text", [
+    # a POSCAR with three whole-number scale factors: line 2 reads as
+    # levcfg 1, imcon 1, and lines 6-8 are not atom blocks
+    "title\n1 1 1\n9 0 0\n0 9 0\n0 0 9\nSi O Na\n1 2 3\nDirect\n"
+    "0.1 0.1 0.1\n0.2 0.2 0.2\n0.3 0.3 0.3\n0.4 0.4 0.4\n0.5 0.5 0.5\n"
+    "0.6 0.6 0.6\n",
+    # an XYZ whose comment line is two whole numbers
+    "3\n0 0\nSi 0 0 0\nO 1 1 1\nO 2 2 2\n",
+])
+def test_d5_files_that_are_not_configs(tmp_path, text):
+    assert sniff_md(_write(tmp_path, "model.txt", text)) != "dlpoly-config"
+
+
+LABELS = {"Si_t": "Si", "Na+": "Na", "O_b": "O", "O_nb": "O"}
+
+
+@pytest.mark.parametrize("name, column", [
+    ("labels_typelabel.lammpstrj", "type label"),
+    ("labels_element.lammpstrj", "element column")])
+def test_d6_a_type_map_keyed_by_the_files_labels(name, column):
+    """A numeric type column beside a typelabel or element column of
+    labels that are not symbols: the labels' map was ignored, and the same
+    refusal came back."""
+    path = RECOGNITION / name
+    with read_trajectory(path, type_map=LABELS) as traj:
+        assert traj.type_map == {1: "Si", 2: "Na", 3: "O", 4: "O"}
+        assert traj.type_map_source == "user"
+        assert any(f"through the {column}(s) of the file they name type(s) "
+                   "[1, 2, 3, 4]" in n for n in traj.notes)
+        for frame in _frames(traj):
+            assert frame.elements.tolist() == TRUTH["labels"]["elements"]
+    with pytest.raises(ValueError, match=r"gives type 1 as Ge by its number "
+                                         r"and as Si by its label 'Si_t'"):
+        read_trajectory(path, type_map={**LABELS, 1: "Ge"})
+    with pytest.raises(ValueError, match=r"the type map's labels \['Xx'\] "
+                                         "match no label the file gives a type"):
+        read_trajectory(path, type_map={"Si_t": "Si", "Xx": "O"})
+
+
+def test_d7_the_refusal_example_is_built_from_the_files_types(tmp_path):
+    with pytest.raises(ValueError) as raised:
+        read_trajectory(RECOGNITION / "atom_default.lammpstrj")
+    message = str(raised.value)
+    assert ("atom_default.lammpstrj: pass type_map={1: '<element>', 2: "
+            "'<element>', 3: '<element>'}") in message
+    assert "'Si'" not in message and "'O'" not in message
+    with pytest.raises(ValueError) as raised:
+        read_trajectory(RECOGNITION / "labels_typelabel.lammpstrj")
+    assert ("type_map={1: '<element>', 3: '<element>', 4: '<element>'}"
+            in str(raised.value))
+    assert "type_map={'O_b': '<element>', 'O_nb': '<element>', 'Si_t': " \
+        "'<element>'}" in str(raised.value)
+    text = (RECOGNITION / "nvt.data").read_text()
+    start, end = text.index("Masses"), text.index("Pair Coeffs")
+    bare = _write(tmp_path, "bare.data", text[:start] + text[end:])
+    with pytest.raises(ValueError, match=r"bare\.data: pass type_map=\{1: "
+                                         r"'<element>', 2: '<element>', 3: "
+                                         r"'<element>'\}"):
+        read_trajectory(bare)
+
+
+def _refusal(call) -> str:
+    with pytest.raises(readers.UnsupportedFormat) as raised:
+        call()
+    return str(raised.value)
+
+
+@pytest.mark.parametrize("content, looks", [
+    (b"LammpS RestartT\x00\x01\x00\x00\x00", "lmp -restart2data"),
+    (b"BZh91AY&SY" + bytes(40), "compressed with bzip2"),
+    (b"\xfd7zXZ\x00" + bytes(40), "compressed with xz"),
+    (b'<?xml version="1.0"?>\n<modeling>\n', "XDATCAR"),
+    (b" vasp.6.4.2 20Jul23 complex\n", "XDATCAR"),
+    (b"LAMMPS (22 Jul 2025 - Update 4)\nunits metal\n", "data file"),
+    (b"units metal\natom_style charge\nread_data glass.data\nrun 1000\n",
+     "LAMMPS input script"),
+])
+def test_d8_refusals_say_what_the_file_looks_like_and_what_to_do(
+        tmp_path, content, looks):
+    """Both readers' refusals name the file, the MD formats FACET reads and
+    the way to one of them; the signatures were checked against files the
+    programs wrote (the recognition test's corpus)."""
+    path = tmp_path / "unknown.out"
+    path.write_bytes(content)
+    for message in (_refusal(lambda: read_trajectory(path)),
+                    _refusal(lambda: readers.read(path))):
+        assert message.startswith("unknown.out")
+        assert looks in message
+        assert "LAMMPS data and dump files" in message
+        assert "DL_POLY CONFIG / HISTORY" in message
+
+
+@pytest.mark.parametrize("name, content, says", [
+    ("model.xyz", "3\nmolecule\nO 0 0 0\nH 0.9 0 0\nH 0 0.9 0\n"
+     .encode("utf-16"), "UTF-16 text"),
+    ("model.vasp", b"\x00\x01\x02 binary " * 20, "binary data"),
+])
+def test_nul_bytes_under_a_crystal_name_are_refused_in_words(tmp_path, name,
+                                                             content, says):
+    """A text reader would fail on them with an error that is not
+    UnsupportedFormat (read_xyz: a ValueError from int())."""
+    path = tmp_path / name
+    path.write_bytes(content)
+    message = _refusal(lambda: readers.read(path))
+    assert message.startswith(f"{name} holds NUL bytes") and says in message
+
+
+def test_d8_the_generic_refusals_point_at_each_other(tmp_path, monkeypatch):
+    junk = _write(tmp_path, "junk.dat", "not a structure\n")
+    message = _refusal(lambda: read_trajectory(junk))
+    assert "box_from" in message and "readers.read" in message
+    assert "a directory, a wildcard pattern or a list of paths" in message
+    message = _refusal(lambda: readers.read(junk))
+    assert "CIF" in message and "read_trajectory" in message
+    assert "LAMMPS data and dump files" in message
+    poscar = (RECOGNITION / "xdatcar_saved.vasp").read_text().splitlines()
+    path = _write(tmp_path, "POSCAR_1",
+                  "\n".join(poscar[:7] + ["Direct"] + poscar[8:26]) + "\n")
+    # The core's refusal, with no format module present: a format module
+    # may read a lone POSCAR under its VASP name as one frame (see
+    # test_sniff_md_leaves_crystal_files_alone).
+    with monkeypatch.context() as patched:
+        patched.setattr(md_formats_base, "FORMAT_MODULES", ())
+        message = _refusal(lambda: read_trajectory(path))
+    assert "a VASP POSCAR or CONTCAR (one structure)" in message
+    assert "readers.read opens a single structure" in message
+    cell = _refusal(lambda: read_trajectory(RECOGNITION / "NS2-1.cell"))
+    assert "CP2K cell file" in cell and "box_from=" in cell
+
+
+def test_c3_a_later_frames_error_names_the_file(tmp_path):
+    text = (RECOGNITION / "atom_default.lammpstrj").read_text().splitlines()
+    rows = [i for i, x in enumerate(text) if x.startswith("ITEM: ATOMS")]
+    text[rows[2] + 1] = text[rows[2] + 1].replace(" ", " x", 1)
+    path = _write(tmp_path, "bad_row.lammpstrj", "\n".join(text) + "\n")
+    with read_trajectory(path, type_map=RUN_TYPES) as traj:
+        with pytest.raises(FrameError, match=r"^bad_row\.lammpstrj, frame 2 "
+                                             r"\(file position 2\)"):
+            traj.frame(2)
+
+
+def test_b_positions_an_ase_run_never_wrapped_are_kept_unwrapped():
+    """ASE's MD (VelocityVerlet) never wraps: its positions spread over 14
+    box widths here. They are every frame's unwrapped positions, to ASE's 8
+    decimals, and the frames are wrapped."""
+    truth = TRUTH["ase_unwrapped.extxyz"]
+    with read_trajectory(RECOGNITION / "ase_unwrapped.extxyz") as traj:
+        (note,) = [n for n in traj.notes if n.startswith(
+            "positions as written lie outside the box")]
+        assert "0 of 18 atoms in frame 0 and 18 in the last frame" in note
+        assert "kept as every frame's unwrapped positions" in note
+        for k, frame in enumerate(_frames(traj)):
+            assert np.abs(frame.unwrapped_cart_ang
+                          - np.array(truth["positions"][k])).max() < 5e-8
+            assert ((frame.frac >= 0) & (frame.frac < 1)).all()
+            assert _gap_ang(frame.cart_ang, truth["positions"][k],
+                            truth["box"]) < 5e-8
+
+
+def test_b_positions_a_writer_wraps_are_not_kept_unwrapped():
+    """LAMMPS's dump extxyz writes wrapped positions and no Origin=, so they
+    lie outside a box placed at (0, 0, 0) yet spread over one width: kept
+    as unwrapped they would jump at every re-neighbouring."""
+    with read_trajectory(RECOGNITION / "lammps_wrapped.extxyz") as traj:
+        (note,) = [n for n in traj.notes if n.startswith(
+            "positions as written lie outside the box")]
+        assert "not kept as unwrapped positions" in note
+        assert all(f.unwrapped_cart_ang is None for f in _frames(traj))
+    with read_trajectory(DATA / "glass.extxyz") as traj:
+        assert not any("positions as written" in n for n in traj.notes)
+
+
+def test_box_from_a_data_file_reads_a_lammps_xyz_dump():
+    """'dump xyz' writes no box; box_from=the run's data file gives it. The
+    run kept its box (fix nve), and the positions are LAMMPS's own to %g."""
+    path = RECOGNITION / "nvt.xyz"
+    with read_trajectory(path, box_from=RECOGNITION / "nvt.data") as traj:
+        assert traj.timesteps.tolist() == RUN["timesteps"]
+        assert traj.box_varies is False
+        (note,) = [n for n in traj.notes if n.startswith("box from frame 0")]
+        assert "assumes a constant volume" in note
+        assert "nvt.xyz cannot show whether its volume changed" in note
+        for k, frame in enumerate(_frames(traj)):
+            assert np.abs(frame.box_ang - np.array(RUN["box"])).max() < 1e-12
+            assert np.abs(frame.origin_ang - np.array(RUN["origin"])).max() \
+                < 1e-12
+            assert frame.elements.tolist() == RUN["elements"]
+            assert _gap_ang(frame.cart_ang, RUN["positions"][k],
+                            RUN["box"]) < 1e-5
+
+
+def test_box_from_rows_and_type_numbers_as_names():
+    """LAMMPS's 'dump xyz' writes each type number as the name when no
+    element is set: a type map keyed by number names them."""
+    path = RECOGNITION / "nvt_types.xyz"
+    with pytest.raises(ValueError, match=r"type_map=\{1: '<element>', 2: "
+                                         r"'<element>', 3: '<element>'\}"):
+        read_trajectory(path, box_from=RUN["box"])
+    with read_trajectory(path, box_from=RUN["box"], type_map=RUN_TYPES) as t:
+        assert any("the species column holds type numbers" in n
+                   for n in t.notes)
+        (note,) = [n for n in t.notes if n.startswith("box from the box_from")]
+        assert "origin (0, 0, 0)" in note
+        for k, frame in enumerate(_frames(t)):
+            assert frame.elements.tolist() == RUN["elements"]
+            assert _gap_ang(frame.cart_ang, RUN["positions"][k],
+                            RUN["box"]) < 1e-5
+
+
+def test_box_from_a_cp2k_cell_file_and_cp2k_times():
+    """CP2K's XMOL titles give the step and the time in fs (converted to
+    ps); its cell file gives the box when every row is the same, and is
+    refused when the cell changes."""
+    path = RECOGNITION / "NS2-pos-1.xyz"
+    with read_trajectory(path, box_from=RECOGNITION / "NS2-1.cell") as traj:
+        assert traj.timesteps.tolist() == TRUTH["cp2k"]["steps"]
+        assert np.allclose(traj.times_ps, np.array(TRUTH["cp2k"]["times_fs"])
+                           * 1e-3, rtol=0, atol=1e-15)
+        assert "CP2K's comment-line time" in traj.units_note
+        for k, frame in enumerate(_frames(traj)):
+            assert _gap_ang(frame.cart_ang, RUN["positions"][k],
+                            RUN["box"]) < 1e-9
+    with pytest.raises(ValueError, match="the cell changes from step to step"):
+        read_trajectory(path, box_from=RECOGNITION / "NS2-1_npt.cell")
+
+
+@pytest.mark.parametrize("box_from, message", [
+    (np.eye(2), "has shape"),
+    ([[1, 0, 0], [2, 0, 0], [0, 0, 1]], "degenerate"),
+    ("missing.data", "no such file"),
+])
+def test_box_from_refusals(tmp_path, box_from, message):
+    source = tmp_path / box_from if isinstance(box_from, str) else box_from
+    with pytest.raises((ValueError, FileNotFoundError), match=message):
+        read_trajectory(RECOGNITION / "nvt.xyz", box_from=source)
+
+
+@pytest.mark.parametrize("box_from", [
+    np.eye(2), [[0, 1, 0], [1, 0, 0], [0, 0, 1]],
+    RECOGNITION / "NS2-1_npt.cell", "missing.data"],
+    ids=["shape", "left-handed", "changing cell", "missing file"])
+def test_box_from_refusals_name_the_file_being_read(tmp_path, box_from):
+    """Integration re-run of the recognition corpus (2026-10-07): the
+    box_from refusals named the box source or nothing, never the XYZ file
+    being read."""
+    source = tmp_path / box_from if isinstance(box_from, str) else box_from
+    with pytest.raises((ValueError, FileNotFoundError)) as raised:
+        read_trajectory(RECOGNITION / "nvt.xyz", box_from=source)
+    assert str(raised.value).startswith("nvt.xyz: ")
+    assert str(raised.value).count("nvt.xyz") == 1
+
+
+def test_a_species_refusal_reads_species():
+    """'no element for the species(s)' read as a typo: species is its own
+    plural (integration re-run, 2026-10-07)."""
+    with pytest.raises(ValueError) as raised:
+        read_trajectory(RECOGNITION / "nvt_types.xyz",
+                        box_from=RECOGNITION / "nvt.data")
+    text = str(raised.value)
+    assert text.startswith("nvt_types.xyz: no element for the species '1': ")
+    assert "species(s)" not in text and "speciess" not in text
+
+
+def test_box_from_is_refused_for_a_file_that_states_its_box():
+    with pytest.raises(ValueError, match="first frame states its own box"):
+        read_trajectory(DATA / "glass.extxyz", box_from=RUN["box"])
+
+
+def test_a_box_less_xyz_says_how_to_give_it_a_box():
+    with pytest.raises(ValueError, match="no periodic box.*read_trajectory "
+                                         "reads periodic models only: pass "
+                                         "box_from="):
+        read_trajectory(RECOGNITION / "nvt.xyz")
+    with pytest.raises(readers.UnsupportedFormat, match="box_from="):
+        readers.read(RECOGNITION / "nvt.xyz")
+
+
+def test_no_note_or_message_of_the_new_paths_carries_a_verdict(tmp_path):
+    out: list[str] = []
+
+    def message(call):
+        try:
+            call()
+        except (ValueError, OSError) as error:
+            return str(error)
+        raise AssertionError("expected a refusal")
+
+    for name, kwargs in (("ase_unwrapped.extxyz", {}),
+                         ("lammps_wrapped.extxyz", {}),
+                         ("nvt.xyz", {"box_from": RECOGNITION / "nvt.data"}),
+                         ("NS2-pos-1.xyz",
+                          {"box_from": RECOGNITION / "NS2-1.cell"}),
+                         ("labels_element.lammpstrj", {"type_map": LABELS}),
+                         ("XDATCAR_long", {})):
+        traj = read_trajectory(RECOGNITION / name, **kwargs)
+        out += traj.describe()
+    out += read_trajectory(RECOGNITION / "series", type_map=RUN_TYPES).notes
+    for path in sorted(RECOGNITION.iterdir()):
+        if path.is_file():
+            try:
+                readers.read(path)
+            except (ValueError, OSError) as error:
+                out.append(str(error))
+    for content in (b"LammpS RestartT", b"BZh9", b"- of Ulm", b"CDF\x05",
+                    b"LAMMPS (22 Jul 2025)\n", b"junk\n"):
+        path = tmp_path / "x.out"
+        path.write_bytes(content)
+        out.append(message(lambda: read_trajectory(path)))
+        out.append(message(lambda: readers.read(path)))
+    out.append(message(lambda: read_trajectory(
+        RECOGNITION / "labels_typelabel.lammpstrj")))
+    out.append(message(lambda: read_trajectory(
+        RECOGNITION / "NS2-pos-1.xyz",
+        box_from=RECOGNITION / "NS2-1_npt.cell")))
+    assert len(out) > 60
+    assert [n for n in out if VERDICT.search(n)] == []
+    source = (ROOT / "facet" / "core" / "readers.py").read_text(encoding="utf-8")
+    strings = [node.value for node in ast.walk(ast.parse(source))
+               if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    new = [s for s in strings if "read_trajectory" in s or "box_from" in s
+           or "MD model" in s]
+    assert new and [s for s in new if VERDICT.search(s)] == []
+
+
+# ---------------------------------------------------------------------------
+# the core readers' review (2026-10-07)
+#
+# tests/data/md/recognition/review was written by LAMMPS 22 Jul 2025 and ASE
+# 3.29.0 (make_review_files.py beside the recognition fixtures, which imports
+# nothing from FACET); review_truth.json holds what the writers were given or
+# held. NS2-pos-1.extxyz there is written with CP2K's EXTXYZ format strings,
+# as no CP2K is installed. Each test below failed before its fix.
+# ---------------------------------------------------------------------------
+
+REVIEW = RECOGNITION / "review"
+REVIEW_TRUTH = json.loads((REVIEW / "review_truth.json").read_text())
+
+
+def _lf(path: Path) -> bytes:
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
+@pytest.mark.parametrize("source", ["general.data", "general_dump.lammpstrj",
+                                    "restricted.data"])
+def test_box_from_a_general_triclinic_lammps_file_for_a_dump_xyz(source):
+    """LAMMPS's 'dump xyz' writes its restricted coordinates (it takes no
+    dump_modify triclinic/general), while 'write_data ... triclinic/general'
+    and a dump with triclinic/general state avec / bvec / cvec. Taken as
+    written, those vectors put atoms up to 3.7 Å from LAMMPS's positions;
+    turned to the restricted orientation (Howto_triclinic), they agree with
+    LAMMPS's own state to the dump's %g digits (6 significant: 5e-5 Å per
+    component on these 15 Å coordinates) and with the box to 1e-9 Å."""
+    truth = REVIEW_TRUTH["general"]
+    traj = read_trajectory(REVIEW / "general_run.xyz", box_from=REVIEW / source)
+    turned = [n for n in traj.notes if "turned to the restricted" in n]
+    assert len(turned) == (0 if source == "restricted.data" else 1)
+    assert traj.timesteps.tolist() == [s["step"] for s in truth["states"]]
+    for frame, state in zip(_frames(traj), truth["states"], strict=True):
+        box = np.array(state["box"])
+        assert np.abs(frame.box_ang - box).max() < 1e-9
+        assert np.abs(frame.origin_ang - np.array(state["origin"])).max() < 1e-9
+        gap = frame.frac - np.array(state["frac"])
+        gap -= np.round(gap)
+        assert np.linalg.norm(gap @ box, axis=1).max() < 1e-4
+        assert frame.elements.tolist() == truth["elements"]
+
+
+def test_a_general_triclinic_box_for_another_xyz_is_used_as_written(tmp_path):
+    """Comment lines that are not LAMMPS 'dump xyz' ones: the vectors stay
+    as the source wrote them (ASE and OVITO keep a cell's orientation), and
+    the note says which orientation LAMMPS's own files take."""
+    text = _lf(REVIEW / "general_run.xyz").decode()
+    text = text.replace(" Atoms. Timestep:", " frame at step")
+    path = _write(tmp_path, "free.xyz", text)
+    traj = read_trajectory(path, box_from=REVIEW / "general.data")
+    general = np.array(REVIEW_TRUTH["general"]["avec_bvec_cvec"])
+    assert np.abs(traj.frame(0).box_ang - general).max() < 1e-9
+    (note,) = [n for n in traj.notes if n.startswith("box from frame 0")]
+    assert "general triclinic form" in note and "used as written" in note
+    traj.close()
+
+
+def test_cp2k_extxyz_time_is_converted_from_fs():
+    """CP2K 2026.1's EXTXYZ title: Lattice=, Properties=species:S:1:pos:R:3,
+    pbc=, Step=, Time= (fs, md_energies.F passes time*femtoseconds),
+    Energy=. Stored as written, Time= made a 0.5 fs step 10 ps and every
+    diffusion coefficient 1000 times small."""
+    truth = REVIEW_TRUTH["NS2-pos-1.extxyz"]
+    traj = read_trajectory(REVIEW / "NS2-pos-1.extxyz")
+    assert traj.timesteps.tolist() == truth["steps"]
+    assert np.allclose(traj.times_ps, np.array(truth["times_fs"]) * 1e-3,
+                       rtol=0, atol=1e-15)
+    assert "Time= in its EXTXYZ layout" in traj.units_note
+    assert any("CP2K's EXTXYZ layout" in n and "UNIT keyword" in n
+               for n in traj.notes)
+    for frame, positions in zip(_frames(traj), truth["positions"], strict=True):
+        assert _gap_ang(frame.cart_ang, positions, truth["box"]) < 1e-9
+
+
+def test_the_same_keys_in_ases_order_keep_time_as_written(tmp_path):
+    """ASE writes pbc= after the info keys, so the same keys with pbc= last
+    are not CP2K's layout: Time= is stored as written, as before."""
+    text = _lf(REVIEW / "NS2-pos-1.extxyz").decode()
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("Lattice="):
+            lines[i] = line.replace(' pbc="T T T"', "") + ' pbc="T T T"'
+    traj = read_trajectory(_write(tmp_path, "ase_order.extxyz",
+                                  "\n".join(lines) + "\n"))
+    assert traj.times_ps.tolist() == REVIEW_TRUTH["NS2-pos-1.extxyz"]["times_fs"]
+    assert "EXTXYZ layout" not in traj.units_note
+    traj.close()
+
+
+@pytest.mark.parametrize("name", ["XDATCAR_long_title", "XDATCAR", "model.txt"])
+def test_an_xdatcar_whose_title_passes_the_sniff_window(tmp_path, name):
+    """ASE writes the symbol runs as the title (line 1): a shuffled glass of
+    about 2700 atoms puts line 1 past byte 4096, and the file was refused
+    as not an MD model (D1 was fixed for long lines 6-7 only)."""
+    path = Path(shutil.copy(REVIEW / "XDATCAR_long_title", tmp_path / name))
+    assert len(_lf(path).split(b"\n")[0]) > md_readers.SNIFF_BYTES
+    assert sniff_md(path) == "vasp-xdatcar"
+    assert sniff_md(path, registered=False) == "vasp-xdatcar"
+    assert _md_model_file(path).file_format == "vasp-xdatcar"
+    truth = REVIEW_TRUTH["XDATCAR_long_title"]
+    for k, frame in enumerate(_frames(read_trajectory(path))):
+        assert frame.elements.tolist() == truth["symbols"]
+        assert _gap_mod_one(frame.frac, np.array(truth["frac"][k])) < 6e-9
+
+
+def test_a_long_first_line_that_is_no_header_is_not_followed(tmp_path):
+    """A text file whose first line passes the window and whose second line
+    is no VASP scale line: read no further than line 2, and not
+    recognised."""
+    path = _write(tmp_path, "notes.txt", "x" * 6000 + "\nhello world\n"
+                  + "1.0 0 0\n" * 10)
+    assert sniff_md(path) is None
+
+
+def test_an_extxyz_whose_comment_line_passes_the_sniff_window():
+    """ASE info values of a few thousand characters put line 2 past byte
+    4096: readers.read sent the file to the MD reader, which refused it as
+    not an MD model, so no FACET path read it."""
+    path = REVIEW / "long_comment.extxyz"
+    assert sniff_md(path) == "extxyz"
+    assert _md_model_file(path).file_format == "extxyz"
+    truth = REVIEW_TRUTH["long_comment.extxyz"]
+    frames = _frames(read_trajectory(path))
+    assert len(frames) == 2
+    for frame, positions in zip(frames, truth["positions"], strict=True):
+        assert frame.elements.tolist() == truth["symbols"]
+        assert _gap_ang(frame.cart_ang, positions, frame.box_ang) < 5e-8
+
+
+def _cp2k_frames() -> tuple[list[list[bytes]], int]:
+    lines = _lf(RECOGNITION / "NS2-pos-1.xyz").split(b"\n")
+    n = int(lines[0])
+    return [lines[i:i + n + 2] for i in range(0, 3 * (n + 2), n + 2)], n
+
+
+def test_a_restart_appended_to_a_plain_xyz_loses_no_frame(tmp_path):
+    """CP2K's pos.xyz cut inside frame 1 (7 rows), then frames 1 and 2 again,
+    as a restart appends them: the walk ran to the end looking for
+    Lattice=, so the two complete frames vanished and only the cut one was
+    counted. The cut frame is skipped and both restarted frames read."""
+    frames, n = _cp2k_frames()
+    blob = b"\n".join(b"\n".join(f) for f in
+                      (frames[0], frames[1][:9], frames[1], frames[2])) + b"\n"
+    path = tmp_path / "NS2-pos-1.xyz"
+    path.write_bytes(blob)
+    traj = read_trajectory(path, box_from=RECOGNITION / "NS2-1.cell")
+    assert traj.n_frames == 3 and list(traj.skipped) == [1]
+    assert traj.skipped[1].startswith(f"7 of its {n} atom rows, then line ")
+    assert traj.timesteps.tolist() == [0, 50, 100]
+    for frame, k in zip(_frames(traj), (0, 1, 2)):
+        assert _gap_ang(frame.cart_ang, RUN["positions"][k], RUN["box"]) < 1e-9
+
+
+def test_a_lost_row_in_a_plain_xyz_skips_one_frame(tmp_path):
+    """LAMMPS 'dump xyz' with one row of frame 1 deleted: frame 1 took frame
+    2's count line as a row, and every later frame was lost uncounted."""
+    lines = _lf(RECOGNITION / "nvt.xyz").decode().splitlines()
+    n = int(lines[0])
+    del lines[(n + 2) + 5]
+    traj = read_trajectory(_write(tmp_path, "nvt.xyz", "\n".join(lines) + "\n"),
+                           box_from=RECOGNITION / "nvt.data")
+    assert traj.n_frames + len(traj.skipped) == 3
+    assert list(traj.skipped) == [1]
+    assert traj.timesteps.tolist() == [RUN["timesteps"][0], RUN["timesteps"][2]]
+    _frames(traj)
+
+
+def test_a_lost_count_line_keeps_the_frame_before(tmp_path):
+    """A comment line where a count line is expected is a frame whose count
+    line was lost; the frame before it ended where it should and is kept
+    (it used to be skipped as a count that disagreed with its rows)."""
+    lines = _lf(RECOGNITION / "nvt.xyz").decode().splitlines()
+    n = int(lines[0])
+    del lines[n + 2]                         # frame 1's count line
+    traj = read_trajectory(_write(tmp_path, "nvt.xyz", "\n".join(lines) + "\n"),
+                           box_from=RECOGNITION / "nvt.data")
+    assert traj.timesteps.tolist() == [RUN["timesteps"][0], RUN["timesteps"][2]]
+    assert list(traj.skipped) == [1]
+    assert "has no atom count line before it" in traj.skipped[1]
+    traj.close()
+
+
+def test_a_restart_appended_to_an_extxyz_counts_every_frame(tmp_path):
+    """LAMMPS 'dump extxyz' cut inside frame 1, then frames 1 and 2 again:
+    the rewritten frame's count and comment lines were swallowed as rows of
+    the cut frame, so that frame was neither read nor counted."""
+    lines = _lf(RECOGNITION / "lammps_wrapped.extxyz").split(b"\n")
+    n = int(lines[0])
+    frames = [lines[i:i + n + 2] for i in range(0, 3 * (n + 2), n + 2)]
+    blob = b"\n".join(b"\n".join(f) for f in
+                      (frames[0], frames[1][:6], frames[1], frames[2])) + b"\n"
+    path = tmp_path / "restart.extxyz"
+    path.write_bytes(blob)
+    traj = read_trajectory(path)
+    assert traj.n_frames == 3 and list(traj.skipped) == [1]
+    traj.close()
+
+
+@pytest.mark.parametrize("name", ["cr_only.xyz", "cr_only.extxyz"])
+def test_a_cr_only_multi_frame_xyz_is_not_read_as_its_first_frame(tmp_path,
+                                                                  name):
+    """is_multiframe_xyz split lines at LF only, so a CR-only file looked
+    like one frame and readers.read returned frame 0 of 3 as a crystal,
+    with no note."""
+    path = tmp_path / name
+    path.write_bytes(_lf(RECOGNITION / "ase_unwrapped.extxyz")
+                     .replace(b"\n", b"\r"))
+    assert md_readers.is_multiframe_xyz(path)
+    message = _refusal(lambda: readers.read(path))
+    assert message.startswith(f"{name} holds more than one XYZ frame")
+    assert "CR alone" in message
+    one = tmp_path / "one.xyz"
+    first = _lf(RECOGNITION / "ase_unwrapped.extxyz").split(b"\n")[:20]
+    one.write_bytes(b"\r".join(first) + b"\r")
+    assert len(readers.read(one).atoms) == 18        # one frame: as before
+
+
+def test_a_cif_of_trajectory_images_is_refused_and_says_how_to_convert(
+        tmp_path):
+    """ASE writes a trajectory to CIF as data_image0, data_image1, ...;
+    readers.read returned the first image with no note."""
+    message = _refusal(lambda: readers.read(REVIEW / "three_images.cif"))
+    assert message.startswith("three_images.cif holds 3 data blocks with a "
+                              "cell (data_image0, data_image1, data_image2)")
+    assert "out.extxyz" in message and "read_trajectory" in message
+
+
+def test_a_cif_of_several_structures_is_read_with_a_note(tmp_path):
+    crystals = ROOT / "tests" / "data" / "crystals"
+    text = ((crystals / "quartz_SiO2_cod9013321.cif").read_text()
+            + "\n" + (crystals / "cryolite_Na3AlF6_cod9004097.cif").read_text())
+    structure = readers.read(_write(tmp_path, "two.cif", text))
+    alone = readers.read(crystals / "quartz_SiO2_cod9013321.cif")
+    assert len(structure.atoms) == len(alone.atoms)
+    assert any(n.startswith("the file holds 2 data blocks with a cell")
+               for n in structure.notes)
+
+
+@pytest.mark.parametrize("source, name, kind", [
+    ("dump_saved_as.xyz", "dump.cif", "lammps-dump"),
+    ("xdatcar_saved.vasp", "md.cif", "vasp-xdatcar"),
+    ("nvt.data", "glass.mcif", "lammps-data"),
+    ("three_models.pdb", "models.cif", None),
+])
+def test_md_text_saved_as_cif_goes_to_the_md_reader(tmp_path, source, name,
+                                                     kind):
+    """The .cif branch looked for NUL bytes only, so gemmi's 'expected
+    block header (data_)' came back for MD text under .cif / .mcif."""
+    path = Path(shutil.copy(RECOGNITION / source, tmp_path / name))
+    raised = _md_model_file(path)
+    assert raised.file_format == (kind or md_readers.pdb_trajectory_format(path))
+
+
+@pytest.mark.parametrize("name, content, says", [
+    ("junk.cif", b"not a cif\n", "not read as a CIF"),
+    ("empty.cif", b"", "the file is empty (0 bytes)"),
+    ("utf16.cif", (DATA / "CONFIG").read_text().encode("utf-16"), "UTF-16"),
+])
+def test_a_cif_name_without_a_cif_is_refused_in_words(tmp_path, name, content,
+                                                       says):
+    path = tmp_path / name
+    path.write_bytes(content)
+    message = _refusal(lambda: readers.read(path))
+    assert message.startswith(name) and says in message
+
+
+def _has_extension(suffix: str) -> bool:
+    return any(suffix in s.extensions for s in md_readers.format_specs())
+
+
+@pytest.mark.parametrize("suffix", [".dcd", ".nc", ".bin", ".yaml", ".cfg"])
+def test_a_crystal_under_an_md_extension_stays_a_crystal(tmp_path, suffix):
+    """binary_md_format trusted the extension before the content, so a CIF
+    renamed .dcd went to the MD reader, which pointed back to readers.read:
+    neither read it."""
+    if not _has_extension(suffix):
+        pytest.skip(f"no format module claims {suffix}")
+    cif = ROOT / "tests" / "data" / "crystals" / "quartz_SiO2_cod9013321.cif"
+    path = Path(shutil.copy(cif, tmp_path / f"quartz{suffix}"))
+    assert len(readers.read(path).atoms) == len(readers.read(cif).atoms)
+
+
+def test_an_empty_or_missing_file_under_a_binary_extension(tmp_path):
+    if not _has_extension(".dcd"):
+        pytest.skip("no format module claims .dcd")
+    empty = tmp_path / "empty.dcd"
+    empty.write_bytes(b"")
+    message = _refusal(lambda: readers.read(empty))
+    assert "the file is empty (0 bytes)" in message
+    assert "binary MD file" not in message
+    with pytest.raises(FileNotFoundError, match="no such file"):
+        readers.read(tmp_path / "nope.dcd")
+    junk = tmp_path / "junk.dcd"
+    junk.write_bytes(b"\x00not a dcd")
+    raised = _md_model_file(junk)
+    assert "has the name of" in str(raised) and "is a binary" not in str(raised)
+
+
+def test_one_frame_of_a_lammps_dump_xyz_is_not_given_an_invented_box(
+        tmp_path):
+    """readers.read placed one 'dump xyz' frame in an invented box (surfaces
+    in a periodic glass), and type numbers became element ''."""
+    lines = _lf(RECOGNITION / "nvt_types.xyz").decode().splitlines()
+    n = int(lines[0])
+    path = _write(tmp_path, "one.xyz", "\n".join(lines[:n + 2]) + "\n")
+    message = _refusal(lambda: readers.read(path))
+    assert "LAMMPS 'dump xyz'" in message and "box_from=" in message
+    assert "type_map=" in message
+    with read_trajectory(path, box_from=RECOGNITION / "nvt.data",
+                         type_map=RUN_TYPES) as traj:
+        assert traj.frame(0).elements.tolist() == RUN["elements"]
+    # numbers as atom names are refused by the crystal reader as well
+    plain = _write(tmp_path, "numbers.xyz", "\n".join(
+        [lines[0], "a molecule"] + lines[2:n + 2]) + "\n")
+    message = _refusal(lambda: readers.read(plain))
+    assert "is not an element symbol" in message
+
+
+@pytest.mark.parametrize("first", ["", "TITLE     MDANALYSIS FRAME 0: Created "
+                                       "by PDBWriter\n"])
+def test_a_one_structure_pdb_under_another_name_opens(tmp_path, first):
+    """gemmi chose the layout by the extension and raised RuntimeError
+    'Unknown format' for an ASE PDB saved as .txt; one starting with TITLE
+    (MDAnalysis) was refused, telling the caller to use readers.read."""
+    lines = (RECOGNITION / "three_models.pdb").read_text().splitlines()
+    end = lines.index("ENDMDL")
+    one = [x for x in lines[:end] if not x.startswith("MODEL")] + ["END"]
+    path = _write(tmp_path, "frame.txt", first + "\n".join(one) + "\n")
+    assert len(readers.read(path).atoms) == 18
+
+
+def test_the_single_structure_advice_depends_on_the_caller(tmp_path):
+    lines = (RECOGNITION / "three_models.pdb").read_text().splitlines()
+    end = lines.index("ENDMDL")
+    path = _write(tmp_path, "frame.dat", "\n".join(
+        [x for x in lines[:end] if not x.startswith("MODEL")] + ["END"]) + "\n")
+    assert md_readers.describe_unread(path).endswith(
+        "readers.read opens a single structure")
+    assert md_readers.describe_unread(path, for_readers_read=True).endswith(
+        "saved with the .pdb extension it opens with readers.read")
+
+
+@pytest.mark.parametrize("name, marker", [
+    ("XDATCAR", "Direct configuratio:=     2"),
+    ("XDATCAR", "Direct configuration      2"),
+])
+def test_a_damaged_xdatcar_configuration_line_is_one_lost_frame(
+        tmp_path, name, marker):
+    """A configuration line that no longer reads as 'configuration=': the
+    intact configuration before it was skipped with it, as one position,
+    and a damaged last one was a note 'fewer than' a configuration."""
+    lines = _xdatcar(3)
+    lines[lines.index("Direct configuration=     2")] = marker
+    traj = read_trajectory(_write(tmp_path, name, "\n".join(lines) + "\n"))
+    assert traj.timesteps.tolist() == [1, 3]
+    assert list(traj.skipped) == [1]
+    assert "missing or damaged" in traj.skipped[1]
+    _frames(traj)
+    lines = _xdatcar(2)
+    lines[lines.index("Direct configuration=     2")] = marker
+    traj = read_trajectory(_write(tmp_path, name, "\n".join(lines) + "\n"))
+    assert traj.timesteps.tolist() == [1]
+    assert list(traj.skipped) == [1]
+    assert not any("fewer than" in n for n in traj.notes)
+
+
+def test_a_damaged_configuration_line_of_a_variable_cell(tmp_path):
+    lines = (DATA / "XDATCAR_variable").read_text().splitlines()
+    marks = [i for i, x in enumerate(lines) if "configuration=" in x]
+    assert len(marks) >= 2
+    lines[marks[1]] = lines[marks[1]].replace("configuration=", "configuratio:=")
+    traj = read_trajectory(_write(tmp_path, "XDATCAR", "\n".join(lines) + "\n"))
+    assert traj.n_frames + len(traj.skipped) == len(marks)
+    assert 0 not in traj.skipped and list(traj.skipped) == [1]
+    traj.close()
+
+
+@pytest.mark.parametrize("line, value", [(1, "1e999"), (2, "inf 0 0")])
+def test_xdatcar_header_refusals_name_the_file(tmp_path, line, value):
+    lines = (DATA / "XDATCAR_fixed").read_text().splitlines()
+    lines[line] = value
+    with pytest.raises(ValueError, match=r"^XDATCAR: the header before the "
+                                         "first configuration line"):
+        read_trajectory(_write(tmp_path, "XDATCAR", "\n".join(lines) + "\n"))
+
+
+def test_xdatcar_counts_refusal_is_short(tmp_path):
+    lines = _lf(RECOGNITION / "XDATCAR_long").decode().splitlines()
+    lines[5] = lines[5] + " Na"
+    with pytest.raises(ValueError) as raised:
+        read_trajectory(_write(tmp_path, "XDATCAR", "\n".join(lines) + "\n"))
+    message = str(raised.value)
+    assert message.startswith("XDATCAR: ") and len(message) < 400
+
+
+def test_a_non_finite_data_file_coordinate_names_the_file(tmp_path):
+    text = (RECOGNITION / "nvt.data").read_text().splitlines()
+    start = next(i for i, x in enumerate(text) if x.startswith("Atoms"))
+    row = text[start + 2].split()
+    assert len(row) == 8                       # id type x y z ix iy iz
+    row[2] = "nan"
+    text[start + 2] = " ".join(row)
+    with pytest.raises(ValueError, match=r"^nan\.data: "):
+        read_trajectory(_write(tmp_path, "nan.data", "\n".join(text) + "\n"))
+
+
+@pytest.mark.parametrize("content, says", [
+    (b"", "the file is empty (0 bytes)"),
+    ("ITEM: TIMESTEP\n0\n".encode("utf-16"), "UTF-16 text"),
+])
+def test_empty_and_utf16_files_say_so(tmp_path, content, says):
+    path = tmp_path / "dump.lammpstrj"
+    path.write_bytes(content)
+    for message in (_refusal(lambda: read_trajectory(path)),
+                    _refusal(lambda: readers.read(path))):
+        assert says in message
+
+
+def test_masses_from_needs_a_data_file_with_masses(tmp_path):
+    with pytest.raises(ValueError, match=r"lammps_wrapped\.extxyz \(masses_"
+                                         r"from\): no Masses"):
+        read_trajectory(RECOGNITION / "atom_default.lammpstrj",
+                        masses_from=RECOGNITION / "lammps_wrapped.extxyz")
+
+
+def test_box_from_refusals_of_the_review(tmp_path):
+    with pytest.raises(ValueError, match="left-handed"):
+        read_trajectory(RECOGNITION / "nvt.xyz", box_from=-10 * np.eye(3))
+    with pytest.raises(ValueError, match="the box changes from frame to frame"):
+        read_trajectory(RECOGNITION / "nvt.xyz",
+                        box_from=DATA / "XDATCAR_variable")
+    with pytest.raises(ValueError, match="the box changes from frame to frame"):
+        read_trajectory(RECOGNITION / "nvt.xyz",
+                        box_from=DATA / "dump_tri_x.lammpstrj")
+    with pytest.raises(OSError, match="is a directory, not a file"):
+        read_trajectory(RECOGNITION / "nvt.xyz", box_from=tmp_path)
+    with pytest.raises(ValueError, match="mass_tol_amu='a'"):
+        read_trajectory(RECOGNITION / "nvt.data", mass_tol_amu="a")
+
+
+def test_a_crystal_readers_index_error_is_refused_in_words(tmp_path):
+    path = _write(tmp_path, "blank.xyz", "   \n  \n \n")
+    message = _refusal(lambda: readers.read(path))
+    assert message.startswith("blank.xyz: ")
+
+
+def test_pdb_frames_separated_by_endmdl_alone_are_counted(tmp_path):
+    """Frames closed by ENDMDL with no MODEL record and no END: one set was
+    counted, and readers.read returned the first of three as a crystal."""
+    text = _lf(RECOGNITION / "cp2k_style.pdb").decode().replace("\nEND\n",
+                                                                "\nENDMDL\n")
+    path = _write(tmp_path, "endmdl_only.pdb", text)
+    assert md_readers.pdb_model_count(path, stop=10) == 3
+    assert _md_model_file(path).file_format == \
+        md_readers.pdb_trajectory_format(path)
+
+
+def test_a_cif_of_trajectory_images_under_another_name(tmp_path):
+    """The content sniff of readers.read sent any data_ file to the CIF
+    reader directly, so the images check of the .cif branch applied to
+    .cif names only."""
+    path = Path(shutil.copy(REVIEW / "three_images.cif", tmp_path / "traj.dat"))
+    message = _refusal(lambda: readers.read(path))
+    assert message.startswith("traj.dat holds 3 data blocks with a cell")
+    message = _refusal(lambda: read_trajectory(path))
+    assert "a CIF holding more than one data block" in message
+    assert "out.extxyz" in message
+
+
+def test_cif_parser_and_xyz_count_errors_name_the_file(tmp_path):
+    """gemmi's RuntimeError for a duplicate tag, and int()'s ValueError for
+    a first line that is no atom count, came back bare."""
+    cif = _write(tmp_path, "twice.cif", "data_x\n_cell_length_a 5\n"
+                                        "_cell_length_a 5\n")
+    assert _refusal(lambda: readers.read(cif)).startswith("twice.cif: ")
+    cell = Path(shutil.copy(RECOGNITION / "NS2-1.cell", tmp_path / "c.xyz"))
+    message = _refusal(lambda: readers.read(cell))
+    assert message.startswith("c.xyz: line 1")
+    assert "CP2K cell file" in message
+
+
+def test_a_non_finite_history_charge_names_the_file(tmp_path):
+    """The per-element charges were computed outside the frame-0 wrapper,
+    so the refusal named no file."""
+    text = (DATA / "HISTORY").read_text().replace(
+        "Na 7 22.98977 0.6 0.0", "Na 7 22.98977 nan 0.0", 1)
+    with pytest.raises(ValueError, match=r"^HISTORY: "):
+        read_trajectory(_write(tmp_path, "HISTORY", text), type_map=HISTORY_MAP)
