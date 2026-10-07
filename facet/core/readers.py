@@ -28,6 +28,26 @@ class UnsupportedFormat(ValueError):
     pass
 
 
+class MDModelFile(UnsupportedFormat):
+    """An MD model or trajectory: opened with ``md_readers.read_trajectory``.
+
+    :func:`read` raises it for LAMMPS data and dump files, multi-frame XYZ,
+    VASP XDATCAR and DL_POLY CONFIG / HISTORY, so that a 10 000-atom frame never
+    becomes a per-site crystal Structure here: that path runs spglib on every
+    file and the crystal window resolves oxidation states from the geometry,
+    while an MD model's states are the force field's inputs. A subclass of
+    UnsupportedFormat, so every caller that already handles an unreadable file
+    handles this one. ``path`` and ``file_format`` (one of
+    ``md_readers.MD_FORMATS``) say what was recognised.
+    """
+
+    def __init__(self, message: str, *, path: str = "",
+                 file_format: str = "") -> None:
+        super().__init__(message)
+        self.path = path
+        self.file_format = file_format
+
+
 # ---------------------------------------------------------------------------
 # shared
 # ---------------------------------------------------------------------------
@@ -733,6 +753,16 @@ def read(path: str | Path) -> Structure:
 
     POSCAR and CONTCAR have no extension, so the stem is checked too. A file
     whose extension says nothing is sniffed rather than refused.
+
+    An MD model raises :class:`MDModelFile` instead (see :func:`_md_format`):
+    a multi-frame ``.xyz`` / ``.extxyz`` with ``Lattice=`` is caught before
+    ``read_xyz``, which reads only the first frame, and a file with no crystal
+    extension is checked against the MD formats before ``_sniff``. A
+    multi-frame XYZ without ``Lattice=`` (LAMMPS ``dump xyz``, a molecule's
+    trajectory) has no box for the MD reader and more frames than the crystal
+    reader takes, and is refused with UnsupportedFormat saying so. A
+    single-frame XYZ and every crystal extension take the path they always
+    took.
     """
     from . import cif as cif_module
 
@@ -745,10 +775,83 @@ def read(path: str | Path) -> Structure:
     if stem.startswith(("POSCAR", "CONTCAR")):
         return read_poscar(path)
 
+    found = _md_format(path, suffix)
+    if found is not None:
+        md_format, why = found
+        raise MDModelFile(
+            f"{path.name} {why}. The crystal window does not open it; FACET's "
+            "MD reader does (facet.core.md_readers.read_trajectory), reading "
+            "its frames as arrays and keeping the model's oxidation states, "
+            "where the crystal reader would build one site per atom, search "
+            "its symmetry and resolve oxidation states from the geometry.",
+            path=str(path), file_format=md_format)
+
     reader = READERS.get(suffix)
     if reader is not None:
         return reader(path)
     return _sniff(path)
+
+
+def _md_format(path: Path, suffix: str) -> tuple[str, str] | None:
+    """(the MD format :func:`read` refuses this file as, why), or None.
+
+    ``.xyz`` / ``.extxyz``: only when a second frame follows the first, or
+    when the file is gzip-compressed with ``Lattice=`` (see below). Any other
+    crystal extension: never. Everything else (``.data``, ``.lmp``,
+    ``.dump``, ``.lammpstrj``, ``.gz``, ``data.*``, ``dump.*``, XDATCAR,
+    HISTORY, CONFIG, no extension): when ``md_readers.sniff_md`` recognises
+    the first 4 kB, so a LAMMPS input script named ``.lmp`` and a junk file
+    still reach ``_sniff`` and its message; a gzip-compressed XYZ with
+    ``Lattice=`` is the MD reader's even with one frame, because the crystal
+    reader reads plain text only. Raises UnsupportedFormat for a multi-frame
+    XYZ without ``Lattice=``, which neither reader opens.
+    """
+    from . import md_readers
+
+    if suffix in (".xyz", ".extxyz"):
+        if md_readers.is_multiframe_xyz(path):
+            return "extxyz", _multiframe_xyz_reason(path, md_readers)
+        return _gzipped_xyz(path, md_readers)
+    if suffix in READERS:
+        return None
+    md_format = md_readers.sniff_md(path)
+    if md_format != "extxyz":
+        return None if md_format is None else (
+            md_format, f"is an MD model ({md_format})")
+    if md_readers.is_multiframe_xyz(path):
+        return "extxyz", _multiframe_xyz_reason(path, md_readers)
+    return _gzipped_xyz(path, md_readers)
+
+
+def _gzipped_xyz(path: Path, md_readers) -> tuple[str, str] | None:
+    """A one-frame XYZ with Lattice= compressed with gzip, whatever its name:
+    the crystal reader reads plain text only (read_xyz never read such a
+    file), and the MD reader opens it."""
+    try:
+        with open(path, "rb") as handle:
+            gzipped = handle.read(2) == b"\x1f\x8b"
+    except OSError:
+        return None
+    if gzipped and md_readers.xyz_has_lattice(path):
+        return "extxyz", ("is a gzip-compressed extended XYZ model, and the "
+                          "crystal reader reads plain text only")
+    return None
+
+
+def _multiframe_xyz_reason(path: Path, md_readers) -> str:
+    """Why a multi-frame XYZ goes to the MD reader; UnsupportedFormat when it
+    has no Lattice=, because then neither reader opens it."""
+    if not md_readers.xyz_has_lattice(path):
+        raise UnsupportedFormat(
+            f"{path.name} holds more than one XYZ frame and no periodic box (no "
+            "Lattice= on its first comment line). The crystal reader takes one "
+            "structure per file, and FACET's MD reader "
+            "(facet.core.md_readers.read_trajectory) reads periodic models only. "
+            "To open one frame, save it as an .xyz file of its own; a LAMMPS "
+            "run writes the box with 'dump custom' or 'dump extxyz' (its "
+            "'dump xyz' writes none).")
+    return ("holds more than one XYZ frame, and the crystal reader takes one "
+            "structure per file (it would keep only the first frame)")
 
 
 def _is_float(token: str) -> bool:

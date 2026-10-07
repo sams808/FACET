@@ -21,7 +21,7 @@ import pytest
 from conftest import sample_cif
 
 from facet.core import (bv, bv_files, bv_report, cif, coordination, diffraction,
-                        planes, polyhedra, quality, readers, volume)
+                        md_readers, planes, polyhedra, quality, readers, volume)
 from facet.core.structure import Atom, Cell, Site, Structure
 
 BI_DIR = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi")
@@ -392,7 +392,8 @@ def test_no_reader_raises_an_unexpected_exception_type():
         pytest.skip("the collection is not present")
     sample = sorted(BI_DIR.rglob("*.cif"))[:6]
     every = [readers.read, readers.read_poscar, readers.read_xyz,
-             readers.read_vesta, readers.read_shelx, readers.read_pdb]
+             readers.read_vesta, readers.read_shelx, readers.read_pdb,
+             md_readers.read_trajectory]
     for path in sample:
         for reader in every:
             try:
