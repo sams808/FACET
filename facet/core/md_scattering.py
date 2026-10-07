@@ -2306,7 +2306,8 @@ def analyse_trajectory(trajectory, *, r_max_ang: float, dr_ang: float,
                        neutron_lengths_fm: Mapping[str, float] | None = None,
                        lengths_source: str | None = None,
                        progress: Callable[[int, int], None] | None = None,
-                       cancelled: Callable[[], bool] | None = None
+                       cancelled: Callable[[], bool] | None = None,
+                       given_partials: Mapping[int, FramePartials] | None = None
                        ) -> ScatteringResult:
     """Partial and total scattering of every chosen frame, averaged over frames.
 
@@ -2326,6 +2327,13 @@ def analyse_trajectory(trajectory, *, r_max_ang: float, dr_ang: float,
     recorded. ``progress(done, total)`` and ``cancelled()`` are plain
     callables for a caller's worker thread; a cancel stops after the current
     frame and the frames not analysed are recorded.
+
+    ``given_partials`` (None by default) maps every chosen frame to the
+    :func:`frame_partials` of that frame computed by the caller from a pair
+    search it shares with other analyses (``md_analysis.analyse``); those
+    frames are then neither read nor searched here. Each has to be on this
+    call's r grid (``r_max_ang``, ``dr_ang``), and a frame chosen without
+    one is refused before anything is computed.
     """
     q = _axis(q_inv_ang, "q_inv_ang")
     r, dr = _r_grid(r_max_ang, dr_ang)
@@ -2362,12 +2370,38 @@ def analyse_trajectory(trajectory, *, r_max_ang: float, dr_ang: float,
                          f"{trajectory.n_frames} readable frames")
     if len(set(indices)) != len(indices):
         raise ValueError("a frame index is chosen more than once")
+    if given_partials is not None:
+        if not isinstance(given_partials, Mapping):
+            raise ValueError("given_partials needs a map frame index -> "
+                             "FramePartials")
+        lacking = [k for k in indices if k not in given_partials]
+        if lacking:
+            raise ValueError(f"given_partials holds no partials for frame(s) "
+                             f"{_frame_list(lacking)}; every chosen frame "
+                             "needs its own")
+        for k in indices:
+            given_k = given_partials[k]
+            if not isinstance(given_k, FramePartials):
+                raise ValueError(f"the partials of frame {k} are "
+                                 f"{type(given_k).__name__}, not "
+                                 "FramePartials")
+            if given_k.dr_ang != dr or given_k.r_ang.shape != r.shape \
+                    or not np.array_equal(given_k.r_ang, r):
+                raise ValueError(
+                    f"the partials of frame {k} are on r = "
+                    f"{float(given_k.r_ang[0]):.6g} .. "
+                    f"{float(given_k.r_ang[-1]):.6g} Å, dr = "
+                    f"{given_k.dr_ang:g} Å, not this call's grid "
+                    f"(r_max_ang {r_max_ang!r}, dr_ang {dr_ang!r})")
     # the factor tables, checked on the first chosen frame's elements before
     # any pair search; a frame that cannot be read is left to the loop
-    try:
-        first_species = tuple(trajectory.frame(indices[0]).species)
-    except (FrameError, ValueError):
-        first_species = None
+    if given_partials is not None:
+        first_species = tuple(given_partials[indices[0]].elements)
+    else:
+        try:
+            first_species = tuple(trajectory.frame(indices[0]).species)
+        except (FrameError, ValueError):
+            first_species = None
     if first_species:
         for radiation in radiations:
             scattering_lengths(first_species, radiation, **overrides)
@@ -2415,9 +2449,12 @@ def analyse_trajectory(trajectory, *, r_max_ang: float, dr_ang: float,
             cancelled_at = done
             break
         try:
-            frame = trajectory.frame(k)
-            partials = frame_partials(frame, r_max_ang=r_max_ang,
-                                      dr_ang=dr_ang)
+            if given_partials is not None:
+                partials = given_partials[k]
+            else:
+                frame = trajectory.frame(k)
+                partials = frame_partials(frame, r_max_ang=r_max_ang,
+                                          dr_ang=dr_ang)
         except (FrameError, ValueError) as error:
             skipped[k] = str(error)
             if progress is not None:
@@ -2606,9 +2643,19 @@ def analyse_trajectory(trajectory, *, r_max_ang: float, dr_ang: float,
              f"{q[0]:.6g} .. {q[-1]:.6g} Å^-1, {q.size} points"]
     notes.extend(route_notes)
     notes.extend(single)
-    if n_below:
+    if given_partials is not None:
+        notes.append("the partials of every frame were given by the caller "
+                     "(frame_partials on a pair search shared with other "
+                     "analyses); no frame was read or searched here")
+    if n_below and given_partials is None:
         notes.append(f"{n_below} ordered pairs at d <= 0 Å (coincident atoms) "
                      "were left out of g(r) over all frames")
+    elif n_below:
+        d_mins = sorted({given_partials[k].d_min_ang for k in used})
+        notes.append(f"{n_below} ordered pairs at or below d_min = "
+                     f"{', '.join(f'{v:g}' for v in d_mins)} Å (the pair "
+                     "search the partials were given from) were left out of "
+                     "g(r) over all frames")
     if trajectory.box_varies:
         notes.append("the box changes between frames; each frame uses its own "
                      "number density, and the sine-route statements above "

@@ -1980,7 +1980,17 @@ def analyse_trajectory(trajectory: Trajectory, ox: ModelOxidation, *,
                        bridging_anions: Collection[str] | None = None,
                        oxide_basis: Mapping[str, str] | None = None,
                        progress: Callable[[int, int], None] | None = None,
-                       cancelled: Callable[[], bool] | None = None
+                       cancelled: Callable[[], bool] | None = None,
+                       pair_search: Callable[[int, Frame, float, float | None],
+                                             Iterable[bulk.PairTable]] | None
+                       = None,
+                       on_frame: Callable[[int, Frame, bulk.ValenceTable,
+                                           bulk.AtomResults, bulk.Bonds], None]
+                       | None = None,
+                       on_minima: Callable[[dict, dict, dict], None] | None
+                       = None,
+                       on_distance_frame: Callable[[int, Frame, DistanceBonds],
+                                                   None] | None = None
                        ) -> GlassResult:
     """Every glass descriptor on every chosen frame, averaged with its spread.
 
@@ -2002,6 +2012,26 @@ def analyse_trajectory(trajectory: Trajectory, ox: ModelOxidation, *,
     listed as skipped (AnalysisCancelled when nothing was done). A frame the
     reader cannot load is skipped with the reason; every skip is in the
     provenance.
+
+    The last four arguments let a caller that runs other per-frame analyses
+    on the same frames (``md_analysis.analyse``) share the frame's one pair
+    search with this one; all four default to None, which leaves the
+    analysis as described above. ``pair_search(k, frame, r_ang,
+    vectors_within_ang)`` replaces ``bulk.iter_pairs`` in both passes: it
+    returns the blocks of one search of that frame to at least ``r_ang``,
+    with vectors to at least ``vectors_within_ang`` (None: every pair). A
+    search wider than asked gives the same descriptors: the valence table is
+    cut at the bond-valence radius, the g(r) grid and the distance bonds at
+    their own limits (the deposits of g(r) may then sum in another order, a
+    difference of the order of 1e-16 relative). ``on_frame(k, frame, table,
+    results, bonds)`` is called after pass 1 of each frame analysed, with
+    the frame's valence table, its results at ``v_bond_vu`` and its bonds;
+    ``on_minima(minima, cutoffs_ang, cutoff_sources)`` once, when the minima
+    of the frame-averaged g(r) and the distance cutoffs are known and before
+    pass 2; ``on_distance_frame(k, frame, distance_bonds)`` after each
+    frame's distance bonds are formed (in pass 1 when every cation-anion
+    cutoff was given, in pass 2 otherwise). An exception raised by a
+    callback ends the analysis.
     """
     if not isinstance(trajectory, Trajectory):
         raise ValueError(f"a Trajectory is needed, not "
@@ -2098,8 +2128,12 @@ def analyse_trajectory(trajectory: Trajectory, ox: ModelOxidation, *,
             dist_acc = _DistanceAccumulator(frame, ox_atom,
                                             setup["user_cutoffs"])
             consumers.append(dist_acc)
-        blocks = bulk.iter_pairs(frame, setup["r_pairs"],
-                                 vectors_within_ang=setup["vec_radius"])
+        if pair_search is None:
+            blocks = bulk.iter_pairs(frame, setup["r_pairs"],
+                                     vectors_within_ang=setup["vec_radius"])
+        else:
+            blocks = pair_search(k, frame, setup["r_pairs"],
+                                 setup["vec_radius"])
         table = bulk.valence_table(frame, _tap(blocks, consumers), ox_atom,
                                    params, v_list_vu=v_list,
                                    r_search_ang=setup["r_bv"])
@@ -2149,6 +2183,10 @@ def analyse_trajectory(trajectory: Trajectory, ox: ModelOxidation, *,
                 col_dist, col_cmp, k, dbonds, symbols, cations, anions,
                 former_set, setup, bv_cn[k], setup["length_edges_user"])
         densities[k] = density_g_per_cm3(frame)
+        if on_frame is not None:
+            on_frame(k, frame, table, results, bonds)
+        if dist_acc is not None and on_distance_frame is not None:
+            on_distance_frame(k, frame, dbonds)
         used.append(k)
         last = (k, frame)
         done += 1
@@ -2244,6 +2282,8 @@ def analyse_trajectory(trajectory: Trajectory, ox: ModelOxidation, *,
         notes.append("no distance cutoff for " + "; ".join(unresolved)
                      + "; the distance-definition descriptors that need one "
                      "are not reported")
+    if on_minima is not None:
+        on_minima(dict(minima), dict(cutoffs), dict(sources))
 
     # -- pass 2: the distance definition, when its cutoffs came from g(r) -----
     passes = 1
@@ -2274,13 +2314,18 @@ def analyse_trajectory(trajectory: Trajectory, ox: ModelOxidation, *,
                     report()
                     continue
                 acc = _DistanceAccumulator(frame, setup["ox_atom"], cutoffs)
-                for block in bulk.iter_pairs(frame, max_cut_ang):
+                second = (bulk.iter_pairs(frame, max_cut_ang)
+                          if pair_search is None else
+                          pair_search(k, frame, max_cut_ang, None))
+                for block in second:
                     acc.add(block)
                 dbonds = acc.result(setup["cations"], setup["anions"])
                 dist_skipped |= _record_distance(
                     col_dist, col_cmp, k, dbonds, frame.elements,
                     setup["cations"], setup["anions"], former_set, setup,
                     bv_cn[k], length_edges)
+                if on_distance_frame is not None:
+                    on_distance_frame(k, frame, dbonds)
                 dist_done.append(k)
                 done += 1
                 report()
@@ -2317,6 +2362,10 @@ def analyse_trajectory(trajectory: Trajectory, ox: ModelOxidation, *,
                      f"the distance cutoffs in frames {_compact(frames_seen)} "
                      "(the MD prompt names this as physically impossible)")
     notes.extend(_grouped(note_frames, len(used)))
+    if pair_search is not None:
+        notes.append("the pair blocks of each frame came from the caller's "
+                     "pair_search, a search of the frame shared with other "
+                     "analyses, to at least the radii this analysis asked for")
 
     model = composition(last[1], ox, oxide_basis)
     density = Scalar("density", "g/cm^3", [densities[k] for k in used],

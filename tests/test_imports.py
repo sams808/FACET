@@ -95,7 +95,8 @@ def test_the_core_engine_imports_without_qt():
         "facet.core.md_spectroscopy, facet.core.md_dynamics,"
         "facet.core.md_formats_base, facet.core.md_formats_lammps,"
         "facet.core.md_formats_xtc, facet.core.md_formats_binary,"
-        "facet.core.md_formats_text;"
+        "facet.core.md_formats_text, facet.core.md_analysis,"
+        "facet.core.md_export, facet.md.cli;"
         "bad=[m for m in sys.modules if m.startswith('PySide6')];"
         "print('QT' if bad else 'CLEAN')"
     )
