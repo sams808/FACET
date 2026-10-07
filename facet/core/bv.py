@@ -106,7 +106,12 @@ _BO1991 = "Brese & O'Keeffe, Acta Cryst. B47 (1991) 192, Table 2"
 # Brese & O'Keeffe (1991) Table 2, in full
 # ---------------------------------------------------------------------------
 # "Recommended bond-valence parameters for oxides, fluorides and chlorides":
-# 108 cations, each with R0 for O, F and Cl, b = 0.37 throughout.
+# 109 rows -- one per cation and oxidation state -- each with R0 for O, F and
+# Cl, b = 0.37 throughout: 327 values, 48 of them printed in italics. The
+# paper's text (p. 194) speaks of "the 330 entries in Table 2". The table is set
+# as two bands of 55 row slots, and 2 x 55 x 3 = 330 counts the empty last slot
+# of the right-hand band, after Zr(IV); the page prints 327 numbers and no
+# blank cell.
 #
 # FACET used to carry 60 pairs entered by hand, of which 47 were oxides and six
 # were fluorides -- so a fluoride structure nearly always fell through to the
@@ -124,6 +129,24 @@ _BO1991 = "Brese & O'Keeffe, Acta Cryst. B47 (1991) 192, Table 2"
 # the paper's own relation R(F) = 0.021 + 0.940 R(O), against the elements and
 # oxidation states being real, and by reading all four bands of the rendered
 # page. tests/test_bv_table2.py re-derives it from the paper when it is there.
+#
+# Double-entry visual audit, 2026-10-06. Two transcriptions made blind and
+# independently from rendered images of page 4 (zoom 8 and 14), compared value
+# by value, agree on all 109 rows, 327 values and 48 italic marks. The rows
+# where they differed from this file were rendered again (zoom 10 to 24) and
+# read. Before the audit this file held 108 rows, 324 values, 47 italic marks:
+#   * Ti(III) 1.791 / 1.723 / 2.17 was absent, and Ti(IV) 1.815 / 1.76 / 2.19
+#     was keyed ("Tl", 4). The text layer spells both Ti and Tl as "Ti" or "TI",
+#     and the paper has no Tl(IV) row. Every Ti lookup fell through to the
+#     estimator.
+#   * H(I) 0.95 / 0.92 / 1.28 was keyed ("H", 3), after the text layer's "H m"
+#     for the superscript I. Every H(+1) lookup fell through to the estimator.
+#   * Italic marks: Br(VII)-Cl, Ti(III)-Cl and Ti(IV)-Cl were absent;
+#     Tl(III)-Cl (printed upright) and ("Tl", 4, "Cl") were present.
+# No printed number changed. These were row labels and marks, not values taken
+# from another source, so none of them is recorded in SUPERSEDED below. The
+# page test now compares the printed rows one by one, in the paper's order, so
+# a dropped or relabelled row fails it.
 
 _TABLE2: dict[tuple[str, int], dict[str, float]] = {
     ("Ac", 3): {"O": 2.24, "F": 2.13, "Cl": 2.63},
@@ -165,7 +188,7 @@ _TABLE2: dict[tuple[str, int], dict[str, float]] = {
     ("Ga", 3): {"O": 1.73, "F": 1.62, "Cl": 2.07},
     ("Gd", 3): {"O": 2.065, "F": 1.95, "Cl": 2.445},
     ("Ge", 4): {"O": 1.748, "F": 1.66, "Cl": 2.14},
-    ("H", 3): {"O": 0.95, "F": 0.92, "Cl": 1.28},
+    ("H", 1): {"O": 0.95, "F": 0.92, "Cl": 1.28},
     ("Hf", 4): {"O": 1.923, "F": 1.85, "Cl": 2.3},
     ("Hg", 1): {"O": 1.9, "F": 1.81, "Cl": 2.28},
     ("Hg", 2): {"O": 1.93, "F": 1.9, "Cl": 2.25},
@@ -220,9 +243,10 @@ _TABLE2: dict[tuple[str, int], dict[str, float]] = {
     ("Te", 4): {"O": 1.977, "F": 1.87, "Cl": 2.37},
     ("Te", 6): {"O": 1.917, "F": 1.82, "Cl": 2.3},
     ("Th", 4): {"O": 2.167, "F": 2.07, "Cl": 2.55},
+    ("Ti", 3): {"O": 1.791, "F": 1.723, "Cl": 2.17},
+    ("Ti", 4): {"O": 1.815, "F": 1.76, "Cl": 2.19},
     ("Tl", 1): {"O": 2.172, "F": 2.15, "Cl": 2.56},
     ("Tl", 3): {"O": 2.003, "F": 1.88, "Cl": 2.32},
-    ("Tl", 4): {"O": 1.815, "F": 1.76, "Cl": 2.19},
     ("Tm", 3): {"O": 2, "F": 1.842, "Cl": 2.38},
     ("U", 4): {"O": 2.112, "F": 2.034, "Cl": 2.48},
     ("U", 6): {"O": 2.075, "F": 1.966, "Cl": 2.46},
@@ -250,6 +274,7 @@ _TABLE2_INTERPOLATED: set[tuple[str, int, str]] = {
     ("Bi", 5, "Cl"),
     ("Bk", 3, "Cl"),
     ("Bk", 3, "F"),
+    ("Br", 7, "Cl"),
     ("Br", 7, "F"),
     ("Ce", 4, "Cl"),
     ("Cl", 7, "Cl"),
@@ -283,9 +308,9 @@ _TABLE2_INTERPOLATED: set[tuple[str, int, str]] = {
     ("Sn", 2, "Cl"),
     ("Te", 6, "Cl"),
     ("Th", 4, "Cl"),
+    ("Ti", 3, "Cl"),
+    ("Ti", 4, "Cl"),
     ("Tl", 1, "Cl"),
-    ("Tl", 3, "Cl"),
-    ("Tl", 4, "Cl"),
     ("V", 3, "Cl"),
     ("V", 4, "Cl"),
 }
