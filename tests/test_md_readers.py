@@ -881,10 +881,13 @@ def test_every_format_gives_the_same_fractional_positions():
 @pytest.mark.parametrize("name", sorted(FILES))
 def test_crlf_copies_parse_identically(tmp_path, name):
     raw = (DATA / name).read_bytes()
+    # From LF, whatever the checkout did: converting an already-CRLF file
+    # would make CR CR LF, which no writer produces.
     if name.endswith(".gz"):
-        crlf = gzip.compress(gzip.decompress(raw).replace(b"\n", b"\r\n"))
+        crlf = gzip.compress(gzip.decompress(raw).replace(b"\r\n", b"\n")
+                             .replace(b"\n", b"\r\n"))
     else:
-        crlf = raw.replace(b"\n", b"\r\n")
+        crlf = raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
     copy = tmp_path / name
     copy.write_bytes(crlf)
     kwargs = FILES[name][0]
@@ -1146,7 +1149,7 @@ def test_a_last_number_cut_with_its_line_ending_skips_the_frame(tmp_path, name,
     two characters and the line ending leaves every column present ('2.496'
     becomes '2.4'), and the frame used to be read with the shortened value.
     Now it is skipped with the reason; the frame before it still reads."""
-    raw = (DATA / name).read_bytes()
+    raw = (DATA / name).read_bytes().replace(b"\r\n", b"\n")
     assert raw.endswith(digits.encode() + b"\n")
     path = tmp_path / name
     path.write_bytes(raw[:-3])

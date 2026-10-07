@@ -1,0 +1,5 @@
+# Test fixtures are compared byte for byte -- truncated frames, line endings,
+# gzip members -- so a checkout must not rewrite them. Without this, a Windows
+# clone with core.autocrlf=true turns every LF into CRLF and the tests that cut
+# a file at a known byte stop meaning what they say.
+tests/data/** -text
