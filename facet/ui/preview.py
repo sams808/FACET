@@ -10,7 +10,11 @@ with no neighbour search and no re-analysis.
 """
 from __future__ import annotations
 
+import fnmatch
+import os
+import re
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +71,26 @@ class PolyhedraMode:
     ALL = "all cations"
 
 
+class _WorkspaceView(StructureView):
+    """The crystal window's 3D view, whose empty state also says where an MD
+    model goes: a dropped or opened dump, data file or trajectory opens in a
+    Model window of its own (:meth:`PreviewWindow.open_md_models`), never in
+    this view."""
+
+    MD_HINT = ("MD models and trajectories (LAMMPS dump or data, extended "
+               "XYZ, XDATCAR, DL_POLY, DCD, XTC, ...) open in a Model window")
+
+    def _paint_placeholder(self, painter) -> None:
+        super()._paint_placeholder(painter)
+        # one line under the view's own, in the pen and font it left set
+        below = self.rect().adjusted(24, 0, -24, 0)
+        below.moveTop(below.top() + int(2.2 * painter.fontMetrics().height()))
+        font = QFont(painter.font())
+        font.setPointSizeF(max(font.pointSizeF() - 1.5, 6.0))
+        painter.setFont(font)
+        painter.drawText(below, Qt.AlignCenter | Qt.TextWordWrap, self.MD_HINT)
+
+
 class PreviewWindow(QMainWindow):
     def __init__(self, path: str | None = None):
         super().__init__()
@@ -84,8 +108,11 @@ class PreviewWindow(QMainWindow):
         self.show_vectors = False
         self.show_void_cones = False
         self.vector_scale = 0.6
+        # The Model windows opened from here (open_md_models): each is a
+        # top-level window of its own, never a tab of this one.
+        self._model_windows: list = []
 
-        self.view = StructureView()
+        self.view = _WorkspaceView()
         self.view.set_theme(self.theme)
         self.view.sitePicked.connect(self._on_site_picked)
         self.view.measured.connect(lambda t: self.statusBar().showMessage(t, 9000))
@@ -170,6 +197,7 @@ class PreviewWindow(QMainWindow):
 
         self._build_layout()
         self._build_menu()
+        self._add_md_menu_items()
         # The panels are built without a theme, and the two that compose their
         # own HTML fall back to near-black text when they have none. That is
         # exactly right for the four light themes -- which is why it has never
@@ -758,7 +786,8 @@ class PreviewWindow(QMainWindow):
         lower = path.lower()
         name = Path(path).name.upper()
         return (lower.endswith(self._DROPPABLE)
-                or name.startswith(("POSCAR", "CONTCAR")))
+                or name.startswith(("POSCAR", "CONTCAR"))
+                or md_droppable(path))
 
     def dragEnterEvent(self, event) -> None:
         """Accept dropped structure files, of any format FACET reads.
@@ -810,20 +839,197 @@ class PreviewWindow(QMainWindow):
 
         A folder of downloaded CIFs reliably contains a few that will not
         parse; the rest still open.
+
+        An MD model or trajectory among them (:func:`read_or_route`: a file
+        ``readers.read`` refuses with MDModelFile, an XYZ trajectory that
+        states no box, a file under an MD format's own extension) opens in a
+        Model window of its own (:meth:`open_md_models`) rather than being
+        listed as unreadable, and the crystal files of the same set load here
+        as they always did. File > Open, a drop, a restored session and the
+        command line all come through here.
         """
-        added, failed = self.project.add_files(paths)
+        added, failed, models = [], [], []
+        for path in paths:
+            kind, value = read_or_route(path)
+            if kind == "structure":
+                added.append(self.project.add(value, str(path)))
+            elif kind == "md":
+                models.append((str(path), value))
+            else:
+                failed.append((str(path), value))
         self.structure_panel.refresh()
         if added:
             self.project.set_active(len(self.project) - len(added))
             self._after_load(reframe=True)
+        if models:
+            self.open_md_models(model_groups(models), dropped_with=models)
         if failed:
             detail = "\n".join(f"{Path(p).name}: {why}" for p, why in failed)
+            opened = (f", {len(models)} opened in a Model window" if models
+                      else "")
             QMessageBox.warning(
                 self, "Some files could not be read",
-                f"{len(added)} loaded, {len(failed)} skipped.\n\n{detail}")
+                f"{len(added)} loaded{opened}, {len(failed)} skipped.\n\n"
+                f"{detail}")
 
     def load(self, path: str) -> None:
         self.load_many([path])
+
+    # -- MD models: a Model window each ------------------------------------
+    @property
+    def model_windows(self) -> list:
+        """The Model windows opened from this window that are still open."""
+        self._model_windows = [w for w in self._model_windows if _open(w)]
+        return list(self._model_windows)
+
+    def open_md_models(self, groups, *, read_options=None,
+                       dropped_with=None) -> list:
+        """Open each model in a Model window of its own; return the windows.
+
+        ``groups`` holds one entry per model: a path, or a list of paths that
+        are one model's files in order (:func:`model_groups`). The window
+        (``md_workspace.open_model_window``) reads the model, asks for what
+        the file does not state (a type map, a box) and runs the analyses; a
+        fault in opening one window is listed with its file, and the others
+        still open. ``dropped_with``: the (path, MD format) pairs opened
+        together; a LAMMPS data file among them is offered to the windows
+        of the other files of its folder (:func:`md_companions`), never
+        filled in.
+        """
+        groups = list(groups)
+        if not groups:
+            return []
+        try:
+            from . import md_workspace
+        except ImportError as error:
+            QMessageBox.warning(
+                self, "The Model window is not available",
+                "These files are MD models or trajectories, which open in the "
+                "Model window, and this build of FACET does not hold it "
+                f"({error}). They can be analysed from the command line: "
+                "py -3.11 -m facet.md analyse <file>.\n\n"
+                + "\n".join(_group_name(g) for g in groups))
+            return []
+        opened, refused = [], []
+        for paths in groups:
+            try:
+                window = md_workspace.open_model_window(
+                    paths, self, read_options=read_options)
+            except Exception as error:        # listed below, never silent
+                refused.append(f"{_group_name(paths)}: "
+                               f"{type(error).__name__}: {error}")
+                continue
+            if window is not None:
+                opened.append(window)
+                offered = md_companions(paths, dropped_with or ())
+                setter = getattr(window, "set_companions", None)
+                if offered and setter is not None:
+                    setter(offered)
+        # open_model_window may append to _model_windows itself; each once
+        kept: list = []
+        for w in self._model_windows + opened:
+            if _open(w) and not any(w is k for k in kept):
+                kept.append(w)
+        self._model_windows = kept
+        if opened:
+            names = ", ".join(_group_name(g) for g in groups[:3]) + (
+                f" and {len(groups) - 3} more" if len(groups) > 3 else "")
+            self.statusBar().showMessage(
+                f"Opened in a Model window: {names}", 12000)
+        if refused:
+            QMessageBox.warning(self, "A Model window did not open",
+                                "\n".join(refused))
+        return opened
+
+    def open_md_paths(self, paths, *, series: bool = False) -> list:
+        """Open files chosen as MD models (File > Open MD model…).
+
+        A file an MD reader recognises (:func:`md_format_of`) opens in a
+        Model window even where the crystal reader would also read it (a
+        one-frame extended XYZ, a POSCAR); any other file goes to
+        :meth:`load_many`, which loads a crystal here and lists what neither
+        reader takes. With ``series`` the MD files are one model, read in
+        the natural order of their names (dump.20 before dump.100);
+        otherwise :func:`model_groups` decides.
+        """
+        from ..core import md_readers
+
+        models, crystals = [], []
+        for path in _unique(paths):
+            found = md_format_of(path)
+            if found is None:
+                crystals.append(path)
+            else:
+                models.append((path, found))
+        if crystals:
+            self.load_many(crystals)
+        if not models:
+            return []
+        if series and len(models) > 1:
+            groups = [sorted((p for p, _ in models),
+                             key=md_readers.natural_sort_key)]
+        else:
+            groups = model_groups(models)
+        return self.open_md_models(groups)
+
+    def _choose_md_files(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Open MD models", "", md_file_filter())
+        if paths:
+            self.open_md_paths(paths)
+
+    def _choose_md_series(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Open the files of one MD model", "", md_file_filter())
+        if paths:
+            self.open_md_paths(paths, series=True)
+
+    def _add_md_menu_items(self) -> None:
+        """File > Open MD model… and Open MD series…, after Open folder…, and
+        Help > MD models.
+
+        Added after the menus are built, by position, so that the menu code
+        above stays as it is; an item that is not found puts the new ones at
+        the end of their menu instead.
+        """
+        open_md = QAction("Open MD &model…", self)
+        open_md.setToolTip(
+            "An MD model or trajectory, each file in a Model window of its "
+            "own, which reads every frame and runs the MD analyses. "
+            "Dropping the file on this window does the same.")
+        open_md.triggered.connect(self._choose_md_files)
+        self.open_md_action = open_md
+        open_series = QAction("Open MD se&ries as one model…", self)
+        open_series.setToolTip(
+            "Several files of one run (dump.0.lammpstrj, dump.1000.lammpstrj, "
+            "...) read as one trajectory, in the natural order of their names.")
+        open_series.triggered.connect(self._choose_md_series)
+        self.open_md_series_action = open_series
+        _insert_after(self._menu_bar_action("File"), "Open folder…",
+                      (open_md, open_series))
+
+        help_md = QAction("MD models and the Model &window", self)
+        help_md.triggered.connect(self._show_md_manual)
+        self.md_help_action = help_md
+        _insert_after(self._menu_bar_action("Help"), "Keyboard and mouse",
+                      (help_md,))
+
+    def _show_md_manual(self) -> None:
+        from .help import MD_SECTION
+
+        self._show_manual(MD_SECTION)
+
+    def _menu_bar_action(self, title: str):
+        """The menu bar's action whose title (without its &) is ``title``.
+
+        The action, not its menu: the Python wrapper QAction.menu() returns
+        is invalidated when the action's own wrapper is collected (PySide6
+        6.9.1, measured 2026-10-07; the C++ menu lives on), so the menu is
+        taken from the action where it is used, with the action held."""
+        for action in self.menuBar().actions():
+            if action.text().replace("&", "") == title:
+                return action
+        return None
 
     def _after_load(self, reframe: bool = False) -> None:
         entry = self.project.current
@@ -1177,6 +1383,13 @@ class PreviewWindow(QMainWindow):
         """Colour mode, palette, sizes: the vertex arrays must be rebuilt."""
         self._apply_theme_everywhere(theme)
         self._rebuild()
+        # The Model windows opened from here take it too. Only here, not on
+        # every cosmetic step of a slider: a Model window adopting a theme
+        # loads its frame again (ModelWindow.apply_theme).
+        for window in self.model_windows:
+            adopt = getattr(window, "apply_theme", None)
+            if adopt is not None:
+                adopt(theme)
 
     def _sync_theme_menu(self, theme) -> None:
         """Tick the View > Theme entry matching the theme now in use.
@@ -2123,6 +2336,323 @@ class PreviewWindow(QMainWindow):
         dialog = ManualDialog(self, section=section, theme=self.theme)
         self._manual_dialog = dialog
         dialog.show()
+
+
+# ---------------------------------------------------------------------------
+# MD models: which files go to a Model window
+# ---------------------------------------------------------------------------
+#
+# What a file IS is decided by its content, by readers.read (MDModelFile) and
+# md_readers' sniffs. The names below serve the file dialog's list and the
+# drag cursor only. The built-in formats of md_readers.MD_FORMATS carry no
+# extensions of their own, so they are listed here, keyed by format name; a
+# format the registry adds brings its extensions and stems (FormatSpec), and
+# the text ones that list none take theirs from _MODULE_PATTERNS.
+
+_BUILTIN_PATTERNS = {
+    "lammps-dump": ("LAMMPS dump", ("*.lammpstrj", "*.lammpsdump", "*.dump",
+                                    "*.lammpstrj.gz", "*.dump.gz")),
+    "lammps-data": ("LAMMPS data", ("*.data", "*.lmp", "*.data.gz")),
+    "extxyz": ("Extended XYZ", ("*.extxyz", "*.xyz", "*.extxyz.gz",
+                                "*.xyz.gz")),
+    "vasp-xdatcar": ("VASP XDATCAR", ("XDATCAR*",)),
+    "dlpoly-config": ("DL_POLY CONFIG", ("CONFIG*", "REVCON*", "CFGMIN*")),
+    "dlpoly-history": ("DL_POLY HISTORY", ("HISTORY*",)),
+}
+_MODULE_LABELS = {
+    "dcd": "DCD", "lammps-dump-binary": "LAMMPS binary dump",
+    "lammps-dump-yaml": "LAMMPS YAML dump", "atomeye-cfg": "AtomEye CFG",
+    "gromacs-xtc": "GROMACS XTC", "ase-traj": "ASE trajectory",
+    "gsd": "HOOMD-blue GSD", "amber-netcdf": "AMBER NetCDF",
+    "castep-md": "CASTEP .md", "gromacs-gro": "GROMACS .gro",
+    "xsf": "XCrySDen XSF", "pdb-models": "PDB trajectory", "imd": "IMD",
+    "vasp-poscar": "POSCAR series",
+}
+_MODULE_PATTERNS = {
+    "castep-md": ("*.md", "*.geom"), "gromacs-gro": ("*.gro",),
+    "xsf": ("*.xsf", "*.axsf"), "pdb-models": ("*.pdb", "*.ent"),
+    "imd": ("*.imd",), "vasp-poscar": ("POSCAR*", "CONTCAR*", "*.vasp"),
+}
+# A file under one of these names opens in a Model window even when the
+# crystal reader refuses it outright (an empty or cut dump): the Model window
+# then states what the MD reader finds, in the MD reader's words.
+_MD_ONLY_SUFFIXES = (".lammpstrj", ".lammpsdump", ".dump")
+
+
+@lru_cache(maxsize=1)
+def md_filter_entries() -> tuple[tuple[str, tuple[str, ...], str], ...]:
+    """(label, name patterns, format name) of every MD format FACET reads:
+    the built-in ones, then each format module's (``md_readers.
+    format_specs``), in md_readers' order."""
+    from ..core import md_readers
+
+    out = [(*_BUILTIN_PATTERNS[name], name) for name in md_readers.MD_FORMATS
+           if name in _BUILTIN_PATTERNS]
+    for spec in md_readers.format_specs():
+        patterns = tuple(dict.fromkeys(
+            [f"*{e}" for e in spec.extensions]
+            + [f"{s}*" for s in spec.stems]
+            + list(_MODULE_PATTERNS.get(spec.name, ()))))
+        if patterns:
+            label = _MODULE_LABELS.get(spec.name) \
+                or spec.description.split(" (")[0]
+            out.append((label, patterns, spec.name))
+    return tuple(out)
+
+
+def md_file_filter() -> str:
+    """The file dialog filter of File > Open MD model…: every MD format
+    FACET reads, together and one by one, then All files."""
+    entries = md_filter_entries()
+    every = dict.fromkeys(p for _label, patterns, _f in entries
+                          for p in patterns)
+    parts = [f"MD models and trajectories ({' '.join(every)})"]
+    parts += [f"{label} ({' '.join(patterns)})"
+              for label, patterns, _f in entries]
+    parts.append("All files (*)")
+    return ";;".join(parts)
+
+
+def _md_name_format(path) -> str | None:
+    """The MD format whose name patterns the file's name matches, or None.
+    Extensions compare without regard to case, stems (XDATCAR, CONFIG)
+    with it, as VASP and DL_POLY name their files."""
+    name = Path(path).name
+    lower = name.lower()
+    # the built-in names first: they need no import of the format modules,
+    # which costs about 0.6 s the first time (measured 2026-10-07), so the
+    # first drag of a dump does not wait for it
+    def entries():
+        for fmt, (label, patterns) in _BUILTIN_PATTERNS.items():
+            yield label, patterns, fmt
+        yield from md_filter_entries()
+
+    for _label, patterns, file_format in entries():
+        for pattern in patterns:
+            if pattern.startswith("*."):
+                if fnmatch.fnmatchcase(lower, pattern):
+                    return file_format
+            elif fnmatch.fnmatchcase(name, pattern):
+                return file_format
+    return None
+
+
+def md_droppable(path) -> bool:
+    """Whether a dragged file may be an MD model: its name (an MD format's
+    extension or stem) or its first bytes (``md_readers.sniff_md``,
+    ``binary_md_format``) say so. Where it goes once dropped is decided by
+    :func:`read_or_route`."""
+    if _md_name_format(path) is not None:
+        return True
+    p = Path(path)
+    try:
+        if not p.is_file():
+            return False
+    except OSError:
+        return False
+    from ..core import md_readers
+
+    return (md_readers.sniff_md(p) is not None
+            or md_readers.binary_md_format(p) is not None)
+
+
+def _md_despite_refusal(path) -> str | None:
+    """The MD format of a file ``readers.read`` refused with plain
+    UnsupportedFormat that the Model window opens all the same, or None:
+
+    * an XYZ trajectory, or one frame of LAMMPS's 'dump xyz' or CP2K's XMOL
+      trajectory, that states no box (no ``Lattice=``): the MD reader reads
+      it given the box, which the Model window asks for (lines ending in CR
+      alone are left to the crystal reader's refusal, which says to convert
+      them);
+    * a file under a format module's extension or an MD-only extension
+      (:data:`_MD_ONLY_SUFFIXES`) that the crystal reader refused (an empty
+      or cut file), whose fault the MD reader then states.
+    """
+    from ..core import md_readers
+
+    p = Path(path)
+    try:
+        if not p.is_file():
+            return None
+    except OSError:
+        return None
+    if md_readers.sniff_md(p) == "extxyz" \
+            and not md_readers.xyz_has_lattice(p) \
+            and not md_readers.cr_only_line_endings(p) \
+            and (md_readers.is_multiframe_xyz(p)
+                 or md_readers.plain_xyz_writer(p) is not None):
+        return "extxyz"
+    name = p.name.lower()
+    suffix = Path(name[:-3] if name.endswith(".gz") else name).suffix
+    if not suffix:
+        return None
+    spec = next((s for s in md_readers.format_specs()
+                 if suffix in s.extensions), None)
+    if spec is not None:
+        return spec.name
+    return "lammps-dump" if suffix in _MD_ONLY_SUFFIXES else None
+
+
+def read_or_route(path) -> tuple[str, object]:
+    """Where a file opens: ('structure', Structure) for the crystal window,
+    ('md', format name) for a Model window, ('failed', why) otherwise.
+
+    ``readers.read`` decides first, so a file is read once: an MDModelFile
+    goes to a Model window with the format it names, and a refusal that
+    :func:`_md_despite_refusal` recognises does too. Every other exception
+    is a failure with its text, as ``Project.add_files`` records it.
+    """
+    try:
+        return "structure", readers.read(path)
+    except readers.MDModelFile as error:
+        return "md", error.file_format or "md"
+    except readers.UnsupportedFormat as error:
+        found = _md_despite_refusal(path)
+        return ("md", found) if found is not None else ("failed", str(error))
+    except Exception as error:
+        return "failed", str(error)
+
+
+def md_format_of(path) -> str | None:
+    """The MD format a file chosen as an MD model is read as, or None.
+
+    By its first bytes (a binary format, then ``md_readers.sniff_md``), then
+    a format module's extension or stem on a file that is not empty
+    (``md_readers.named_md_format``), then an MD-only extension
+    (:data:`_MD_ONLY_SUFFIXES`). Unlike :func:`read_or_route` this does not
+    ask the crystal reader: a one-frame extended XYZ or a POSCAR chosen as a
+    model opens as a one-frame model.
+    """
+    from ..core import md_readers
+
+    p = Path(path)
+    try:
+        if not p.is_file():
+            return None
+        size = p.stat().st_size
+    except OSError:
+        return None
+    spec = md_readers.binary_md_format(p)
+    if spec is not None:
+        return spec.name
+    found = md_readers.sniff_md(p)
+    if found is not None:
+        return found
+    spec = md_readers.named_md_format(p)
+    if spec is not None and size > 0:
+        return spec.name
+    name = p.name.lower()
+    suffix = Path(name[:-3] if name.endswith(".gz") else name).suffix
+    return "lammps-dump" if suffix in _MD_ONLY_SUFFIXES else None
+
+
+def _name_shape(name: str) -> str:
+    """A file name with its digit runs (and a .gz suffix) taken out, so the
+    files of one series compare equal: dump.150.cfg -> dump.#.cfg."""
+    if name.lower().endswith(".gz"):
+        name = name[:-3]
+    return re.sub(r"\d+", "#", name)
+
+
+def _unique(paths) -> list[str]:
+    """The paths in their order, each once (compared as the OS compares)."""
+    seen, out = set(), []
+    for path in paths:
+        key = os.path.normcase(os.path.abspath(str(path)))
+        if key not in seen:
+            seen.add(key)
+            out.append(str(path))
+    return out
+
+
+def model_groups(models) -> list:
+    """One entry per model, from (path, MD format) pairs: a path, or a list
+    of the paths of one model in natural order of their names.
+
+    Files are one model only when their format writes one snapshot per file
+    (a format module with ``read_series``: LAMMPS 'dump cfg', a POSCAR
+    series) and they share a directory and a name up to its digits
+    (dump.2000.cfg, dump.2010.cfg, ...). Every other file is a model of its
+    own: two dumps named glass_300K and glass_600K are two runs, and reading
+    them as one trajectory would average them. File > Open MD series reads
+    files as one model when that is what is meant.
+    """
+    from ..core import md_readers
+
+    per_snapshot = {s.name for s in md_readers.format_specs()
+                    if s.read_series is not None}
+    groups: dict[tuple, list[str]] = {}
+    for path, file_format in models:
+        p = Path(path)
+        if file_format in per_snapshot:
+            key = (os.path.normcase(str(p.parent.resolve())),
+                   _name_shape(p.name), file_format)
+        else:
+            key = (os.path.normcase(os.path.abspath(str(p))),)
+        members = groups.setdefault(key, [])
+        if str(path) not in members:
+            members.append(str(path))
+    return [members[0] if len(members) == 1
+            else sorted(members, key=md_readers.natural_sort_key)
+            for members in groups.values()]
+
+
+def md_companions(group, models) -> list[str]:
+    """The LAMMPS data files among ``models`` ((path, MD format) pairs
+    opened together) that sit in the folder of ``group``'s first file and
+    are not ``group``'s own: a dump's window offers each as the file whose
+    Masses name its types, or as its topology or box."""
+    paths = [group] if not isinstance(group, (list, tuple)) else list(group)
+    if not paths:
+        return []
+    folder = os.path.normcase(str(Path(paths[0]).resolve().parent))
+    own = {os.path.normcase(os.path.abspath(str(p))) for p in paths}
+    out = []
+    for path, file_format in models:
+        key = os.path.normcase(os.path.abspath(str(path)))
+        if file_format != "lammps-data" or key in own:
+            continue
+        if os.path.normcase(str(Path(path).resolve().parent)) == folder:
+            out.append(str(path))
+    return out
+
+
+def _group_name(group) -> str:
+    if isinstance(group, (list, tuple)):
+        if len(group) == 1:
+            return Path(group[0]).name
+        return (f"{Path(group[0]).name} .. {Path(group[-1]).name} "
+                f"({len(group)} files)")
+    return Path(group).name
+
+
+def _open(window) -> bool:
+    """Whether a Model window still exists and is shown."""
+    try:
+        import shiboken6
+
+        return bool(shiboken6.isValid(window) and window.isVisible())
+    except Exception:              # a window deleted under us is not open
+        return False
+
+
+def _insert_after(bar_action, text: str, actions) -> None:
+    """Put ``actions`` after the item whose text (without its mnemonic &) is
+    ``text`` in the menu of ``bar_action`` (a menu bar action, held while its
+    menu is used), in order; at the end when there is none."""
+    menu = bar_action.menu() if bar_action is not None else None
+    if menu is None:
+        return
+    items = menu.actions()
+    at = next((i for i, a in enumerate(items)
+               if a.text().replace("&", "") == text), None)
+    before = items[at + 1] if at is not None and at + 1 < len(items) else None
+    for action in actions:
+        if before is None:
+            menu.addAction(action)
+        else:
+            menu.insertAction(before, action)
 
 
 def main(argv: list[str] | None = None) -> int:

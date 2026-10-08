@@ -590,6 +590,8 @@ Theme tab. The separation is an angle rather than a distance, so the depth
 survives zooming.</p>
 """),
 
+        (MD_SECTION, "MD models", _md_section_html(note)),
+
         ("shortcuts", "Keyboard and mouse", """
 <h1>Keyboard and mouse</h1>
 <table cellpadding="4" width="100%">
@@ -617,7 +619,9 @@ survives zooming.</p>
 </table>
 <p>A drag that moves more than a few pixels is a rotation, not a click, so
 turning the structure and releasing over an atom does not select it.</p>
-<p>Files can be dropped onto the window, one or many.</p>
+<p>Files can be dropped onto the window, one or many. An MD model or
+trajectory among them opens in a Model window of its own (see <i>MD
+models</i>).</p>
 """),
 
         ("limits", "What FACET does not do", f"""
@@ -646,6 +650,12 @@ the estimator differs from a fitted value by 0.05 Å on average and by as much a
 0.21 Å, which is a factor of 0.57 to 1.48 on every bond valence.</li>
 <li><b>It does not correct measured data.</b> No absorption, no background
 subtraction, no <i>Q</i>-space corrections.</li>
+<li><b>It does not run molecular dynamics.</b> It reads the models and
+trajectories a simulation wrote and measures them; it integrates no equation
+of motion, fits no potential and edits no model. Nor does it simulate a
+quadrupolar NMR spectrum: its NMR analysis gives isotropic shifts from a
+published structure-shift correlation whose coefficients and reference are
+supplied by the user, none shipping with FACET.</li>
 </ul>
 <h2>Where the numbers were checked</h2>
 <p>The repository carries <code>VERIFICATION.md</code>, which records how each
@@ -701,6 +711,304 @@ executable.</p>
 def manual_html(theme=None) -> str:
     """The whole manual as one document, for printing or searching."""
     return "".join(body for _key, _title, body in _sections(theme))
+
+
+# ---------------------------------------------------------------------------
+# the MD models section
+# ---------------------------------------------------------------------------
+# The key the Model window's Help menu and the crystal window's Help > MD
+# models open the manual at: ManualDialog(parent, section=MD_SECTION).
+MD_SECTION = "md"
+
+
+def _esc(text: str) -> str:
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
+def _md_formats_rows() -> str:
+    """One table row per MD format FACET reads, from the reader's own
+    registry (``preview.md_filter_entries``), so a format added there is
+    listed here without an edit."""
+    try:
+        from .preview import md_filter_entries
+
+        entries = md_filter_entries()
+    except Exception as error:        # a build without the MD reader
+        return (f"<tr><td colspan=2>The MD reader could not be loaded "
+                f"({_esc(error)}).</td></tr>")
+    return "".join(
+        f"<tr><td>{_esc(label)}</td><td><code>{_esc(' '.join(patterns))}"
+        "</code></td></tr>" for label, patterns, _name in entries)
+
+
+def _md_analyses_rows() -> str:
+    """One row per analysis of ``md_analysis``: what it measures (its own
+    summary) and the inputs it needs that have no default, as
+    ``missing_inputs`` names them for a request that gives none, so the
+    table states what the engine refuses rather than a copy of it."""
+    try:
+        from ..core import md_analysis as ma
+    except Exception as error:        # a build without the MD engine
+        return (f"<tr><td colspan=3>The MD analyses could not be loaded "
+                f"({_esc(error)}).</td></tr>")
+    try:
+        # the setup's own labels and wording, so the manual names each input
+        # as the Model window labels it
+        from .md_dialogs import OPTIONAL_OUTPUTS, field_label, user_text
+    except Exception:                 # a build without the Model window
+        OPTIONAL_OUTPUTS = {}
+
+        def field_label(name):
+            return name
+
+        def user_text(text):
+            return text
+
+    timed = set(getattr(ma, "_TIMED", ma.TRAJECTORY_ANALYSES))
+    rows = []
+    for name in ma.ANALYSES:
+        try:
+            request = ma.AnalysisRequest(analyses=(name,))
+            needs = [m for m in ma.missing_inputs(request)
+                     if name in m.analysis.split("/")]
+        except Exception as error:    # stated, not hidden
+            needs = []
+            inputs = f"(not listed: {_esc(error)})"
+        else:
+            inputs = "<br>".join(
+                (f"{_esc(field_label(m.name))} (<code>{_esc(m.name)}</code>)"
+                 if m.name not in ("formers", "analyses")
+                 else f"<code>{_esc(m.name)}</code>")
+                + f": {_esc(user_text(m.why))}" for m in needs)
+        if name in timed:
+            inputs += ("<br>" if inputs else "") + (
+                "a time axis (the file's frame times, or the MD timestep or "
+                "frame interval given) and at least two frames")
+        if name == "kinetic-temperature":
+            inputs += "<br>velocities in the file"
+        if name == "vacf":
+            inputs += ("<br>velocities in the file, unless they are taken "
+                       "from the positions (<code>dynamics.velocities</code> "
+                       "'finite difference')")
+        optional = [f"{_esc(what)}, given "
+                    + " and ".join(f"{_esc(field_label(f))} "
+                                   f"(<code>{_esc(f)}</code>)" for f in fields)
+                    for what, fields in OPTIONAL_OUTPUTS.get(name, ())]
+        if optional:
+            inputs += ("<br>" if inputs else "") + "<i>Optional:</i> " \
+                + "; ".join(optional)
+        rows.append(f"<tr><td><b>{_esc(name)}</b></td>"
+                    f"<td>{_esc(ma.ANALYSIS_SUMMARIES[name])}</td>"
+                    f"<td>{inputs or 'none beyond the model'}</td></tr>")
+    return "".join(rows)
+
+
+def _md_section_html(note: str) -> str:
+    """The manual's MD models section: what opens, how, what a run needs,
+    every analysis, the threshold, export, the command line, and what is
+    not done. Numbers come from the code (the thresholds, the mass
+    tolerance, the ddof of the spread)."""
+    try:
+        from ..core import md_readers, md_stats
+
+        mass_tol = f"{md_readers.MASS_TOL_AMU:g}"
+        ddof = f"{md_stats.STD_DDOF:d}"
+    except Exception:                 # a build without the MD engine
+        mass_tol, ddof = "the reader's tolerance in", "1"
+    try:
+        from ..core import md_analysis as ma
+
+        former_readers = ", ".join(ma.FORMER_READERS)
+        no_formers = ma.NO_FORMERS
+    except Exception:
+        former_readers, no_formers = "the network analyses", "none"
+    try:
+        from .md_workspace import ATOMS_ONLY_ABOVE
+
+        atoms_only = f"{ATOMS_ONLY_ABOVE:d}"
+    except Exception:                 # the Model window not in this build
+        atoms_only = "a few thousand"
+    return f"""
+<h1>MD models</h1>
+<p>FACET reads the models and trajectories that molecular-dynamics programs
+write and measures them: coordination by bond valence and by distance, the
+network (Q<sup><i>n</i></sup>, speciation, rings, connectivity), scattering,
+local order, spectroscopy and dynamics. Each descriptor is measured on every
+frame chosen and reported as the mean over those frames with its spread,
+alongside the provenance that produced it. FACET runs no simulation.</p>
+
+<h2>What opens as an MD model</h2>
+<p>A file is recognised by its content, whatever its name: a LAMMPS dump saved
+as <code>.txt</code> opens as a dump, and a CIF opens as a crystal whatever it
+is called. The names below are the ones the file dialog lists.</p>
+<table cellpadding="3" width="100%">
+<tr><td width="34%"><b>Format</b></td><td><b>File names</b></td></tr>
+{_md_formats_rows()}
+</table>
+<p {note}>A plain XYZ trajectory with no <code>Lattice=</code> on its comment
+line (LAMMPS's <code>dump xyz</code>, CP2K's <code>pos.xyz</code>) states no
+periodic box. It opens all the same, and the box is then taken from another
+file of the same run (its LAMMPS data file, CP2K's <code>.cell</code> file)
+or typed in; no box is invented.</p>
+
+<h2>Opening one</h2>
+<ul>
+<li><b>Drop it</b> on the crystal window. It opens in a <b>Model window</b> of
+its own, never in the crystal window's 3D view or its tabs. CIFs dropped with
+it load in the crystal window as before.</li>
+<li><i>File &rsaquo; Open MD model&hellip;</i> lists every MD format above.
+<i>File &rsaquo; Open&hellip;</i> takes MD files too, under <i>All
+files</i>.</li>
+<li><i>File &rsaquo; Open MD series as one model&hellip;</i> reads several
+files of one run (<code>dump.0.lammpstrj</code>,
+<code>dump.1000.lammpstrj</code>, &hellip;) as one trajectory, in the natural
+order of their names: digits compare as numbers, so dump.20 comes before
+dump.100.</li>
+<li>Files dropped together are one model only when their format writes one
+snapshot per file (LAMMPS <code>dump cfg</code>) and they share a folder and
+a name up to its digits. Any other files open one window each, so two runs
+named <code>glass_300K</code> and <code>glass_600K</code> are never averaged
+into one.</li>
+<li>From the command line, <code>py -3.11 -m facet glass.lammpstrj</code>
+opens FACET with that model in a Model window.</li>
+</ul>
+
+<h2>Type maps: which element each atom is</h2>
+<p>LAMMPS numbers its atom types, and a number is not an element. An element
+is taken only from what a file states: an element column, type labels, or a
+mass that matches one element's standard atomic weight to within {mass_tol}
+amu (a LAMMPS data file's <code>Masses</code> section names the types of a
+dump of the same run). A whole-number mass names no element, since force
+fields often round masses to integers. Nothing is guessed: a type that no
+source names stays unnamed until an element is given for it. The Model
+window then shows the reader's message in full and, for each type, the
+reader's evidence (its label, element column or mass, and its atoms in the
+first frame), and asks for the element; the masses can also come from a
+LAMMPS data file of the same run. A topology (DCD, XTC, AMBER NetCDF) and a
+box (a plain XYZ) are asked for the same way, with no element filled in for
+the user.</p>
+
+<h2>Oxidation states</h2>
+<p>They are inputs of the model, never resolved from the geometry: each
+element takes its common state unless another is given, and an element with
+no common state needs one. They decide which atoms are cations and which
+anions in the bond-valence split, and which parameters apply.</p>
+
+<h2>Network formers</h2>
+<p>FACET assumes no network former. The picker lists the cations present in
+the model with none ticked, and the analyses that read formers
+({_esc(former_readers)}) stay disabled, with the reason shown beside them,
+until formers are ticked. Stating that the model has none
+(<i>No former to name</i>, <code>{_esc(no_formers)}</code>) runs the glass
+analysis only, without the former-dependent descriptors (speciation,
+Q<sup><i>n</i></sup>, connectivity); the network analyses (rings,
+coordination sequences, polyhedral sharing, components) still need named
+formers, or their graph elements, centres and T elements given explicitly,
+and say so beside their boxes. No timestep, temperature, charge, NMR
+coefficient or radius is assumed either.</p>
+
+<h2>Frames</h2>
+<p>Frames are chosen as first, last and stride. Each descriptor is measured
+frame by frame and reported as the mean over the frames used with the
+sample standard deviation across them (ddof&nbsp;=&nbsp;{ddof}): the spread
+between frames, not a standard error, because the frames of one trajectory
+are correlated. A frame that cannot be read is left out and named with its
+reason, and the provenance of every result lists the frames it used.</p>
+
+<h2>The analyses</h2>
+<p>The per-frame analyses share one neighbour search per pass over the
+frames; a second pass runs only when a cutoff comes from the frame-averaged
+<i>g</i>(<i>r</i>), and the provenance states the searches each frame
+received. The dynamics read the unwrapped positions of the chosen frames
+once more. A run that lacks an input is refused before any frame is read,
+with every missing input named at once; the inputs in the right-hand column
+have no default, and the Model window labels each one as written there,
+with its request name. Method choices have defaults, each stated in the
+provenance: most set a resolution (bin widths, grid steps, the first-minimum
+rule), and some change the numbers themselves. Removing the centre-of-mass
+drift, off by default, changes every MSD and every diffusion coefficient
+fitted from it; the Model window shows that choice beside the dynamics
+inputs, and an MSD figure states the centre of mass's own MSD when the drift
+is left in.</p>
+<table cellpadding="3" width="100%">
+<tr><td width="18%"><b>Analysis</b></td><td width="37%"><b>What it
+measures</b></td><td><b>Inputs it needs</b></td></tr>
+{_md_analyses_rows()}
+</table>
+<p {note}>Checked against the model when the run starts: an element an option
+names that the model does not hold, formers none of which are present, a
+scattering range beyond half the box, a frame selection that selects
+nothing.</p>
+
+<h2>The bond threshold</h2>
+<p>The coordination numbers by bond valence count the contacts above
+<i>v</i><sub>bond</sub> ({bv.V_BOND_DEFAULT:g} v.u. unless another is set),
+and contacts are listed down to <i>v</i><sub>list</sub>
+({bv.V_LIST_DEFAULT:g} v.u.), as in the crystal window. The threshold panel
+shows one frame, never an average: a slider on a logarithmic scale from
+<i>v</i><sub>list</sub> to the frame's largest valence, and at the threshold
+it sets, the coordination number of each element with the distributions of
+its bond-valence sum and &phi;. Each move re-reads the frame's valence table
+with no new neighbour search. The staircase beside it, the mean coordination
+number of each element against <i>v</i><sub>bond</sub>, sets the threshold
+where it is clicked. The frame-averaged tables of a run keep the
+<i>v</i><sub>bond</sub> the run used, which their provenance states, and the
+panel names both thresholds whenever they differ; carrying another threshold
+into every table is a new run. The distance-cut numbers, from the first
+minima of the partial <i>g</i>(<i>r</i>), do not depend on
+<i>v</i><sub>bond</sub>.</p>
+
+<h2>A frame in 3D</h2>
+<p>The <b>3D view</b> tab draws the frame chosen by its number from that
+frame's own valence table, so the drawn bonds are the contacts the
+coordination numbers count, each as thick as its valence, with the ones
+below <i>v</i><sub>bond</sub> thin and faded. On small frames the bond set
+is identical to the one the crystal window draws for the same atoms; it is
+built without that window's neighbour search, which takes seconds on a few
+thousand atoms. Without OpenGL (the QPainter renderer), a frame of more than
+{atoms_only} atoms is drawn as atoms only, with a note saying so; the OpenGL
+renderers draw its bonds.</p>
+
+<h2>Export</h2>
+<p>Results go out as CSV files, one per descriptor with an index, or as one
+XLSX workbook (which needs the openpyxl package). Every file starts with the
+provenance of its numbers: the model file, the frames used and those left
+out, the type map and its source, the oxidation states, the bond-valence
+parameter set, <i>v</i><sub>bond</sub> and <i>v</i><sub>list</sub>, the
+cutoffs and where they came from, the method parameters and the FACET
+version. Numbers are written in full. Figures export as SVG or PDF, which
+are vector, and as PNG at 600 dpi.</p>
+
+<h2>From the command line</h2>
+<p>The same engine runs without a window, on a workstation or a cluster
+node:</p>
+<pre>py -3.11 -m facet.md describe dump.lammpstrj --type-map 1=Si,2=O,3=Na
+py -3.11 -m facet.md analyses
+py -3.11 -m facet.md template --out request.toml
+py -3.11 -m facet.md analyse dump.lammpstrj --type-map 1=Si,2=O,3=Na \\
+    --formers Si --frames 0:100:5 --out results.xlsx</pre>
+<p><code>describe</code> says what the reader finds, <code>analyses</code>
+lists the analyses and their inputs, <code>template</code> writes a request
+file holding every option, and <code>analyse</code> runs them and writes the
+results with their provenance. Without <code>--only</code>, every analysis
+whose inputs are given runs and the others are listed with what they
+lack.</p>
+
+<h2>What is not done</h2>
+<ul>
+<li>No molecular dynamics is run, and no model is edited or written back.</li>
+<li>No quadrupolar NMR spectrum is simulated. The NMR analysis gives
+isotropic shifts and their spectrum from a published structure-shift
+correlation, whose coefficients and reference are supplied by the user; none
+ships with FACET.</li>
+<li>No element, timestep, temperature, charge, network former or NMR
+coefficient is assumed.</li>
+<li>No result is labelled as a match or a mismatch with experiment: a
+comparison with measured data reports the two side by side with their
+difference.</li>
+</ul>
+"""
 
 
 # ---------------------------------------------------------------------------
