@@ -9,11 +9,12 @@ out of scope — so that what is missing is visible rather than discovered.
 Legend: **done** · **partial** — usable but incomplete · **planned** — accepted,
 not started · **out of scope** — with a reason.
 
-Last updated after adding the pair distribution function, the EXAFS shell
-and resolution report, the bond-valence vector overlay, the white default theme
-and the in-application manual. Every feature selected for implementation is
-done; what remains planned is listed as such. Section 14, the analysis of glass
-models from molecular dynamics, is accepted and not yet started.
+Last updated after the analysis of glass models from molecular dynamics
+(§14): readers for the files MD programs write, a per-atom engine for whole
+frames, the descriptors glass work reports, network and local order,
+scattering, NMR, EXAFS and dynamics, a Model window and a command line. Every
+feature selected for implementation is done or partial, and each partial row
+says what is missing; what remains planned is listed as such.
 
 ---
 
@@ -227,43 +228,123 @@ that already exist. Revisit only if it is actually wanted.
 
 FACET reads and measures the output of a molecular-dynamics run. It does not
 build, run or edit one. This section is not a parity comparison, so it has no
-CrystalMaker or VESTA columns. The order of the work is Phase MD in
-`ROADMAP.md`. Nothing here has been checked against a real model yet.
+CrystalMaker or VESTA columns. The work is Phase MD in `ROADMAP.md`, and its
+checks are the *MD models* section of `VERIFICATION.md`: 115 files written by
+LAMMPS, ASE, OVITO and pymatgen, five models made with LAMMPS for the purpose
+(four quenched glasses and a melt), and outside codes run on the same frames.
+No model from the group's own work has been analysed yet.
+
+### Reading a model
 
 | Feature | FACET | Note |
 |---|---|---|
-| LAMMPS `data` file | **planned** | atomic and charge atom styles; `Masses` and the box, including the `xy xz yz` tilt line |
-| LAMMPS `dump`, one frame or a trajectory | **planned** | scaled, unscaled and unwrapped coordinates; column order taken from the `ITEM: ATOMS` header; triclinic boxes as the LAMMPS manual defines them |
-| Multi-frame extended XYZ | **planned** | `Lattice=` and `Properties=`; single-frame XYZ reads as it does now |
-| Atom type → element, with its source recorded | **planned** | a map from the user, then an `element` column, then `Masses`; an ambiguous mass match is refused |
-| Skipped frames counted and reported | **planned** | truncated, a different atom count, unreadable: each one is counted, with its reason |
-| Per-atom bond-valence analysis of a whole frame | **planned** | CN at the threshold, bond-valence sum, φ and plateau width for every atom, from one neighbour search per frame; the threshold moves without a new search. Oxidation states are model inputs, not resolved |
-| Distance-cut CN beside the bond-valence CN | **planned** | cutoffs measured from the model, at the first minimum of the partial g(r) |
-| Partial g(r) and N(r), coordination by integration | **planned** | first minimum found automatically, with the method stated; the user can override it |
-| CN distribution per element | **planned** | cut by bond valence and by distance, shown side by side |
-| Bridging, non-bridging, free and tricluster oxygen | **planned** | counted against a set of network formers that the user chooses |
-| Qⁿ per former, and Qⁿ(mX) | **planned** | how many bridges each former has, and to which element they go, e.g. Si–O–Al |
-| N₄ for boron, Al CN 4/5/6 | **planned** | fractions per frame, then averaged |
-| Halide environments | **planned** | which cations each F or Cl is bonded to, as a frequency table of environments |
-| Lone-pair cations | **planned** | distributions of φ, CN and plateau width over every Bi atom: the link to the crystal work |
-| Bond-angle distributions | **planned** | T–O–T and O–T–O per former pair, with the same bond definition as the CN |
-| Frame averaging | **planned** | every descriptor as a mean and a standard deviation across frames, with the number of frames used |
-| Composition and charge of a model | **planned** | oxide mol % when the oxide basis is given; a model that is not neutral with the declared oxidation states is reported |
-| X-ray and neutron G(r), S(q) and F(q) from a model | **planned** | the existing PDF machinery, averaged over frames, overlaid on a measured curve with an R-factor defined in the manual; an element with no scattering length is refused, not set to zero |
-| Model fractions beside NMR fractions | **planned** | Qⁿ, N₄ and Al CN beside fractions the user enters from NMR fits, with the difference |
-| Model workspace | **planned** | type map, frame range and stride, a computation that runs in the background with progress and cancel; histograms and distribution tables in place of the site table |
-| CSV and XLSX export with provenance | **planned** | one sheet per descriptor; file, frames used, type map and its source, oxidation states, parameter set, threshold, g(r) minima and FACET version |
-| Ring statistics | out of scope this round | a documented hook that names R.I.N.G.S. as a program that computes them |
-| Simulated NMR spectra | out of scope this round | requires published shift correlations and their references before it computes anything |
+| LAMMPS `data` file | **done** | atomic, charge and the other atom styles; `Masses`, `Velocities` and type labels; tilted and general triclinic boxes, with their origin |
+| LAMMPS `dump`, text or gzip, one frame or a trajectory | **done** | scaled, unscaled and unwrapped coordinates, image flags, velocities and charges, in the column order of the `ITEM: ATOMS` header; element and type-label columns; units `metal` and `real`; triclinic boxes as the LAMMPS manual defines them |
+| LAMMPS binary dump | **done** | the old and the new layout |
+| LAMMPS YAML dump | **done** | read with the standard library |
+| DCD | **done** | positions only: the elements come from the LAMMPS data file the run read; a DCD has no box origin |
+| XTC | **done** | GROMACS's format, also LAMMPS's `dump xtc`; decoded with numpy from its published description; positions on the format's 0.01 Å grid |
+| AtomEye extended CFG | **done** | one file per snapshot, read as a series |
+| Extended XYZ, one frame or many | **done** | `Lattice=`, `Properties=`, `Origin=` and `Time=`; positions a writer never wrapped are kept as unwrapped. A single-frame XYZ dropped on the crystal window still opens as a crystal |
+| Plain multi-frame XYZ, with the box given | **done** | LAMMPS `dump xyz`, CP2K `pos.xyz`: the box comes from another file of the run, a CP2K `.cell` file or three vectors; one box then holds every frame, which assumes a constant volume, and the notes say so |
+| VASP XDATCAR | **done** | fixed and variable cell |
+| A series of POSCAR files | **done** | one file per frame, as pymatgen and OVITO write them; a lone POSCAR opens as a crystal |
+| DL_POLY `CONFIG` and `HISTORY` | **done** | the DL_POLY 4 layout; boundary keys 1–3, a box periodic along a, b and c, are read, and every other key is refused with its meaning named |
+| ASE `.traj` | **done** | read with numpy, `struct` and `json`; ASE is not a dependency |
+| HOOMD GSD | **done** | schema `hoomd` |
+| AMBER NetCDF | **done** | CDF-1, CDF-2 and CDF-5, as LAMMPS `dump netcdf` and OVITO write it. A tilted cell from OVITO 3.16.1 is refused, because that exporter writes the cell angles with the xy and yz tilts exchanged; the message says to export a LAMMPS dump or an extended XYZ instead |
+| CASTEP `.md` | **done** | positions, cell, velocities and time |
+| GROMACS `.gro` | **done** | one or more frames |
+| Animated XSF | **done** | a cell given once or at every step |
+| Multi-model PDB | **done** | one frame per `MODEL`, or per `END` block as CP2K writes it; no longer read as its first model alone |
+| IMD | **done** | the ASCII layout OVITO writes |
+| Several files as one trajectory | **done** | a directory, a wildcard or a list; names taken in natural order, so `dump.20` comes before `dump.100` |
+| A file recognised by its content, not its name | **done** | 114 of 115 files written by LAMMPS, ASE, OVITO and pymatgen are read to the precision of their format; the 115th is the tilted-cell NetCDF above, refused with its reason |
+| Atom type → element, with its source recorded | **done** | the user's map, an `element` column, type labels, then `Masses` that match exactly one element within 0.01 amu; a whole-number mass, and a force-field label such as `HO`, need a map. No element is guessed |
+| Oxidation states as model inputs | **done** | the common states, each one overridable, with its source recorded; never resolved from the geometry |
+| Skipped frames counted and reported | **done** | truncated, another atom count, unreadable: each one is counted with its reason, never dropped |
+
+### Measuring a frame
+
+| Feature | FACET | Note |
+|---|---|---|
+| Per-atom bond-valence analysis of a whole frame | **done** | CN at the threshold, bond-valence sum, φ and plateau width for every atom, from one neighbour search per frame: 0.51 s for 9 261 atoms, where the crystal path took 26 s. The threshold moves without a new search, in 4–10 ms for 10 000 atoms. Atom for atom, what the crystal analysis gives, to 2.5 × 10⁻¹⁴ |
+| Distance-cut CN beside the bond-valence CN | **done** | every bond-based descriptor computed from both bond definitions, with the per-atom cross-table of the two CN |
+| Partial g(r) and running coordination N(r) | **done** | N(r) counted, not integrated; the first minimum found by a stated rule that judges g against its counting error, reported with its floor and the CN range across it; the user can override it |
+| CN distribution per element | **done** | cut by bond valence and by distance, shown side by side |
+| Bridging, non-bridging, free and tricluster oxygen | **done** | counted against the network formers the user chooses; there is no default set |
+| Qⁿ per former, Qⁿ(mX) and network connectivity | **done** | how many bridges each former has, and to which element they go, e.g. Q⁴(2Al); the connectivity measured on the model's bonds |
+| N₄ for boron, Al CN 4/5/6 | **done** | any other CN is reported, never folded in |
+| Linkages X–O–Y | **done** | every pair of cations bonded to one anion; Al–O–Al counted whatever the Al coordination |
+| Halide environments | **done** | which cations each anion is bonded to, as a frequency table of environments such as F–Al₁Na₂ |
+| Lone-pair cations | **done** | distributions of φ, CN and plateau width over every atom of an element: the link to the crystal work |
+| Bond-angle distributions | **done** | T–O–T, O–T–O and any A–B–C, from the bonds the CN counts |
+| Bond-length distributions | **done** | from the same bonds |
+| Composition, charge and density of a model | **done** | oxide mol % for a basis the user gives; a model that is not neutral with the declared oxidation states is reported |
+| Frame averaging | **done** | every descriptor as a mean and the sample standard deviation across frames, with the frames used; one frame gives no spread and says so; frame order changes no result |
+
+### Network and local order
+
+| Feature | FACET | Note |
+|---|---|---|
+| Ring statistics | **done** | King's, Guttman's and the primitive criterion, with the R.I.N.G.S. normalisations, on a node set the user chooses; a ring that winds through the periodic boundary is not counted; vertex symbols in RCSR notation. Out of scope in the first plan |
+| Coordination sequences | **done** | the number of nodes k bonds away, shell by shell |
+| Polyhedral corner, edge and face sharing | **done** | |
+| Connected components | **done** | the dimensionality of each piece, whether it spans the box, and modifier clustering |
+| Warren–Cowley chemical short-range order | **done** | α_ij on a distance graph |
+| Bond-orientational order | **done** | Steinhardt q_l and w_l per atom, their averaged forms, and the global Q_l |
+| Tetrahedral order | **done** | Errington–Debenedetti q_tet |
+| Polyhedron distortion per atom | **done** | Baur's index, bond-angle variance, quadratic elongation, volume and ECoN, as the crystal side computes them |
+| Voronoi cells | **done** | the periodic tessellation: volume, face count and Voronoi index |
+| Empty spheres and free volume | **done** | the empty sphere of every Delaunay tetrahedron; geometric, probe-centre and probe-occupiable free volume for a probe radius and a set of atomic radii the user states |
+
+### Against experiment
+
+| Feature | FACET | Note |
+|---|---|---|
+| X-ray, neutron and electron S(Q), F(Q) and G(r) from a model | **done** | Faber–Ziman partials by sine transform; D(r) and T(r) in Keen's conventions; Bhatia–Thornton; the first sharp diffraction peak; S(q) on the reciprocal lattice of the box as a second route. An element with no scattering length or form factor is refused, never set to zero |
+| A measured curve overlaid | **done** | one scale factor and Wright's R_χ, its definition carried in every result |
+| Model fractions beside NMR fractions | **done** | Qⁿ, N₄, Al CN and oxygen speciation beside fractions the user enters from NMR fits, with the difference; the spread across frames and the measured uncertainty are listed side by side, never combined |
+| NMR spectra from structure–shift correlations | **done** | isotropic shifts and a broadened spectrum from a published correlation the user supplies with its reference; none ships with FACET, and nothing is computed without one. Out of scope in the first plan |
+| Quadrupolar NMR lineshapes | out of scope | each atom gives one line at its isotropic shift; a second-order quadrupolar shape needs the electric-field gradient at each nucleus, which FACET does not compute |
+| EXAFS shells from a model | **done** | absorber-centred g(r), first-shell limits from a measured minimum, and the cumulants N, R, σ², C₃ and C₄ of any shell |
+| FEFF over a trajectory | **done** | `feff.inp` for absorbers drawn across frames; FEFF's results read back and χ(k) averaged, within 0.42–1.95 % of FEFF's own `chi.dat` per cluster |
+
+### Dynamics
+
+| Feature | FACET | Note |
+|---|---|---|
+| Mean-square displacement and diffusion coefficients | **done** | every time origin; diffusion over a stated window. The time axis comes from the file or from a timestep the user gives; irregular or missing frames are refused with the frame named, not interpolated over |
+| Non-Gaussian parameter, self van Hove and self intermediate scattering functions | **done** | |
+| Distinct van Hove function | **done** | |
+| Velocity autocorrelation and vibrational density of states | **done** | with Green–Kubo diffusion; velocities from the file, or by finite difference when asked |
+| Kinetic temperature | **done** | from the file's velocities |
+| Ionic conductivity and Haven ratio | **done** | Nernst–Einstein and collective; the charges and the temperature are required inputs |
+| Bond and coordination lifetimes | **done** | continuous and intermittent correlation functions, and residence times |
+
+### Running, viewing and exporting
+
+| Feature | FACET | Note |
+|---|---|---|
+| Every analysis from one request | **done** | 25 analyses, with one neighbour search per frame shared between them; frames streamed, never held together; every missing or contradictory input named before any frame is read. 7.5–9.7 s per frame with all 25 on models of 2 880–3 000 atoms, 0.35 s with the glass analysis alone |
+| Command line, `python -m facet.md` | **done** | `describe`, `analyses`, `template` and `analyse`, with no Qt; a request file holds every option; the exit code says what happened |
+| CSV and XLSX export with provenance | **done** | one file or sheet per descriptor, the unit in every column name, numbers in full; each headed by the file, the frames used and skipped, the type map and its source, oxidation states, parameter set, thresholds, g(r) minima, method parameters and FACET version. The workbook needs openpyxl and is refused without it |
+| Model window | **done** | one per model, opened by dropping the file on the crystal window or by *File ▸ Open MD model…*; asks for a type map, topology or box only when the reader needs one, and shows the units it assumed, with a way to read the file again with others; oxidation states, network formers (none ticked), frame range and stride, and an analysis checklist that names what each analysis lacks; runs in the background with progress and cancel |
+| Results as figures beside their rows | **done** | the spread across frames drawn on every figure; SVG, PDF or 600 dpi PNG, with colour never the only cue |
+| Threshold slider on one frame | **done** | moves v_bond without a new search; the staircase of mean CN against threshold, clicked to set it |
+| 3D view of one frame | **partial** | drawn from the bulk engine's bonds, which equal the crystal scene builder's on 3 000-atom SiO₂ and NS3 frames and five small test frames; no polyhedra or slab; above 5 000 atoms the QPainter tier draws the atoms without bonds. Looked at offscreen on the QPainter tier; the OpenGL tiers are not yet checked with an MD frame on a graphics card |
+| Request file in the Model window | **partial** | the window saves its setup as a request file that `python -m facet.md analyse --request` runs; it does not load one back |
 | Running, building or editing molecular dynamics | out of scope | FACET reads MD output; producing it is a different program |
 
 ## What is left
 
-113 of the 155 tracked features are done, 13 are deliberately out of scope,
-and 29 remain: 4 partial and 25 planned, 21 of the planned ones being the glass
-work of §14. Every feature selected for the crystal side is implemented; the
-rest are listed so that what is missing stays visible rather than being
-discovered. (Counted from the tables, one row per feature.)
+181 of the 203 tracked features are done, 12 are deliberately out of scope,
+and 10 remain: 6 partial and 4 planned. Sections 1–13 hold 131 of the rows
+(113 done, 4 partial, 4 planned, 10 out of scope); §14 holds 72 (68 done,
+2 partial, 2 out of scope). Every feature selected for implementation is
+implemented, the six partial ones in part; the rest are listed so that what is
+missing stays visible rather than being discovered. (Counted from the tables,
+one row per feature.)
 
 **Partial — usable, incomplete**
 
@@ -274,17 +355,20 @@ discovered. (Counted from the tables, one row per feature.)
   a lone pair needs, but does not map cavities.
 - *CrystalMaker files*: `.cmtx` text is read. `.cmdf` is an undocumented binary
   and is refused with an explanation rather than guessed at.
+- *3D view of an MD frame* (§14): drawn on every tier from the bulk engine's
+  bonds, without polyhedra or a slab, and on the QPainter tier above 5 000
+  atoms without bonds. The OpenGL tiers have not yet been checked drawing an MD
+  frame on a machine with a graphics card.
+- *Request file in the Model window* (§14): the window writes one and the
+  command line runs it; the window does not yet load one back.
 
 **Planned**
 
 - *Symmetry tools*: the operator list, transforming to another setting or cell,
   and searching for higher symmetry. Not selected for this round.
 - *Scripting and batch*: the Library workspace, for running an analysis over a
-  folder and comparing the results.
-- *Glass models from molecular dynamics* (§14): readers for LAMMPS and
-  extended XYZ, a per-atom engine for whole frames, the descriptors glass work
-  reports, and their comparison with scattering and NMR. Phase MD in
-  `ROADMAP.md`.
+  folder and comparing the results. The MD command line (§14) runs over the
+  frames of one model, not over a folder of crystals.
 
 **Out of scope, with reasons**
 
@@ -292,9 +376,10 @@ Structure editing, running molecular dynamics, animation and movie export.
 FACET reads and measures structures, including the output of a
 molecular-dynamics run (§14); it does not build, run or edit one. Building and
 evolving structures are different programs, and half of one of them is worse
-than none. Ring statistics and simulated NMR spectra are out of scope for the
-first round of the glass work: the first is a program of its own, and the
-second needs published shift correlations to stand on.
+than none. Quadrupolar NMR lineshapes are out of scope too: a lineshape needs
+the electric-field gradient at each nucleus, which FACET does not compute.
+Ring statistics and NMR spectra from published correlations, out of scope in
+the first plan for the glass work, are done.
 
 ---
 

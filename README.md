@@ -1,7 +1,8 @@
 # FACET
 
-Coordination analysis from crystal structure files, for people who do not write
-code. Windows desktop application; no Python installation required.
+Coordination analysis from crystal structure files and from molecular-dynamics
+models of glasses, for people who do not write code. Windows desktop
+application; no Python installation required.
 
 ## What it is for
 
@@ -77,7 +78,8 @@ The coordination analysis is the argument; these are the tools that go with it.
 
 **Structures.** Reads CIF, VASP POSCAR/CONTCAR, XYZ, VESTA, SHELX .res/.ins, PDB
 and CrystalMaker .cmtx. Several at once, shown together or one at a time. Writes
-CIF, POSCAR, XYZ, VESTA, FEFF, CSV and XLSX.
+CIF, POSCAR, XYZ, VESTA, FEFF, CSV and XLSX. MD models and trajectories open in
+a window of their own (see *Glass models from molecular dynamics* below).
 
 **The 3D view.** Ball-and-stick, space-filling, stick and wireframe; coordination
 polyhedra; lattice planes and slabs by Miller indices; per-atom, per-site and
@@ -151,10 +153,121 @@ missing from a shared folder. One of its sections is what FACET does not do.
 Nothing in the program states a verdict. It reports measurements, says where each
 number came from, and leaves the reading of them to you.
 
+## Glass models from molecular dynamics
+
+FACET reads the models and trajectories that molecular-dynamics programs write,
+and measures them. It runs no simulation, and builds or edits no model.
+
+The argument carries over unchanged. The descriptors reported for a glass model
+— coordination numbers, Qⁿ, N₄, bridging and non-bridging oxygen — all depend on
+where a bond is cut. FACET cuts it two ways on the same atoms: by bond valence,
+and by distance at the first minimum of the model's own partial g(r). On a sodium
+trisilicate model made for the verification, the bond-valence threshold of
+0.075 v.u. falls at 2.76 Å for Na–O and the g(r) minimum at 3.26 Å, and the mean
+Na coordination number comes out 3.71 and 5.63. Both are reported, side by side.
+
+An MD frame is not analysed as a crystal. It has thousands of atoms and no
+symmetry, so it goes to an engine of its own, which searches each frame once for
+every atom: 0.51 s for 9 261 atoms, where the crystal analysis took 26 s. Given a
+crystal tiled into a supercell, that engine returns, atom for atom, what the
+crystal analysis returns.
+
+**Opening a model.** Drop the file on FACET's window, or use *File ▸ Open MD
+model…*; it opens in a Model window of its own. *File ▸ Open MD series as one
+model…* reads several files of one run as one trajectory. A file is recognised
+by its content, so a renamed dump still opens as a dump. Where the file leaves
+out something only the person who ran the simulation knows — which element a
+LAMMPS type number stands for, the data file a DCD needs for its elements, the
+box of a plain XYZ — the window shows the reader's message and asks for exactly
+that. No element is guessed.
+
+The setup then takes the oxidation states (the common ones, each editable, never
+resolved from the geometry), the network formers (none ticked: which cations
+form the network is a chemical decision, and FACET does not make it), the frames
+(first, last and stride), the thresholds and the analyses. The run goes in the
+background with progress and cancel. Each descriptor comes back as a figure
+beside its rows, as the mean over frames with the spread across them; a
+threshold slider moves the bond threshold on one frame without a new search; one
+frame can be turned in 3D. *Help ▸ MD models and the Model window* is the
+manual's section on all of it.
+
+**From the command line.** `python -m facet.md` runs the same analyses with no
+window, on a workstation or a cluster node. Unlike the application, it needs
+Python and FACET's source.
+
+```
+py -3.11 -m facet.md describe dump.lammpstrj --type-map 1=Si,2=O,3=Na
+py -3.11 -m facet.md analyse dump.lammpstrj --type-map 1=Si,2=O,3=Na \
+    --formers Si --frames 0:100:5 --out results.xlsx
+py -3.11 -m facet.md template > request.toml
+```
+
+`describe` says what the reader finds in a file, `analyses` lists every analysis
+with the inputs it needs, and `template` writes a request file holding every
+option, which `analyse --request` takes; the Model window can save its setup as
+one. An input with no default — the network formers, a timestep, a temperature,
+charges, an NMR correlation — is never filled in: a request that lacks one stops
+before any frame is read, naming each one.
+
+**Formats.** LAMMPS data files and dumps (text, gzip, binary and YAML), DCD, XTC
+and AtomEye CFG; extended XYZ, and plain XYZ trajectories once a box is given
+(another file of the run, a CP2K cell file or three vectors); VASP XDATCAR and
+series of POSCAR files; DL_POLY CONFIG and HISTORY; ASE .traj; HOOMD GSD; AMBER
+NetCDF; CASTEP .md; GROMACS .gro; animated XSF; multi-model PDB; IMD. None of
+them needs the library its authors provide.
+
+**What is measured.** Each structural analysis comes as a mean over the frames
+chosen, with the spread across them; the dynamics follow the trajectory in time.
+
+- *Glass:* CN by bond valence and by distance; bridging, non-bridging, free and
+  tricluster oxygen; Qⁿ and Qⁿ(mX); N₄; Al CN; linkages; halide environments;
+  φ and plateau widths; bond angles and lengths; partial g(r) and N(r) with
+  their first minima; composition and density.
+- *Scattering:* partial and total S(Q), F(Q) and G(r) for X-rays, neutrons and
+  electrons; Bhatia–Thornton; the first sharp diffraction peak; a measured curve
+  overlaid with one scale factor and R_χ.
+- *Rings:* King's, Guttman's or the primitive criterion, with the R.I.N.G.S.
+  normalisations.
+- *Network:* coordination sequences; corner, edge and face sharing; connected
+  pieces and whether they span the box; Warren–Cowley short-range order.
+- *Local order:* Steinhardt and tetrahedral order; polyhedron distortion and
+  ECoN; Voronoi cells.
+- *Voids:* the empty sphere of every Delaunay tetrahedron; free volume for a
+  probe radius.
+- *NMR:* the model's Qⁿ, N₄, Al CN and speciation beside fractions from an NMR
+  fit; shifts and spectra from a published correlation the user supplies.
+- *EXAFS:* shell cumulants N, R, σ², C₃ and C₄; FEFF inputs for absorbers drawn
+  across frames, and FEFF's results averaged.
+- *Dynamics:* mean-square displacement and diffusion; van Hove functions and
+  the self intermediate scattering function; velocity autocorrelation and the
+  vibrational density of states; kinetic temperature; ionic conductivity and the
+  Haven ratio; bond and coordination lifetimes.
+
+The results go out as one XLSX workbook with a sheet per descriptor, or a folder
+of CSV files, each headed by its provenance: the file, the frames used and
+skipped, the type map and where it came from, the oxidation states, the
+parameter set, the thresholds, the g(r) minima, every method parameter and the
+FACET version. Figures save as SVG, PDF or 600 dpi PNG.
+
+**What it does not do.** It does not run, build or edit a simulation. It fills in
+no timestep, temperature, charge or network former, and does not resolve a
+model's oxidation states from its geometry. It ships no NMR correlation and does
+not simulate quadrupolar lineshapes. For dynamics it does not interpolate over a
+missing or unevenly spaced frame: it refuses the run and names the frame. The
+Model window does not yet load a saved request file, and its 3D view has not yet
+been checked on the OpenGL tiers with a graphics card.
+
+**How it was checked.** The *MD models* section of `VERIFICATION.md`: 115 files
+written by LAMMPS, ASE, OVITO and pymatgen, five models made with LAMMPS for
+the purpose (four quenched glasses and a melt), and outside codes run on the
+same frames — LAMMPS itself, ASE, OVITO, vitrum, amorphouspy, matscipy,
+pyscal3 and FEFF. No model from the group's own work has been analysed yet.
+
 ## Status
 
-Complete and verified. `FEATURES.md` tracks all 141 features against CrystalMaker
-and VESTA: 118 done, 14 deliberately out of scope, 9 remaining and listed.
+`FEATURES.md` tracks 203 features: 131 against CrystalMaker and VESTA, and 72 for
+glass models from molecular dynamics. 181 are done, 12 deliberately out of
+scope, and 10 remain and are listed: 6 partial and 4 planned.
 
 The engine is a generalisation of the validated code behind a 2026 survey of
 105 bismuth sites across 74 structures, which was itself checked by an
@@ -165,16 +278,22 @@ departure.
 
 ## How it is checked
 
-A program arguing that published numbers are unreliable has to be held to a
-higher standard than the numbers it criticises, and "the tests pass" is not that
-standard. Every quantity is verified against something outside the code that
-produces it: independent implementations (gemmi, spglib, pymatgen), closed forms,
-physical laws, invariance under every way of rewriting the same crystal, and the
+A program arguing that a published coordination number can be a property of the
+cutoff rather than of the structure has to be held to a higher standard than the
+numbers it questions, and "the tests pass" is not that standard. Every quantity
+is verified against something outside the code that produces it: independent
+implementations (gemmi, spglib, pymatgen; for MD models, LAMMPS itself, ASE,
+OVITO, vitrum, amorphouspy, matscipy, pyscal3 and FEFF), closed forms, physical
+laws, invariance under every way of rewriting the same crystal or model, and the
 file's own statement of what it contains.
 
 That last check found an expansion fault that had been losing three quarters of
-one structure's oxygen while every test passed. **`VERIFICATION.md`** records what
-was checked, what the agreement was, and what was found.
+one structure's oxygen while every test passed. The MD checks found a fault in
+data the crystal side already held: Brese and O'Keeffe's titanium parameters had
+been filed under thallium, and hydrogen's at +3, so every Ti and H bond valence
+had come from the estimator. **`VERIFICATION.md`** records what was checked, what
+the agreement was, and what was found; its *MD models* section covers the MD
+side.
 
 ## Running the tests
 
@@ -182,8 +301,8 @@ was checked, what the agreement was, and what was found.
 py -3.11 -m pytest tests/ -q
 ```
 
-Tests that depend on the author's structure library skip cleanly when it is
-absent.
+The suite collected 3 208 tests on 2026-10-07. Tests that depend on the author's
+structure library skip cleanly when it is absent.
 
 ## Building the application
 
