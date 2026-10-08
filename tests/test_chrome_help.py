@@ -107,8 +107,23 @@ def test_secondary_text_is_legible_against_its_panel():
     """
     for factory in T.PRESETS.values():
         c = chrome.ui_colors(factory())
-        ratio = chrome.contrast(_rgb(c.muted), _rgb(c.window))
-        assert ratio > 3.0, (factory().name, ratio)
+        # held to 4.5 on every ground it is drawn on: hints and group titles
+        # on the panels, placeholders in fields, disabled items in menus, on
+        # alternate rows. Softened to 3.2 on the panel alone, it measured
+        # 3.80 there, 3.36 as a placeholder, 4.29 in a menu.
+        for ground in (c.window, c.base, c.alternate):
+            ratio = chrome.contrast(_rgb(c.muted), _rgb(ground))
+            assert ratio >= 4.5, (factory().name, ground, ratio)
+
+
+def test_links_are_legible_on_every_ground():
+    """Links took the platform's colour; a dark system's (233, 212, 242)
+    on the white theme's panels measured 1.23."""
+    for factory in T.PRESETS.values():
+        c = chrome.ui_colors(factory())
+        for ground in (c.window, c.base, c.alternate):
+            ratio = chrome.contrast(_rgb(c.link), _rgb(ground))
+            assert ratio >= 4.5, (factory().name, ground, ratio)
 
 
 def test_accent_text_is_legible_on_the_accent():

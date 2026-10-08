@@ -575,3 +575,65 @@ def test_the_axis_holds_the_threshold_wherever_it_is(qapp):
         assert low <= v <= high, (v, low, high)
         x = widget._v_to_x(v)
         assert widget._plot.left() - 0.5 <= x <= widget._plot.right() + 0.5
+
+
+# --- the theme panel ---------------------------------------------------------
+
+def test_the_theme_panel_shows_the_window_behind_its_page(qapp):
+    """The Theme tab built a scroll area of its own, whose page and viewport
+    filled with the application palette's Window colour. With a dark system
+    palette that palette does not replace, the theme's dark text sat on
+    (30, 30, 30): 1.05:1. The page now shows the styled window behind it."""
+    from PySide6.QtGui import QColor, QImage, QPalette
+    from PySide6.QtWidgets import QLabel, QMainWindow, QScrollArea
+
+    from facet.ui import chrome
+    from facet.ui.theme_panel import ThemePanel
+
+    sheet, palette = qapp.styleSheet(), qapp.palette()
+    dark = QPalette()
+    for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+        for role in (QPalette.Window, QPalette.Base, QPalette.Button):
+            dark.setColor(group, role, QColor(30, 30, 30))
+    window = QMainWindow()
+    try:
+        qapp.setPalette(dark)
+        # the sheet alone: the platform's palette left as it is
+        qapp.setStyleSheet(chrome.stylesheet(T.Theme()))
+        panel = ThemePanel()
+        window.setCentralWidget(panel)
+        window.resize(420, 700)
+        window.show()
+        qapp.processEvents()
+        area = panel.findChild(QScrollArea)
+        assert not area.viewport().autoFillBackground()
+        assert not area.widget().autoFillBackground()
+        image = window.grab().toImage().convertToFormat(QImage.Format_RGB32)
+        dpr = image.devicePixelRatio()
+        raw = np.frombuffer(image.constBits(), dtype=np.uint8,
+                            count=image.bytesPerLine() * image.height())
+        pixels = raw.reshape(image.height(), image.bytesPerLine())[
+            :, :image.width() * 4].reshape(image.height(), image.width(),
+                                           4)[..., [2, 1, 0]]
+        labels = [w for w in panel.findChildren(QLabel)
+                  if w.isVisible() and w.text().strip()
+                  and not w.visibleRegion().isEmpty()]
+        assert labels
+        for label in labels[:8]:
+            top_left = label.mapTo(window, label.rect().topLeft())
+            x0, y0 = int(top_left.x() * dpr), int(top_left.y() * dpr)
+            block = pixels[y0:y0 + int(label.height() * dpr),
+                           x0:x0 + int(label.width() * dpr)].reshape(-1, 3)
+            colours, counts = np.unique(block, axis=0, return_counts=True)
+            behind = QColor(*(int(v) for v in colours[np.argmax(counts)]))
+            # behind a label: the theme's panel, never the system's
+            # (30, 30, 30)
+            assert behind.lightness() > 200, (label.text(), behind.name(),
+                                              chrome.ui_colors(T.Theme())
+                                              .window)
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.setStyleSheet(sheet)
+        qapp.setPalette(palette)
+        qapp.processEvents()

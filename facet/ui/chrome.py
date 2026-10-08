@@ -25,7 +25,9 @@ separators, dock titles or table grid lines under the Windows styles, and mixing
 the two gives a window that is light in some places and dark in others. The
 style sheet below is therefore the single source, and it is kept to colour and
 spacing -- no borders redrawn, no metrics changed -- so that the platform's own
-look survives.
+look survives. What it does not name is drawn from the palette, so the
+application is given a palette of the same colours (:func:`palette`); left as
+the system's, a dark system put its colours under the white theme's text.
 """
 from __future__ import annotations
 
@@ -91,21 +93,56 @@ def _settle(rgb: RGB, target: RGB, limit: float, above: bool) -> RGB:
     return out
 
 
-def _muted_on(window: RGB, text: RGB, floor: float = 3.2) -> RGB:
+def _as_drawn(rgb: RGB) -> RGB:
+    """``rgb`` rounded to the 8-bit channels the ``#rrggbb`` string carries,
+    so that a contrast checked here is the contrast of what is drawn."""
+    return tuple(max(0, min(255, int(round(c * 255)))) / 255 for c in rgb)
+
+
+def _floor_on(rgb: RGB, grounds, floor: float) -> bool:
+    drawn = _as_drawn(rgb)
+    return all(contrast(drawn, _as_drawn(g)) >= floor for g in grounds)
+
+
+# Secondary text -- hints, group titles, table headers, unselected tabs,
+# disabled controls and menu items, placeholders -- is held to the same 4.5:1
+# as body text. It used to be softened to 3.2:1, which read as secondary but
+# measured 3.80 on the white theme's panels and 3.36 for a placeholder on a
+# white field; it still reads as secondary at 4.5, beside body text at 15.
+MUTED_FLOOR = 4.5
+
+
+def _muted_on(window: RGB, text: RGB, floor: float = MUTED_FLOOR,
+              grounds=()) -> RGB:
     """Body text softened toward the panel, but only as far as stays legible.
 
     Secondary text has to read as secondary and still be readable, and how far
     it can be softened depends on the panel it is on. Fixing the pair instead of
     deriving it is what left the hint text at a contrast of 1.7 on a mid-grey
-    ground.
+    ground. ``grounds``: the other backgrounds the same colour is drawn on
+    (fields, alternate rows, menus), every one of which must keep ``floor``.
     """
-    best = text
-    for step in range(9, -1, -1):
-        candidate = _mix(text, window, step * 0.05)
-        if contrast(candidate, window) >= floor:
+    grounds = (window,) + tuple(grounds)
+    for step in range(50, -1, -1):
+        candidate = _mix(text, window, step * 0.01)
+        if _floor_on(candidate, grounds, floor):
             return candidate
-        best = candidate
     return text
+
+
+def _link_on(light: bool, grounds, text: RGB, floor: float = 4.5) -> RGB:
+    """A link colour that reads as a link and carries on every ground.
+
+    Links took the platform's colour: (233, 212, 242) from a dark system
+    palette on the white theme's panels measured 1.23. A blue, pushed toward
+    the body text until it carries.
+    """
+    out: RGB = (0.04, 0.33, 0.78) if light else (0.55, 0.74, 1.0)
+    for _ in range(24):
+        if _floor_on(out, grounds, floor):
+            break
+        out = _mix(out, text, 0.15)
+    return out
 
 
 def _ink_on(background: RGB) -> RGB:
@@ -137,6 +174,7 @@ class UiColors:
     accent_text: str   # text drawn on the accent
     hover: str         # menu and row hover
     is_light: bool
+    link: str = "#0a54c7"   # links in labels and the manual
 
     def as_dict(self) -> dict[str, str]:
         return {k: v for k, v in self.__dict__.items() if isinstance(v, str)}
@@ -173,14 +211,17 @@ def ui_colors(theme=None) -> UiColors:
         text = (0.90, 0.92, 0.95)
         border = _mix(window, (1.0, 1.0, 1.0), 0.16)
         hover = _mix(window, (1.0, 1.0, 1.0), 0.10)
-    muted = _muted_on(window, text)
+    # secondary text sits on the panels, in fields and tables, and in menus
+    grounds = (base, alternate)
+    muted = _muted_on(window, text, grounds=grounds)
     accent_text = _ink_on(accent)
+    link = _link_on(light, (window,) + grounds, text)
 
     return UiColors(
         window=_hex(window), base=_hex(base), alternate=_hex(alternate),
         text=_hex(text), muted=_hex(muted), border=_hex(border),
         accent=_hex(accent), accent_text=_hex(accent_text), hover=_hex(hover),
-        is_light=light,
+        is_light=light, link=_hex(link),
     )
 
 
@@ -234,7 +275,9 @@ QTabBar::tab {{ background: {c.window}; color: {c.muted};
                 padding: 5px 5px; border: 1px solid {c.border};
                 border-bottom: 0; margin-right: 1px; }}
 QTabBar::tab:selected {{ background: {c.base}; color: {c.text}; }}
-QTabBar::tab:hover {{ background: {c.hover}; }}
+/* body text on hover: the secondary colour is held to 4.5:1 on the panels,
+   not on the darker hover fill */
+QTabBar::tab:hover {{ background: {c.hover}; color: {c.text}; }}
 QTableWidget, QTableView, QTreeView, QListWidget, QListView, QTextBrowser,
 QTextEdit, QPlainTextEdit {{ background: {c.base}; color: {c.text};
     alternate-background-color: {c.alternate};
@@ -249,19 +292,35 @@ QListWidget::item:selected, QTreeView::item:selected {{
     background: {c.accent}; color: {c.accent_text}; }}
 QTableCornerButton::section {{ background: {c.window};
                                border: 0; border-bottom: 1px solid {c.border}; }}
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{ background: {c.base};
+QLineEdit, QComboBox {{ background: {c.base};
     color: {c.text}; border: 1px solid {c.border}; border-radius: 3px;
     padding: 2px 4px; selection-background-color: {c.accent};
+    selection-color: {c.accent_text}; placeholder-text-color: {c.muted}; }}
+/* No border on a spin box: a border hands its up and down buttons from the
+   Windows 11 style to the old bevelled drawing, whose arrows came out as two
+   dots. The padding is what keeps the size the panels were laid out with. */
+QSpinBox, QDoubleSpinBox {{ background: {c.base}; color: {c.text};
+    padding: 2px 4px; selection-background-color: {c.accent};
     selection-color: {c.accent_text}; }}
+QTextEdit, QPlainTextEdit {{ placeholder-text-color: {c.muted}; }}
 QComboBox QAbstractItemView {{ background: {c.base}; color: {c.text};
     border: 1px solid {c.border}; selection-background-color: {c.accent};
     selection-color: {c.accent_text}; }}
 QPushButton {{ background: {c.window}; color: {c.text};
     border: 1px solid {c.border}; border-radius: 3px; padding: 4px 10px; }}
 QPushButton:hover {{ background: {c.hover}; }}
-QPushButton:pressed {{ background: {c.accent}; color: {c.accent_text}; }}
+QPushButton:pressed, QPushButton:checked {{ background: {c.accent};
+    color: {c.accent_text}; }}
 QPushButton:disabled {{ color: {c.muted}; }}
-QCheckBox, QRadioButton, QLabel {{ background: transparent; color: {c.text}; }}
+/* A ticked tool button (the results' Provenance) is filled with the accent;
+   its text has to be the accent's ink, not the body text: dark text on the
+   accent measured 2.87. */
+QToolButton:checked {{ background: {c.accent}; color: {c.accent_text}; }}
+/* No background on a check box or a radio button: under the Windows 11 style
+   'transparent' also took the accent fill out of a ticked box, leaving a
+   white tick on the panel (1.11:1) -- ticked and unticked looked alike. */
+QCheckBox, QRadioButton {{ color: {c.text}; }}
+QLabel {{ background: transparent; color: {c.text}; }}
 QCheckBox:disabled, QRadioButton:disabled {{ color: {c.muted}; }}
 QLabel#hint {{ color: {c.muted}; }}
 QToolButton#disclosure {{ background: transparent; border: 0; color: {c.muted};
@@ -340,6 +399,19 @@ def in_scroll_area(widget):
     window's minimum height was 1421 px on a 930 px screen -- the Volume page
     demanding 1130 px of it -- so the window could not be made to fit the
     display.
+
+    The page and the scroll area's viewport are both left unfilled, so what
+    shows behind the page is the window or tab pane the area sits in, which
+    the style sheet colours from the theme. ``setWidget`` turns the page's
+    ``autoFillBackground`` on, and the viewport fills by default; under an
+    application style sheet a widget inherits no palette from its parent, so
+    both filled with the operating system's Window colour rather than the
+    theme's. Measured with Windows in dark mode: the theme's dark text on
+    (30, 30, 30), a contrast of 1.05, on the scrolling pages of both windows;
+    with Windows light and the Dark theme, light text on (243, 243, 243), 1.08.
+    A style-sheet rule cannot do this: the viewport is not a widget a style
+    sheet styles, and a background given to a page that is a QWidget subclass
+    -- every FACET panel -- is never painted.
     """
     from PySide6.QtWidgets import QScrollArea
 
@@ -347,6 +419,8 @@ def in_scroll_area(widget):
     area.setWidgetResizable(True)
     area.setFrameShape(QScrollArea.NoFrame)
     area.setWidget(widget)
+    widget.setAutoFillBackground(False)
+    area.viewport().setAutoFillBackground(False)
     # the panel is what callers hold on to; keep it reachable from the wrapper
     area.panel = widget
     return area
@@ -474,10 +548,104 @@ def disclosure(title: str, inner, *, expanded: bool = False):
     return holder
 
 
+def match_color_scheme(theme=None) -> bool:
+    """Ask the platform for the light or the dark look, as ``theme`` is.
+
+    The style sheet colours what it names. What it leaves to the widget
+    style -- a check box's or a list item's tick box, a radio button, a tool
+    button's face, a combo box's arrow, a spin box's buttons -- the Windows 11
+    style draws from the *system's* colour scheme, whatever the palette says.
+    Measured with Windows in dark mode and the white theme: unticked boxes all
+    but invisible on the light panels, and the results' Provenance button a
+    dark face under the theme's dark text. Asking for the theme's scheme
+    makes those parts agree with the rest of the window; with Windows already
+    in that scheme nothing changes.
+
+    Returns True when Qt can be asked (6.8 and later; a platform may still
+    ignore the request), False when it cannot.
+
+    The scheme is asked for every time, even when the system's already
+    matches: an explicit request is what holds it, so that switching Windows
+    between light and dark while FACET runs does not bring the mismatch back.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+
+    hints = QGuiApplication.styleHints()
+    request = getattr(hints, "setColorScheme", None)
+    if request is None:
+        return False
+    wanted = (Qt.ColorScheme.Light if ui_colors(theme).is_light
+              else Qt.ColorScheme.Dark)
+    request(wanted)
+    return True
+
+
+def palette(theme=None):
+    """A ``QPalette`` carrying the style sheet's colours.
+
+    The style sheet colours what it names; everything else a widget draws
+    -- a link in a label, a placeholder, a tool button's face, a tick box's
+    fill, a scroll area's page -- comes from the palette, and the
+    application's palette is the system's. With Windows dark, or any platform
+    that leaves its own palette in place, that put the system's colours
+    under the theme's: links at (233, 212, 242) on the white theme's panels
+    (1.23:1), a tool button's (60, 60, 60) face under dark text (1.58), the
+    accent of the operating system rather than the theme's behind a ticked
+    button. Giving the application this palette makes the two agree, which
+    is what the module's note warns mixing them does not do when they differ.
+    """
+    from PySide6.QtGui import QColor, QPalette
+
+    c = ui_colors(theme)
+
+    def rgb(hexcolor: str) -> RGB:
+        return tuple(int(hexcolor[i:i + 2], 16) / 255 for i in (1, 3, 5))
+
+    window = rgb(c.window)
+    black, white = (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)
+    roles = {
+        "Window": c.window, "WindowText": c.text, "Base": c.base,
+        "AlternateBase": c.alternate, "Text": c.text, "Button": c.window,
+        "ButtonText": c.text, "BrightText": c.base,
+        "ToolTipBase": c.base, "ToolTipText": c.text,
+        "Highlight": c.accent, "HighlightedText": c.accent_text,
+        "Link": c.link, "LinkVisited": c.link, "PlaceholderText": c.muted,
+        "Accent": c.accent,
+        # the bevel shades, lighter and darker than a button's face
+        "Light": _hex(_mix(window, white, 0.6)),
+        "Midlight": _hex(_mix(window, white, 0.3)),
+        "Mid": _hex(_mix(window, black, 0.18)),
+        "Dark": _hex(_mix(window, black, 0.35)),
+        "Shadow": _hex(_mix(window, black, 0.7)),
+    }
+    pal = QPalette()
+    for name, colour in roles.items():
+        role = getattr(QPalette, name, None)     # Accent: Qt 6.6 and later
+        if role is None:
+            continue
+        for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+            pal.setColor(group, role, QColor(colour))
+    for name in ("WindowText", "Text", "ButtonText"):
+        pal.setColor(QPalette.Disabled, getattr(QPalette, name),
+                     QColor(c.muted))
+    return pal
+
+
 def apply(target, theme=None) -> None:
     """Put ``theme``'s chrome on a QApplication (or a single widget).
 
     Applying to the application is what reaches menus and tool tips, which are
     top-level windows of their own and do not inherit a main window's sheet.
+    It also asks the platform for the theme's light or dark scheme
+    (:func:`match_color_scheme`) and gives the application the palette of
+    the same colours (:func:`palette`), which a single widget cannot.
     """
+    from PySide6.QtWidgets import QApplication
+
+    if isinstance(target, QApplication):
+        match_color_scheme(theme)
+        wanted = palette(theme)
+        if target.palette() != wanted:
+            target.setPalette(wanted)
     target.setStyleSheet(stylesheet(theme))

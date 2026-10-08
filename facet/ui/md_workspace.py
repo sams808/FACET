@@ -44,7 +44,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QMargins, QRect, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -360,7 +360,8 @@ class ModelWindow(QMainWindow):
 
         self.setWindowTitle(f"{md_jobs.source_label(self.source)} - "
                             f"{NAME} Model")
-        self.resize(1440, 920)
+        self._fitted_size = None
+        self._placed = False
         self.setAcceptDrops(True)
 
         self.pages = QStackedWidget()
@@ -377,7 +378,90 @@ class ModelWindow(QMainWindow):
         self.pages.addWidget(self.workspace)
         self._build_status()
         self._build_menu()
+        self.fit_to_screen()
         self.open_model()
+
+    # -- size and place --------------------------------------------------------
+    # The size the window takes where the screen has room for it: the setup's
+    # fields beside a figure with its rows (see _build_workspace).
+    PREFERRED_SIZE = (1440, 920)
+    # The frame assumed before the window exists, when the system cannot say
+    # yet: a title bar and thin borders, generous rather than exact. The
+    # frame the system reports replaces it when the window is first shown.
+    FRAME_ESTIMATE = (8, 40, 8, 8)
+
+    def _target_screen(self):
+        """The screen to open on: the opener's (the crystal window that
+        asked for this model), else the one Qt gives the window."""
+        opener = self._opener
+        if isinstance(opener, QWidget) and _alive(opener):
+            screen = opener.screen()
+            if screen is not None:
+                return screen
+        return self.screen() or QApplication.primaryScreen()
+
+    def _frame_margins(self) -> QMargins:
+        handle = self.windowHandle()
+        if handle is not None:
+            margins = handle.frameMargins()
+            if not margins.isNull() or \
+                    QApplication.platformName() in ("offscreen", "minimal"):
+                return margins
+        return QMargins(*self.FRAME_ESTIMATE)
+
+    def fit_to_screen(self, available: QRect | None = None,
+                      margins: QMargins | None = None) -> QRect:
+        """Size the window to PREFERRED_SIZE, or less where the screen is
+        smaller, and centre it, so that the window *with its frame* lies in
+        ``available`` (the screen's available geometry: the screen less the
+        task bar; the target screen's when None). ``margins``: the frame
+        (the system's, or an estimate before the window exists). Returns
+        the frame rectangle chosen.
+
+        A fixed 1440 x 920 opened 1440 x 950 with its title bar on a screen
+        whose available area is 930 px tall, its status bar (stage, progress
+        and Cancel run) behind the task bar.
+        """
+        if available is None:
+            screen = self._target_screen()
+            if screen is None:
+                return QRect()
+            available = screen.availableGeometry()
+        if margins is None:
+            margins = self._frame_margins()
+        extra_w = margins.left() + margins.right()
+        extra_h = margins.top() + margins.bottom()
+        width = max(1, min(self.PREFERRED_SIZE[0], available.width() - extra_w))
+        height = max(1, min(self.PREFERRED_SIZE[1],
+                            available.height() - extra_h))
+        self.resize(width, height)
+        # resize() is held at the minimum size; place what it gave
+        frame_w, frame_h = self.width() + extra_w, self.height() + extra_h
+        x = available.x() + max(0, (available.width() - frame_w) // 2)
+        y = available.y() + max(0, (available.height() - frame_h) // 2)
+        # a window's position is that of its frame
+        self.move(x, y)
+        self._fitted_size = self.size()
+        return QRect(x, y, frame_w, frame_h)
+
+    def showEvent(self, event) -> None:
+        # Sent before the window appears, once the system knows its frame:
+        # the size chosen with the estimated frame is chosen again with the
+        # real one. A size someone set since is kept unless the window would
+        # not fit its screen with it.
+        if not self._placed and not event.spontaneous():
+            self._placed = True
+            screen = self._target_screen()
+            if screen is not None:
+                available = screen.availableGeometry()
+                margins = self._frame_margins()
+                frame = QRect(self.pos(), self.size()).adjusted(
+                    0, 0, margins.left() + margins.right(),
+                    margins.top() + margins.bottom())
+                if self.size() == self._fitted_size or \
+                        not available.contains(frame):
+                    self.fit_to_screen(available, margins)
+        super().showEvent(event)
 
     # -- building ------------------------------------------------------------
     def _build_reading_page(self) -> QWidget:

@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QScrollArea,
     QSlider,
     QToolButton,
     QVBoxLayout,
@@ -79,15 +78,14 @@ class ThemePanel(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
         inner = QWidget()
         self._layout = QVBoxLayout(inner)
         self._layout.setContentsMargins(10, 10, 10, 10)
         self._layout.setSpacing(10)
-        scroll.setWidget(inner)
-        outer.addWidget(scroll)
+        # the shared wrapper, whose page and viewport do not fill: a scroll
+        # area of its own filled them with the system's Window colour, which
+        # with a dark system put the theme's dark text on (30, 30, 30)
+        outer.addWidget(chrome.in_scroll_area(inner))
 
         self._build_presets()
         self._build_mode()

@@ -1015,11 +1015,26 @@ class StatPlot(Plot):
                     + line_h * 0.8
         x_ticks, x_minor = ([], [])
         if not categorical:
-            if self.log_x:
-                x_ticks, x_minor = self._log_ticks(x0, x1, int(plot_w / 80))
-            else:
-                x_ticks, x_minor = self._linear_ticks(x0, x1,
-                                                      int(plot_w / 80))
+            # A tick label is centred on its tick, so one at the right end of
+            # the axis overhangs the plot by half its width; with no legend
+            # there was only a gap's room for it, and the MSD plot's last
+            # label, '2.0', was cut to '2.C' at the widget's edge. The plot
+            # gives up what the label needs.
+            for _ in range(3):
+                if self.log_x:
+                    x_ticks, x_minor = self._log_ticks(x0, x1,
+                                                       int(plot_w / 80))
+                else:
+                    x_ticks, x_minor = self._linear_ticks(x0, x1,
+                                                          int(plot_w / 80))
+                over = max((left + (value - x0) / (x1 - x0) * plot_w
+                            + fm.horizontalAdvance(text) / 2 - (width - 1)
+                            for value, text in x_ticks if x1 > x0),
+                           default=0.0)
+                if over <= 0.5:
+                    break
+                right += over
+                plot_w = max(width - left - right, 20)
         annotations = list(figure.annotations) if figure is not None else []
         dropped = [f"{n} point(s) at or below 0 are not drawn on the log "
                    f"{axis} axis." for axis, n in self._dropped.items() if n]

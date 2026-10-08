@@ -15,7 +15,10 @@ What these tests pin:
   the finished part with the engine's note; closing a window during a run
   returns within its wait, and work that ignores the cancel is kept alive
   until it ends;
-* no verdict word appears in the window, and each menu's mnemonics differ.
+* no verdict word appears in the window, and each menu's mnemonics differ;
+* the text of the read and setup pages stays readable under the operating
+  system's dark palette (measured from the drawn pixels), and the window
+  opens inside its screen's available area, frame included.
 
 Offscreen; no OpenGL context is created (the 3D view is checked as data).
 """
@@ -1777,3 +1780,606 @@ def test_a_job_s_worker_is_deleted_on_the_gui_thread_not_its_own(qapp):
     assert _wait(qapp, lambda: bool(ended), 10)
     assert job.outcome == 1
     assert not shiboken6.isValid(worker)
+
+
+# ---------------------------------------------------------------------------
+# readable under the system's dark palette, and inside the screen
+# ---------------------------------------------------------------------------
+#
+# Measured on the built window with Windows in dark mode (2026-10-07): the
+# read page's heading, its first paragraph and the label beside the topology
+# field drawn in the theme's text colour (23, 26, 31) on (30, 30, 30), a
+# contrast of 1.05, and the same on every label of the setup. The scroll
+# area's page and viewport filled with the operating system's Window colour,
+# not the theme's. And the window opened 1440 x 950 with its title bar on a
+# screen whose available area is 930 px tall.
+
+# The colours of the Windows 11 style's dark palette, as Qt 6.9 reports them
+# with Windows set to dark mode for apps.
+WINDOWS_DARK = {
+    "Window": (30, 30, 30), "WindowText": (255, 255, 255),
+    "Base": (45, 45, 45), "AlternateBase": (52, 52, 52),
+    "Text": (255, 255, 255), "Button": (60, 60, 60),
+    "ButtonText": (255, 255, 255), "BrightText": (166, 216, 255),
+    "ToolTipBase": (60, 60, 60), "ToolTipText": (212, 212, 212),
+    "Highlight": (135, 100, 184), "HighlightedText": (255, 255, 255),
+    "PlaceholderText": (171, 171, 171), "Light": (91, 91, 91),
+    "Midlight": (69, 69, 69), "Mid": (40, 40, 40), "Dark": (20, 20, 20),
+    "Shadow": (0, 0, 0), "Link": (147, 147, 255),
+}
+
+
+def _dark_palette():
+    """A palette with every role set, so that no colour-scheme request
+    replaces it: what a platform that ignores the request leaves."""
+    from PySide6.QtGui import QColor, QPalette
+
+    palette = QPalette()
+    for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+        for name, rgb in WINDOWS_DARK.items():
+            palette.setColor(group, getattr(QPalette, name), QColor(*rgb))
+    return palette
+
+
+class _DarkSystem:
+    """The system's dark palette and FACET's chrome, for one test; both
+    undone afterwards (the chrome asks for a colour scheme; the request is
+    withdrawn)."""
+
+    def __init__(self, qapp):
+        self.app = qapp
+
+    def __enter__(self):
+        from facet.core import theme as theme_mod
+        from facet.ui import chrome
+
+        self.palette = self.app.palette()
+        self.sheet = self.app.styleSheet()
+        self.app.setPalette(_dark_palette())
+        chrome.apply(self.app, theme_mod.Theme())
+        self.app.processEvents()
+        return self
+
+    def __exit__(self, *_exc):
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+
+        self.app.setStyleSheet(self.sheet)
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "setColorScheme"):
+            hints.setColorScheme(Qt.ColorScheme.Unknown)
+        self.app.setPalette(self.palette)
+        self.app.processEvents()
+        return False
+
+
+def _luminance(rgb) -> np.ndarray:
+    """WCAG relative luminance of 0..255 sRGB triples."""
+    c = np.asarray(rgb, dtype=float) / 255.0
+    c = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * c[..., 0] + 0.7152 * c[..., 1] + 0.0722 * c[..., 2]
+
+
+def _pixels(image) -> np.ndarray:
+    from PySide6.QtGui import QImage
+
+    image = image.convertToFormat(QImage.Format_RGB32)
+    h, line = image.height(), image.bytesPerLine()
+    raw = np.frombuffer(image.constBits(), dtype=np.uint8,
+                        count=line * h).reshape(h, line)
+    return raw[:, :image.width() * 4].reshape(h, image.width(), 4)[
+        ..., [2, 1, 0]]
+
+
+def _ink_contrast(pixels, rect, dpr):
+    """(contrast, ink, background) of the text drawn in ``rect``: the
+    background is the commonest colour there, the ink the pixel of greatest
+    contrast against it."""
+    x0, y0 = max(0, int(rect.left() * dpr)), max(0, int(rect.top() * dpr))
+    x1 = min(pixels.shape[1], int((rect.right() + 1) * dpr))
+    y1 = min(pixels.shape[0], int((rect.bottom() + 1) * dpr))
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return None
+    block = pixels[y0:y1, x0:x1].reshape(-1, 3)
+    colours, counts = np.unique(block, axis=0, return_counts=True)
+    background = colours[int(np.argmax(counts))]
+    lb, lp = _luminance(background), _luminance(block)
+    ratio = (np.maximum(lp, lb) + 0.05) / (np.minimum(lp, lb) + 0.05)
+    i = int(np.argmax(ratio))
+    return (float(ratio[i]), tuple(int(v) for v in block[i]),
+            tuple(int(v) for v in background))
+
+
+def _text_rect(widget):
+    """Where a label's, a check box's or a group box's text is drawn."""
+    from PySide6.QtWidgets import (QCheckBox, QGroupBox, QStyle,
+                                   QStyleOptionButton, QStyleOptionGroupBox)
+
+    style = widget.style()
+    if isinstance(widget, QGroupBox):
+        option = QStyleOptionGroupBox()
+        option.initFrom(widget)
+        option.text = widget.title()
+        option.lineWidth = 1
+        option.subControls = QStyle.SC_GroupBoxFrame | QStyle.SC_GroupBoxLabel
+        return style.subControlRect(QStyle.CC_GroupBox, option,
+                                    QStyle.SC_GroupBoxLabel, widget)
+    if isinstance(widget, QCheckBox):
+        option = QStyleOptionButton()
+        option.initFrom(widget)
+        option.text = widget.text()
+        return style.subElementRect(QStyle.SE_CheckBoxContents, option,
+                                    widget)
+    return widget.contentsRect()
+
+
+def _ratio(a, b) -> np.ndarray:
+    """WCAG contrast of 0..255 sRGB triples (arrays broadcast)."""
+    la, lb = _luminance(a), _luminance(b)
+    return (np.maximum(la, lb) + 0.05) / (np.minimum(la, lb) + 0.05)
+
+
+def _crop(pixels, window, widget, rect, dpr) -> np.ndarray:
+    """The pixels of ``rect`` (``widget``'s coordinates) in a grab of
+    ``window``, as rows x columns x 3."""
+    top_left = widget.mapTo(window, rect.topLeft())
+    x0, y0 = int(top_left.x() * dpr), int(top_left.y() * dpr)
+    x1 = int((top_left.x() + rect.width()) * dpr)
+    y1 = int((top_left.y() + rect.height()) * dpr)
+    return np.asarray(pixels[max(0, y0):y1, max(0, x0):x1], dtype=int)
+
+
+def _commonest(block) -> np.ndarray:
+    colours, counts = np.unique(block.reshape(-1, 3), axis=0,
+                                return_counts=True)
+    return colours[int(np.argmax(counts))]
+
+
+def _link_contrast(pixels, window, label, dpr):
+    """(contrast, link colour, background) of the links of a label that
+    carries some, when that colour is on screen there; else None. The
+    strongest pixel of such a label is its body text and says nothing of
+    its links: links at (233, 212, 242) on (241, 241, 241) passed that way."""
+    from PySide6.QtGui import QPalette
+
+    rect = label.contentsRect().intersected(
+        label.visibleRegion().boundingRect())
+    if rect.isEmpty():
+        return None
+    block = _crop(pixels, window, label, rect, dpr).reshape(-1, 3)
+    if block.size == 0:
+        return None
+    colour = np.array(label.palette().color(QPalette.Link).getRgb()[:3])
+    if int((np.abs(block - colour).max(axis=1) <= 30).sum()) < 6:
+        return None
+    background = _commonest(block)
+    return (float(_ratio(colour, background)),
+            tuple(int(v) for v in colour), tuple(int(v) for v in background))
+
+
+def _page_contrasts(qapp, window, page) -> list[tuple]:
+    """(contrast, kind, text, ink, background) of every label, check box and
+    group-box title of ``page`` that shows text, and of every empty field's
+    placeholder, its scroll area scrolled through. ``kind`` is 'body';
+    'muted' for what the chrome draws as secondary text (hints, group
+    titles, disabled controls); 'placeholder'; or 'link', for the link colour
+    of a label that carries links."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import (QCheckBox, QGroupBox, QLabel, QLineEdit,
+                                   QScrollArea)
+
+    area = next((a for a in window.findChildren(QScrollArea)
+                 if a.widget() is page), None)
+    bar = area.verticalScrollBar() if area is not None else None
+    if bar is not None:
+        step = max(60, int(area.viewport().height() * 0.7))
+        positions = list(range(0, bar.maximum() + step, step))
+    else:
+        positions = [0]
+    best: dict = {}
+    for value in positions:
+        if bar is not None:
+            bar.setValue(min(value, bar.maximum()))
+            qapp.processEvents()
+        image = window.grab().toImage()
+        pixels, dpr = _pixels(image), image.devicePixelRatio()
+        widgets = [w for kind in (QLabel, QCheckBox, QGroupBox)
+                   for w in page.findChildren(kind)]
+        for w in widgets:
+            if not w.isVisible():
+                continue
+            text = w.title() if isinstance(w, QGroupBox) else w.text()
+            if not text.strip() or (isinstance(w, QLabel)
+                                    and not w.pixmap().isNull()):
+                continue
+            rect = _text_rect(w).intersected(w.visibleRegion().boundingRect())
+            if rect.isEmpty():
+                continue
+            measured = _ink_contrast(
+                pixels, QRect(w.mapTo(window, rect.topLeft()), rect.size()),
+                dpr)
+            if measured is None:
+                continue
+            muted = isinstance(w, QGroupBox) or not w.isEnabled() or \
+                w.objectName() == "hint"
+            size = rect.width() * rect.height()
+            if id(w) not in best or size > best[id(w)][0]:
+                best[id(w)] = (size, (measured[0],
+                                      "muted" if muted else "body",
+                                      text[:60], measured[1], measured[2]))
+            if isinstance(w, QLabel) and "<a " in text:
+                link = _link_contrast(pixels, window, w, dpr)
+                if link is not None:
+                    key = ("link", id(w))
+                    if key not in best or size > best[key][0]:
+                        best[key] = (size, (link[0], "link", text[:60],
+                                            link[1], link[2]))
+        for w in page.findChildren(QLineEdit):
+            if not w.isVisible() or w.text() or not w.placeholderText():
+                continue
+            rect = w.rect().adjusted(3, 3, -3, -3).intersected(
+                w.visibleRegion().boundingRect())
+            if rect.isEmpty():
+                continue
+            measured = _ink_contrast(
+                pixels, QRect(w.mapTo(window, rect.topLeft()), rect.size()),
+                dpr)
+            if measured is None:
+                continue
+            size = rect.width() * rect.height()
+            key = ("placeholder", id(w))
+            if key not in best or size > best[key][0]:
+                best[key] = (size, (measured[0], "placeholder",
+                                    w.placeholderText()[:60], measured[1],
+                                    measured[2]))
+    if bar is not None:
+        bar.setValue(0)
+    return [entry for _, entry in best.values()]
+
+
+def _assert_readable(found, where):
+    """Every kind of text at 4.5:1 or more. Secondary text was softened to
+    3.2:1 by design and measured 3.80; it is held to 4.5 now, as are
+    placeholders (3.36 before) and links."""
+    def listed(rows):
+        return "; ".join(f"{r:.2f} {kind} {text!r} ink {ink} on {bg}"
+                         for r, kind, text, ink, bg in rows[:6])
+
+    body = [f for f in found if f[1] == "body"]
+    assert body, f"{where}: no text was measured"
+    low = [f for f in found if f[0] < 4.5]
+    assert not low, (f"{where}: text below 4.5:1 against what is behind "
+                     f"it: {listed(low)}")
+
+
+def test_the_read_and_setup_pages_are_readable_on_a_dark_system(qapp):
+    """The pages inside scroll areas showed the system's dark Window colour
+    under the theme's dark text: 1.05:1 for the read page's heading, its
+    first paragraph and the label beside the topology / masses field, and
+    for every label of the setup."""
+    from PySide6.QtWidgets import QToolButton
+
+    with _DarkSystem(qapp):
+        for name in ("dump_tri_x.lammpstrj", "lammps_formats/traj.dcd"):
+            window = _open(qapp, DATA / name)
+            try:
+                window.show()
+                qapp.processEvents()
+                assert window.pages.currentWidget() is window.read_page
+                panel = window.read_panel
+                panel.message_fold.button.setChecked(True)
+                panel.more.button.setChecked(True)
+                qapp.processEvents()
+                found = _page_contrasts(qapp, window, panel)
+                assert any("needs more information" in f[2] for f in found)
+                _assert_readable(found, f"the read page of {name}")
+            finally:
+                dispose(window)
+
+        window = _open(qapp, DATA / "glass.extxyz")
+        try:
+            window.show()
+            qapp.processEvents()
+            setup = window.setup
+            for button in setup.findChildren(QToolButton):
+                if button.objectName() == "disclosure":
+                    button.setChecked(True)
+            qapp.processEvents()
+            found = _page_contrasts(qapp, window, setup)
+            assert len(found) > 50
+            # the links and the placeholders were measured, not passed over
+            kinds = {f[1] for f in found}
+            assert {"link", "placeholder", "muted"} <= kinds, kinds
+            _assert_readable(found, "the setup page")
+        finally:
+            dispose(window)
+
+
+def _grab_showing(qapp, window, area, widget):
+    """A grab of ``window`` (pixels, device pixel ratio) with ``widget``
+    scrolled into view in ``area``."""
+    if area is not None:
+        area.ensureWidgetVisible(widget, 0, 0)
+    qapp.processEvents()
+    image = window.grab().toImage()
+    return _pixels(image), image.devicePixelRatio()
+
+
+def _strongest(block):
+    """(contrast, ink, background): the commonest colour of ``block`` and
+    the pixel of greatest contrast against it."""
+    flat = np.asarray(block, dtype=int).reshape(-1, 3)
+    background = _commonest(flat)
+    ratio = _ratio(flat, background)
+    i = int(np.argmax(ratio))
+    return (float(ratio[i]), tuple(int(v) for v in flat[i]),
+            tuple(int(v) for v in background))
+
+
+def test_what_the_style_draws_is_readable_on_a_dark_system(qapp,
+                                                           quartz_model):
+    """What the style sheet leaves to the Windows 11 style, measured with
+    Windows dark (2026-10-07): a ticked box was a white tick on the panel,
+    1.11:1, so ticked and unticked looked alike; a spin box's arrows were
+    dots 3 px wide; the pressed Provenance button carried dark text on the
+    accent, 2.87; table headers and unselected tabs were 3.80 and a disabled
+    menu item 4.29. With a platform that keeps its own dark palette the
+    Provenance button was a (60, 60, 60) face under dark text, 1.58."""
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtWidgets import (QAbstractSpinBox, QCheckBox, QHeaderView,
+                                   QMenu, QScrollArea, QStyle,
+                                   QStyleOptionButton, QStyleOptionSpinBox)
+
+    with _DarkSystem(qapp):
+        window = _quartz_window(qapp, quartz_model)
+        try:
+            window.show()
+            qapp.processEvents()
+            setup = window.setup
+            area = next((a for a in window.findChildren(QScrollArea)
+                         if a.widget() is setup), None)
+
+            # a ticked box, inside, against how an unticked one looks there
+            boxes = [b for b in setup.findChildren(QCheckBox)
+                     if b.isVisible() and b.isEnabled()]
+            ticked = next(b for b in boxes if b.isChecked())
+            unticked = next(b for b in boxes if not b.isChecked())
+
+            def indicator(box):
+                option = QStyleOptionButton()
+                option.initFrom(box)
+                rect = box.style().subElementRect(
+                    QStyle.SE_CheckBoxIndicator, option, box)
+                pixels, dpr = _grab_showing(qapp, window, area, box)
+                return _crop(pixels, window, box, rect, dpr)
+
+            on, off = indicator(ticked), indicator(unticked)
+            h = min(on.shape[0], off.shape[0])
+            w = min(on.shape[1], off.shape[1])
+            inside = (slice(h // 4, 3 * h // 4), slice(w // 4, 3 * w // 4))
+            empty = _commonest(off[inside])
+            marked = int((_ratio(on[inside].reshape(-1, 3), empty)
+                          >= 3.0).sum())
+            assert marked >= 8, (
+                f"{ticked.text()!r} ticked differs from an unticked box "
+                f"{tuple(empty)} by 3:1 in {marked} pixels")
+
+            # a spin box's arrows are arrows, not dots
+            spin = next(s for s in setup.findChildren(QAbstractSpinBox)
+                        if s.isVisible() and s.isEnabled())
+            pixels, dpr = _grab_showing(qapp, window, area, spin)
+            option = QStyleOptionSpinBox()
+            option.initFrom(spin)
+            option.frame = True
+            option.buttonSymbols = spin.buttonSymbols()
+            option.stepEnabled = (QAbstractSpinBox.StepUpEnabled
+                                  | QAbstractSpinBox.StepDownEnabled)
+            option.subControls = (QStyle.SC_SpinBoxUp | QStyle.SC_SpinBoxDown
+                                  | QStyle.SC_SpinBoxFrame
+                                  | QStyle.SC_SpinBoxEditField)
+            for control, name in ((QStyle.SC_SpinBoxUp, "up"),
+                                  (QStyle.SC_SpinBoxDown, "down")):
+                rect = spin.style().subControlRect(
+                    QStyle.CC_SpinBox, option, control, spin).adjusted(
+                    3, 3, -3, -3)
+                block = _crop(pixels, window, spin, rect, dpr)
+                ink = (_ratio(block, _commonest(block)) >= 3.0).any(axis=0)
+                columns = np.nonzero(ink)[0]
+                wide = int(columns.max() - columns.min() + 1) \
+                    if columns.size else 0
+                assert wide >= 6, f"the spin box's {name} arrow: {wide} px wide"
+
+            _run(qapp, window)
+            view = window.results_view
+            window.tabs.setCurrentWidget(view)
+            qapp.processEvents()
+
+            # the Provenance button, released and pressed
+            button = view.provenance_button
+            for pressed in (False, True):
+                button.setChecked(pressed)
+                pixels, dpr = _grab_showing(qapp, window, None, button)
+                found = _strongest(_crop(pixels, window, button,
+                                         button.rect().adjusted(5, 5, -5, -5),
+                                         dpr))
+                assert found[0] >= 4.5, ("Provenance", pressed, found)
+            button.setChecked(False)
+
+            # unselected tabs and table headers: secondary text, at 4.5
+            pixels, dpr = _grab_showing(qapp, window, None, window.tabs)
+            bar = window.tabs.tabBar()
+            measured = []
+            for i in range(bar.count()):
+                if i != bar.currentIndex():
+                    measured.append((_strongest(_crop(
+                        pixels, window, bar, bar.tabRect(i), dpr)),
+                        f"tab {bar.tabText(i)}"))
+            for header in window.tabs.findChildren(QHeaderView):
+                if not header.isVisible():
+                    continue
+                model = header.model()
+                for s in range(header.count()):
+                    label = model.headerData(s, header.orientation()) \
+                        if model is not None else None
+                    if header.isSectionHidden(s) or not str(label or
+                                                            "").strip():
+                        continue
+                    rect = QRect(header.sectionViewportPosition(s), 0,
+                                 header.sectionSize(s),
+                                 header.height()).intersected(
+                        header.viewport().visibleRegion().boundingRect())
+                    if rect.width() < 12:
+                        continue
+                    measured.append((_strongest(_crop(
+                        pixels, window, header.viewport(), rect, dpr)),
+                        f"header {label}"))
+            assert any(m[1].startswith("header") for m in measured)
+            low = [m for m in measured if m[0][0] < 4.5]
+            assert not low, low
+
+            # a disabled menu item
+            menu = next(m for m in window.findChildren(QMenu)
+                        if m.title().replace("&", "") == "Run")
+            menu.popup(window.mapToGlobal(QPoint(40, 40)))
+            try:
+                assert _wait(qapp, menu.isVisible, 5)
+                qapp.processEvents()
+                image = menu.grab().toImage()
+                pixels, dpr = _pixels(image), image.devicePixelRatio()
+                disabled = [a for a in menu.actions()
+                            if a.text() and not a.isSeparator()
+                            and not a.isEnabled()]
+                assert disabled
+                for action in disabled:
+                    found = _strongest(_crop(
+                        pixels, menu, menu,
+                        menu.actionGeometry(action).adjusted(4, 2, -4, -2),
+                        dpr))
+                    assert found[0] >= 4.5, (action.text(), found)
+            finally:
+                menu.hide()
+        finally:
+            dispose(window)
+
+
+def test_the_chrome_asks_for_the_theme_s_colour_scheme(qapp):
+    """What the style sheet does not name -- tick boxes, the results'
+    Provenance button -- the Windows 11 style draws from the system's
+    scheme: with Windows dark, unticked boxes all but vanished on the white
+    theme's panels and the Provenance button was a dark face under dark
+    text."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+
+    from facet.core import theme as theme_mod
+    from facet.ui import chrome
+
+    hints = QGuiApplication.styleHints()
+    if not hasattr(hints, "setColorScheme"):
+        pytest.skip("Qt before 6.8 cannot be asked for a colour scheme")
+    if qapp.platformName() in ("offscreen", "minimal"):
+        pytest.skip("this platform has no colour scheme to ask for")
+    sheet, palette = qapp.styleSheet(), qapp.palette()
+    try:
+        for theme, wanted in ((theme_mod.Theme(), Qt.ColorScheme.Light),
+                              (theme_mod.dark(), Qt.ColorScheme.Dark),
+                              (theme_mod.Theme(), Qt.ColorScheme.Light)):
+            chrome.apply(qapp, theme)
+            qapp.processEvents()
+            assert hints.colorScheme() == wanted, theme.name
+        # asked for even when the scheme already matches: the request is
+        # what holds it if the system switches while FACET runs
+        asked = []
+        hints.setColorScheme = lambda scheme: asked.append(scheme)
+        try:
+            chrome.apply(qapp, theme_mod.Theme())
+        finally:
+            del hints.setColorScheme
+        assert asked == [Qt.ColorScheme.Light]
+    finally:
+        qapp.setStyleSheet(sheet)
+        hints.setColorScheme(Qt.ColorScheme.Unknown)
+        qapp.setPalette(palette)
+        qapp.processEvents()
+
+
+def test_the_application_palette_carries_the_theme_s_colours(qapp):
+    """What the style sheet does not name came from the system's palette:
+    with a platform that keeps its own dark palette, links in the setup at
+    (233, 212, 242) on the white theme's panels (1.23:1) and a tool
+    button's (60, 60, 60) face under dark text (1.58)."""
+    from PySide6.QtGui import QPalette
+
+    from facet.core import theme as theme_mod
+    from facet.ui import chrome
+
+    sheet, palette = qapp.styleSheet(), qapp.palette()
+    try:
+        qapp.setPalette(_dark_palette())
+        for theme in (theme_mod.Theme(), theme_mod.dark()):
+            chrome.apply(qapp, theme)
+            colours = chrome.ui_colors(theme)
+            now = qapp.palette()
+            for role, expected in (("Window", colours.window),
+                                   ("WindowText", colours.text),
+                                   ("Base", colours.base),
+                                   ("Text", colours.text),
+                                   ("Button", colours.window),
+                                   ("ButtonText", colours.text),
+                                   ("Link", colours.link),
+                                   ("PlaceholderText", colours.muted),
+                                   ("Highlight", colours.accent),
+                                   ("HighlightedText", colours.accent_text)):
+                got = now.color(QPalette.Active, getattr(QPalette, role))
+                assert got.name() == expected, (theme.name, role, got.name())
+            assert now.color(QPalette.Disabled, QPalette.Text).name() == \
+                colours.muted
+    finally:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+
+        qapp.setStyleSheet(sheet)
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "setColorScheme"):
+            hints.setColorScheme(Qt.ColorScheme.Unknown)
+        qapp.setPalette(palette)
+        qapp.processEvents()
+
+
+def test_the_window_opens_inside_the_screen_frame_included(qapp):
+    """A fixed 1440 x 920 opened 1440 x 950 with its title bar on a screen
+    whose available area is 930 px tall: the status bar, with the run's
+    progress and Cancel run, sat behind the task bar."""
+    from PySide6.QtCore import QMargins, QRect
+
+    window = _open(qapp, DATA / "glass.extxyz")
+    try:
+        window.show()
+        for _ in range(5):
+            qapp.processEvents()
+        available = window.screen().availableGeometry()
+        frame = window.frameGeometry()
+        assert available.contains(frame), (
+            f"frame {frame.getRect()} outside the available area "
+            f"{available.getRect()}")
+        # any screen: a 1366 x 768 laptop (a 48 px task bar, a 30 px title
+        # bar), then a large one beside it
+        for screen, margins in (
+                (QRect(0, 0, 1366, 720), QMargins(0, 30, 0, 0)),
+                (QRect(1920, 0, 2560, 1392), QMargins(8, 31, 8, 8))):
+            chosen = window.fit_to_screen(screen, margins)
+            assert screen.contains(chosen), (chosen.getRect(),
+                                             screen.getRect())
+            assert chosen.size().width() == window.width() + 16 * (
+                margins.left() == 8)
+            assert window.width() <= window.PREFERRED_SIZE[0]
+            assert window.height() <= window.PREFERRED_SIZE[1]
+        # as large as it asks for where there is room
+        assert (window.width(), window.height()) == window.PREFERRED_SIZE
+        # the smallest the window can be fits that laptop, title bar and
+        # all (the crystal window's own test asks 730 px of its height)
+        minimum = window.minimumSizeHint()
+        assert minimum.width() <= 1366
+        assert minimum.height() + 30 <= 720
+    finally:
+        dispose(window)

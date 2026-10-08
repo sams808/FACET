@@ -1186,3 +1186,38 @@ def test_a_legend_too_narrow_for_its_names_shows_what_differs(qapp):
         assert [s.label for s in figure.series] == names
     finally:
         dispose(plot)
+
+
+def test_the_last_x_label_is_not_cut_at_the_edge(qapp):
+    """The MSD plot of a three-frame run (no legend: the title names the
+    one series) drew its last x label, '2.0', centred on the right end of
+    the axis with only a gap's room beyond it: it read '2.C'. Every x label
+    now lies inside the widget, at any width."""
+    from PySide6.QtGui import QFontMetricsF
+
+    from facet.ui import md_plot
+    from facet.ui.md_plot import Figure, StatSeries
+
+    s = StatSeries("MSD Si", [0.0, 1.0, 2.0], [0.0, 0.0411, 0.0460])
+    figure = Figure([s], "t", "ps", "MSD Si", "Å^2", title="MSD Si")
+    plot = _plot(qapp, figure, width=600, height=300)
+    try:
+        plot.grab()                     # fits the ranges
+        font = plot._font(False)
+        fm = QFontMetricsF(font, plot)
+        checked = 0
+        for width in range(380, 1000, 9):
+            layout = plot._layout(width, 300, font, fm, md_plot._SCREEN)
+            assert layout.legend is None
+            rect = layout.rect
+            x0, x1 = plot.x_range
+            for value, text in layout.x_ticks:
+                px = rect.left() + (value - x0) / (x1 - x0) * rect.width()
+                right = px + fm.horizontalAdvance(text) / 2
+                assert right <= width, (width, text, right)
+                checked += 1
+            # the axis ends on a labelled tick here, so the case is met
+            assert abs(layout.x_ticks[-1][0] - x1) < 1e-9
+        assert checked > 100
+    finally:
+        dispose(plot)
