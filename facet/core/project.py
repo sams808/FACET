@@ -162,6 +162,92 @@ class Entry:
         self._configuration = None
         self._configuration_key = None
 
+    @property
+    def kind(self) -> str:
+        return "crystal"
+
+
+@dataclass(eq=False)
+class ModelEntry:
+    """An MD model in a project: listed in the Structures dock beside the
+    crystals, drawn one frame at a time in the Model workspace.
+
+    What the entry holds is what the workspace needs across a switch of the
+    active row: the source (a path, or the ordered paths of one series),
+    the read options the file was read with, and, filled in by the
+    workspace's controller as it goes, the trajectory, its summary or the
+    reader's refusal, the last request run and its result, the frame on
+    show and its view, and the highlight rules. A session saves the source,
+    the read options and the request (``request_spec``), never a result.
+    The crystal code paths read ``kind`` ('model') and ``structure`` (None)
+    to leave it alone.
+    """
+
+    path: object                      # str, or a list of str (a series)
+    read_options: dict = field(default_factory=dict)
+    visible: bool = True
+    color_key: int = 0
+    offset: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    trajectory: object = field(default=None, repr=False)
+    summary: object = field(default=None, repr=False)
+    problem: object = field(default=None, repr=False)
+    request: object = field(default=None, repr=False)
+    request_spec: dict | None = field(default=None, repr=False)
+    result: object = field(default=None, repr=False)
+    frame_k: int = 0
+    frame_view: object = field(default=None, repr=False)
+    highlight: dict = field(default_factory=dict, repr=False)
+    companions: tuple = ()
+    # the workspace's controller for this entry (facet.ui.md_workspace)
+    controller: object = field(default=None, repr=False)
+
+    @property
+    def kind(self) -> str:
+        return "model"
+
+    @property
+    def structure(self):
+        """None: a model has no crystal structure to draw or analyse."""
+        return None
+
+    @property
+    def selected_site(self):
+        return None
+
+    @property
+    def source_path(self) -> str:
+        """The first file of the source, as text."""
+        if isinstance(self.path, (list, tuple)):
+            return str(self.path[0]) if self.path else ""
+        return str(self.path)
+
+    @property
+    def name(self) -> str:
+        """The list's text: the file name, and a second line with the atom
+        and frame counts once the file is read."""
+        first = Path(self.source_path).name if self.source_path else "model"
+        if isinstance(self.path, (list, tuple)) and len(self.path) > 1:
+            first = f"{first} .. {Path(str(self.path[-1])).name}"
+        summary = self.summary
+        if summary is not None:
+            atoms = f"{int(summary.n_atoms):,}".replace(",", " ")
+            frames = int(summary.n_frames)
+            return (f"{first}\n{atoms} atoms · {frames} "
+                    f"frame{'s' if frames != 1 else ''}")
+        if self.problem is not None:
+            return f"{first}\nnot read yet"
+        return f"{first}\nreading…"
+
+    @property
+    def label(self) -> str:
+        where = self.source_path
+        if isinstance(self.path, (list, tuple)) and len(self.path) > 1:
+            where = f"{len(self.path)} files from {Path(where).parent}"
+        return f"MD model: {where}"
+
+    def invalidate(self) -> None:
+        """Nothing cached here depends on the crystal settings."""
+
 
 class Project:
     """The open set of structures, and the settings shared across them."""
@@ -199,11 +285,25 @@ class Project:
         return self.entries[self.active]
 
     @property
+    def crystals(self) -> list[Entry]:
+        """The crystal entries, in order (the models left out)."""
+        return [e for e in self.entries if e.kind == "crystal"]
+
+    @property
+    def models(self) -> list[ModelEntry]:
+        """The MD model entries, in order."""
+        return [e for e in self.entries if e.kind == "model"]
+
+    @property
     def visible_entries(self) -> list[Entry]:
+        """The crystals drawn in the 3D view: every visible one in overlay
+        mode, else the active one. A model is drawn by its own workspace,
+        never here."""
         if self.overlay:
-            return [e for e in self.entries if e.visible]
+            return [e for e in self.crystals if e.visible]
         current = self.current
-        return [current] if current is not None else []
+        return [current] if current is not None and \
+            current.kind == "crystal" else []
 
     def add(self, structure: Structure, path: str | None = None) -> Entry:
         entry = Entry(source=structure, path=path,
@@ -212,6 +312,18 @@ class Project:
         if self.active is None:
             self.active = 0
         self._relayout()
+        return entry
+
+    def add_model(self, path, read_options=None) -> ModelEntry:
+        """List an MD model (a path, or the ordered paths of one series);
+        the workspace reads it."""
+        source = ([str(p) for p in path] if isinstance(path, (list, tuple))
+                  else str(path))
+        entry = ModelEntry(path=source, read_options=dict(read_options or {}),
+                           color_key=len(self.entries))
+        self.entries.append(entry)
+        if self.active is None:
+            self.active = 0
         return entry
 
     def add_file(self, path: str | Path) -> Entry:
@@ -280,6 +392,8 @@ class Project:
         return entry.network(self.params, self.v_bond, self.v_list)
 
     def results_for(self, entry: Entry) -> list:
+        if entry is None or entry.kind != "crystal":
+            return []
         return entry.results(self.params, self.v_bond, self.v_list,
                              self.include_anions)
 
@@ -310,7 +424,7 @@ class Project:
             for e in self.entries:
                 e.offset = np.zeros(3)
             return
-        visible = [e for e in self.entries if e.visible]
+        visible = [e for e in self.crystals if e.visible]
         widths = [2.0 * _radius(e.structure) for e in visible]
         x = 0.0
         for e, w in zip(visible, widths):
@@ -343,7 +457,7 @@ class Project:
         carrying which structure it came from.
         """
         rows: list[dict] = []
-        for e in self.entries:
+        for e in self.crystals:
             for r in self.results_for(e):
                 plateau = r.current_plateau
                 rows.append({
@@ -383,7 +497,7 @@ class Project:
     def contact_table(self) -> list[dict]:
         """Every contact of every analysed site, as flat rows."""
         rows: list[dict] = []
-        for e in self.entries:
+        for e in self.crystals:
             for r in self.results_for(e):
                 for c in r.contacts:
                     rows.append({

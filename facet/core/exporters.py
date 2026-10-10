@@ -497,14 +497,7 @@ def save_session(project, path: str | Path, theme=None,
         "overlay": project.overlay,
         "overlay_spacing": project.overlay_spacing,
         "active": project.active,
-        "entries": [
-            {"path": e.path, "visible": e.visible,
-             "selected_site": e.selected_site,
-             "overrides": e.overrides.to_dict(),
-             "disorder": (e.disorder.to_dict() if e.disorder is not None
-                          else None)}
-            for e in project.entries
-        ],
+        "entries": [_entry_record(e) for e in project.entries],
     }
     if presentation is not None:
         # planes and the slab: presentation state that belongs to the view
@@ -530,6 +523,45 @@ def save_session(project, path: str | Path, theme=None,
         }
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return path
+
+
+def _entry_record(entry) -> dict:
+    """One project entry as the session file holds it. A crystal: its path,
+    visibility, selected site, overrides and disorder choice. An MD model
+    (``kind`` 'model'): its source, the read options it was read with and
+    the request of its setup, never a result (a result is re-measured from
+    the file when the request is run again)."""
+    if getattr(entry, "kind", "crystal") == "model":
+        return {"kind": "model", "path": entry.path,
+                "read_options": _plain(entry.read_options or {}),
+                "request": _plain(entry.request_spec or {}),
+                "visible": entry.visible}
+    return {"path": entry.path, "visible": entry.visible,
+            "selected_site": entry.selected_site,
+            "overrides": entry.overrides.to_dict(),
+            "disorder": (entry.disorder.to_dict() if entry.disorder is not None
+                         else None)}
+
+
+def _plain(value):
+    """``value`` with every array a list and every mapping key text, so
+    json writes it; a type map keyed by integers is written as text keys
+    and read back by the MD reader as either."""
+    import numpy as np
+
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, frozenset):
+        return sorted(value)
+    return value
 
 
 def load_session(path: str | Path) -> dict:

@@ -139,7 +139,13 @@ shows 90 % at 59 % of its 17 s), and the stage text names the pass and the
 frame. When each frame counted one unit whatever its pass, the 20-frame
 SiO2 run with every analysis showed 38 % at 160 s of 181 s.
 ``cancelled()`` is asked before each frame and between analyses, and
-the ring and coordination-sequence searches ask it as they go. A cancelled
+the ring and coordination-sequence searches ask it as they go; the channel
+analyses (md_channels: the bond-valence landscape, the void regions, the
+modifier density) ask it between their stages and report each stage, and a
+pass-1 frame that runs them counts :data:`PROGRESS_UNITS_CHANNELS` more
+units, in proportion to their measured cost (the landscape of a 12 811-atom
+frame at a 0.3 Å grid took 32 s against about 8 s for every other per-frame
+analysis together). A cancelled
 run returns what was finished: each analysis is averaged over the frames it
 received, its provenance lists the others as skipped, and the notes say
 that the run was cancelled. A run cancelled before any frame was analysed,
@@ -203,8 +209,8 @@ from pathlib import Path
 
 import numpy as np
 
-from . import bulk, bv, glass, md_dynamics, md_network, md_order, \
-    md_scattering, md_spectroscopy
+from . import bulk, bv, elements, glass, md_channels, md_dynamics, \
+    md_network, md_order, md_scattering, md_spectroscopy
 from .md_model import Frame, FrameError, Trajectory, model_oxidation, \
     validate_symbol
 from .md_stats import Distribution, Histogram, Provenance, Scalar, Series, \
@@ -215,13 +221,16 @@ __all__ = [
     "TRAJECTORY_ANALYSES", "POST_ANALYSES", "NO_FORMERS", "CHARGE_SOURCES",
     "RADII_NAMES", "CURVE_FUNCTIONS", "GRAPH_KINDS", "NEIGHBOUR_KINDS",
     "HISTOGRAM_BINS_MAX", "HISTOGRAM_WINDOW_PERCENTILES",
-    "PROGRESS_UNITS_PASS1", "PROGRESS_UNITS_PASS2", "FORMER_READERS",
+    "PROGRESS_UNITS_PASS1", "PROGRESS_UNITS_PASS2", "PROGRESS_UNITS_CHANNELS",
+    "FORMER_READERS",
     "AnalysisCancelled", "FramesUnreadable", "MissingInput", "RequestError",
     "GlassOptions", "ScatteringOptions", "MeasuredCurve", "NetworkOptions",
-    "OrderOptions", "VoidOptions", "NmrOptions", "FractionMeasurement",
+    "OrderOptions", "VoidOptions", "ChannelOptions", "NmrOptions",
+    "FractionMeasurement",
     "ExafsOptions", "FeffOptions", "DynamicsOptions", "AnalysisRequest",
     "missing_inputs", "invalid_inputs", "available_analyses", "read_model",
-    "Table", "AnalysisOutput", "ModelResult", "analyse",
+    "Table", "AnalysisOutput", "ModelResult", "ChannelsResult",
+    "VoidRegionsResult", "analyse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -254,6 +263,37 @@ ANALYSIS_SUMMARIES: dict[str, str] = {
                      "(md_order)",
     "free-volume": "geometric, probe-centre and probe-occupiable free volume "
                    "(md_order)",
+    "channels": "where a mobile ion can go, by charge: the bond-valence "
+                "landscape of a probe ion on a periodic grid, the volume "
+                "fraction whose mismatch |V - n| is at or below each Delta, "
+                "the connected regions at one Delta (volume, elongation, "
+                "dimensionality, axes spanned, probe atoms inside) and the "
+                "smallest Delta at which a region spans a, b and c; needs "
+                "the probe element (its oxidation state is the request's), "
+                "the Delta list and the one Delta; about 25-30 s per 10 000 "
+                "atoms per frame at a 0.3 Å grid and r_cut 6 Å, growing "
+                "with the grid points times r_cut^3 (md_channels)",
+    "modifier-density": "where a mobile ion can go, by modifier density: "
+                        "the modifier atoms within the cutoff of every "
+                        "anion, the anions holding k_rich or more "
+                        "(modifier-rich) and the clusters they form through "
+                        "modifier-anion contacts (sizes, dimensionality, "
+                        "axes spanned), crossed with the anion speciation "
+                        "when formers are named; needs the modifier set and "
+                        "k_rich; the cutoffs are the glass analysis's when "
+                        "it runs, else the first minimum of the first "
+                        "frame's own partial g(r); under 0.1 s per 10 000 "
+                        "atoms per frame beyond the shared pair search "
+                        "(md_channels)",
+    "void-regions": "where a mobile ion can go, by voids: the empty spheres "
+                    "of radius at least the probe's, grouped where their "
+                    "probe-shrunk spheres overlap into void regions with "
+                    "their union volume, elongation, extent, "
+                    "dimensionality, axes spanned and lining atoms, and "
+                    "histograms of the region volumes and elongations; "
+                    "needs voids.radii and the void probe radius; about "
+                    "6 s per 10 000 atoms per frame at a 0.3 Å grid "
+                    "(md_channels)",
     "nmr": "isotropic shifts and spectrum from a published correlation "
            "(md_spectroscopy)",
     "exafs": "absorber-centred g(r), first-shell limits, shell cumulants "
@@ -284,8 +324,9 @@ ANALYSES = tuple(ANALYSIS_SUMMARIES)
 PER_FRAME_ANALYSES = ("glass", "scattering", "rings", "coordination-sequences",
                       "polyhedral-sharing", "components", "warren-cowley",
                       "bond-order", "tetrahedral-order", "polyhedron-shape",
-                      "voronoi", "empty-spheres", "free-volume", "nmr",
-                      "exafs", "bond-lifetimes")
+                      "voronoi", "empty-spheres", "free-volume", "channels",
+                      "modifier-density", "void-regions", "nmr", "exafs",
+                      "bond-lifetimes")
 TRAJECTORY_ANALYSES = ("msd", "self-correlations", "distinct-van-hove", "vacf",
                        "kinetic-temperature", "conductivity")
 POST_ANALYSES = ("nmr-comparison", "scattering-comparison", "feff")
@@ -316,9 +357,19 @@ HISTOGRAM_WINDOW_PERCENTILES = (0.5, 99.5)
 # of presentation, with its measured basis in the module docstring.
 PROGRESS_UNITS_PASS1 = 10
 PROGRESS_UNITS_PASS2 = 1
+# The units a pass-1 frame adds for each channel analysis it runs, beyond
+# PROGRESS_UNITS_PASS1, and the units each of its stages reports as it goes.
+# A choice of presentation with its basis in md_channels.py, TIMINGS: on a
+# 12 811-atom frame at a 0.3 Å grid and r_cut 6 Å the landscape took 32 s
+# and the thresholds 3.4 s against about 8 s for every other per-frame
+# analysis together (10 units), the void grouping 5.3 s on top of 2.5 s of
+# empty spheres, the modifier counts 0.1 s.
+PROGRESS_UNITS_CHANNELS = {"channels": 30, "void-regions": 8,
+                           "modifier-density": 1}
 # The analyses that read the network formers.
 FORMER_READERS = ("glass", "rings", "coordination-sequences",
-                  "polyhedral-sharing", "components", "nmr")
+                  "polyhedral-sharing", "components", "nmr",
+                  "modifier-density")
 # The analyses that need a time axis (and at least two frames).
 _TIMED = TRAJECTORY_ANALYSES + ("bond-lifetimes",)
 
@@ -534,6 +585,53 @@ class VoidOptions:
 
 
 @dataclass(frozen=True)
+class ChannelOptions:
+    """Inputs of the channel analyses (md_channels): channels by charge,
+    modifier-density and void-regions.
+
+    The physical choices have no default: ``probe`` (the mobile ion whose
+    bond-valence landscape is mapped; its oxidation state is the request's
+    for that element), ``deltas_vu`` (the mismatch thresholds at which the
+    accessible volume fraction is reported, ascending) and ``delta_vu`` (the
+    one threshold at which the regions are labelled) for channels;
+    ``modifiers`` and ``k_rich`` (the count at or above which an anion is
+    modifier-rich) for modifier-density; ``void_probe_radius_ang`` for
+    void-regions (with ``voids.radii``, the radii the empty spheres are
+    measured with). The method parameters have defaults, each stated in
+    the provenance: ``grid_spacing_ang`` 0.3 Å (the landscape grid and the
+    grid the void union volumes are measured on; md_channels's TIMINGS are
+    at this spacing) and ``r_cut_ang`` 6 Å (the anion images summed into V;
+    a Na-O contact at 6 Å carries 1.2e-5 v.u.); ``lining_distance_ang``
+    0.5 Å (the largest gap between an atom's sphere and a region's sphere
+    for the atom to line it); ``volume_edges_ang3`` and
+    ``elongation_edges`` as (first, last, step) bin edges of the void
+    region histograms (values beyond them are counted, never dropped).
+    ``repulsion_r_excl_ang`` None applies no repulsion exclusion; given, the
+    grid points within it of a cation of ``repulsion_elements`` (None: every
+    cation element but the probe's) are excluded. ``modifier_cutoffs``
+    (keys 'Na-O' or ('Na', 'O')) fixes the modifier-anion cutoffs; left
+    out, they are the glass analysis's first minima when glass runs in the
+    same request, else the first minimum of the partial g(r) of the first
+    frame analysed, located with glass.minimum_* and applied to every frame.
+    """
+
+    probe: str | None = None
+    grid_spacing_ang: float = 0.3
+    r_cut_ang: float = 6.0
+    deltas_vu: tuple[float, ...] | None = None
+    delta_vu: float | None = None
+    repulsion_r_excl_ang: float | None = None
+    repulsion_elements: tuple[str, ...] | None = None
+    modifiers: tuple[str, ...] | None = None
+    k_rich: int | None = None
+    modifier_cutoffs: Mapping[tuple[str, str], float] | None = None
+    void_probe_radius_ang: float | None = None
+    lining_distance_ang: float = 0.5
+    volume_edges_ang3: tuple[float, float, float] = (0.0, 200.0, 5.0)
+    elongation_edges: tuple[float, float, float] = (1.0, 11.0, 0.25)
+
+
+@dataclass(frozen=True)
 class FractionMeasurement:
     """Measured fractions to put beside a glass descriptor (nmr-comparison).
 
@@ -676,6 +774,7 @@ class AnalysisRequest:
     network: NetworkOptions = field(default_factory=NetworkOptions)
     order: OrderOptions = field(default_factory=OrderOptions)
     voids: VoidOptions = field(default_factory=VoidOptions)
+    channels: ChannelOptions = field(default_factory=ChannelOptions)
     nmr: NmrOptions = field(default_factory=NmrOptions)
     exafs: ExafsOptions = field(default_factory=ExafsOptions)
     feff: FeffOptions = field(default_factory=FeffOptions)
@@ -845,8 +944,8 @@ def missing_inputs(request: AnalysisRequest) -> tuple[MissingInput, ...]:
                                 "order.distance_cutoffs_ang",
                                 "the neighbour cutoffs, or " + auto_glass
                                 + "to the analyses"))
-    if a & {"empty-spheres", "free-volume"}:
-        who_voids = who("empty-spheres", "free-volume")
+    if a & {"empty-spheres", "free-volume", "void-regions"}:
+        who_voids = who("empty-spheres", "free-volume", "void-regions")
         if voids.radii is None:
             out.append(MissingInput(who_voids, "voids.radii",
                                     "'vdw' (FACET's van der Waals radii), "
@@ -869,6 +968,48 @@ def missing_inputs(request: AnalysisRequest) -> tuple[MissingInput, ...]:
             out.append(MissingInput("free-volume", "voids.radii",
                                     "radii of 0 leave no volume occupied; a "
                                     "radius set is needed"))
+    ch = request.channels
+    if "channels" in a:
+        if ch.probe is None:
+            out.append(MissingInput(
+                "channels", "channels.probe",
+                "the mobile ion whose bond-valence landscape is mapped (one "
+                "element symbol, e.g. Na); its oxidation state is the "
+                "request's for that element (ox_overrides or the common "
+                "state)"))
+        if ch.deltas_vu is None:
+            out.append(MissingInput(
+                "channels", "channels.deltas_vu",
+                "the mismatch thresholds Delta in valence units at which the "
+                "accessible volume fraction is reported, ascending (e.g. "
+                "0.05:1.0:0.05); a choice of what to report, none is "
+                "assumed"))
+        if ch.delta_vu is None:
+            out.append(MissingInput(
+                "channels", "channels.delta_vu",
+                "the one Delta in valence units at which the accessible "
+                "regions are labelled (volume, elongation, dimensionality, "
+                "axes spanned); the percolation thresholds say where "
+                "spanning starts"))
+    if "modifier-density" in a:
+        if ch.modifiers is None:
+            out.append(MissingInput(
+                "modifier-density", "channels.modifiers",
+                "the modifier cations counted around each anion (e.g. "
+                "Na,Ca); the anions are the model's"))
+        if ch.k_rich is None:
+            out.append(MissingInput(
+                "modifier-density", "channels.k_rich",
+                "the number of modifiers at or above which an anion is "
+                "modifier-rich (a whole number of 1 or more); a choice, "
+                "none is assumed"))
+    if "void-regions" in a and ch.void_probe_radius_ang is None:
+        out.append(MissingInput(
+            "void-regions", "channels.void_probe_radius_ang",
+            "the probe radius in Å: empty spheres smaller than it are left "
+            "out, and two voids join where their probe-shrunk spheres "
+            "overlap (0 keeps every sphere and joins them where they "
+            "overlap)"))
     if "nmr" in a or "nmr-comparison" in a:
         if "nmr" in a:
             if nmr.correlation is None:
@@ -943,7 +1084,7 @@ def missing_inputs(request: AnalysisRequest) -> tuple[MissingInput, ...]:
 _SC = "scattering/scattering-comparison"
 _GRAPH = "rings/coordination-sequences/components"
 _ORDER = "bond-order/tetrahedral-order/polyhedron-shape"
-_VOIDS = "empty-spheres/free-volume"
+_VOIDS = "empty-spheres/free-volume/void-regions"
 _TIME = "/".join(_TIMED)
 
 
@@ -1292,6 +1433,62 @@ def invalid_inputs(request: AnalysisRequest) -> tuple[MissingInput, ...]:
     c.number("empty-spheres", "voids.sphere_bin_ang", v.sphere_bin_ang,
              above=0.0)
 
+    # -- channels -------------------------------------------------------------
+    ch = req.channels
+    if ch.probe is not None and c.symbol("channels", "channels.probe",
+                                         ch.probe):
+        probe = validate_symbol(str(ch.probe))
+        state = dict(req.ox_overrides).get(probe, elements.COMMON_OX.get(probe))
+        if state is not None and _number_problem(state, whole=True) is None \
+                and float(state) <= 0:
+            c.add("channels", "channels.probe",
+                  f"{probe} has oxidation state {state}; the probe is a "
+                  "cation whose formal valence the landscape matches, so a "
+                  "positive state is needed (ox_overrides)")
+    c.number("channels", "channels.grid_spacing_ang", ch.grid_spacing_ang,
+             above=0.0)
+    c.number("channels", "channels.r_cut_ang", ch.r_cut_ang, above=0.0)
+    if ch.deltas_vu is not None:
+        if isinstance(ch.deltas_vu, str):
+            c.add("channels", "channels.deltas_vu", "a list of thresholds is "
+                  "needed, not one string")
+        else:
+            deltas = tuple(ch.deltas_vu)
+            if not deltas:
+                c.add("channels", "channels.deltas_vu", "no Delta was given")
+            ok = True
+            for value in deltas:
+                ok = c.number("channels", "channels.deltas_vu", value,
+                              at_least=0.0) and ok
+            if ok and any(float(b) <= float(a_) for a_, b in
+                          zip(deltas, deltas[1:])):
+                c.add("channels", "channels.deltas_vu",
+                      f"{deltas} is not strictly increasing")
+    c.number("channels", "channels.delta_vu", ch.delta_vu, at_least=0.0)
+    c.number("channels", "channels.repulsion_r_excl_ang",
+             ch.repulsion_r_excl_ang, above=0.0)
+    c.symbols("channels", "channels.repulsion_elements", ch.repulsion_elements)
+    if ch.repulsion_elements is not None and ch.repulsion_r_excl_ang is None:
+        c.add("channels", "channels.repulsion_elements",
+              "given without repulsion_r_excl_ang, the exclusion radius")
+    c.symbols("modifier-density", "channels.modifiers", ch.modifiers)
+    if ch.modifiers is not None and not isinstance(ch.modifiers, str) \
+            and not tuple(ch.modifiers):
+        c.add("modifier-density", "channels.modifiers", "no modifier was "
+              "named")
+    c.number("modifier-density", "channels.k_rich", ch.k_rich, at_least=1,
+             whole=True)
+    c.pair_map("modifier-density", "channels.modifier_cutoffs",
+               ch.modifier_cutoffs)
+    c.number("void-regions", "channels.void_probe_radius_ang",
+             ch.void_probe_radius_ang, at_least=0.0)
+    c.number("void-regions", "channels.lining_distance_ang",
+             ch.lining_distance_ang, at_least=0.0)
+    c.triple("void-regions", "channels.volume_edges_ang3",
+             ch.volume_edges_ang3, first_at_least=0.0)
+    c.triple("void-regions", "channels.elongation_edges",
+             ch.elongation_edges, first_at_least=0.0)
+
     # -- NMR and EXAFS --------------------------------------------------------
     nmr = req.nmr
     c.triple("nmr", "nmr.delta_ppm", nmr.delta_ppm)
@@ -1413,6 +1610,12 @@ def dependencies(request: AnalysisRequest, name: str) -> tuple[str, ...]:
     if name in ("bond-order", "tetrahedral-order", "polyhedron-shape") and \
             order.neighbours == "distance" and \
             order.distance_cutoffs_ang is None:
+        return ("glass",)
+    if name == "modifier-density" and "glass" in request.analyses and \
+            request.channels.modifier_cutoffs is None:
+        # glass in the same request gives the modifier-anion cutoffs (the
+        # first minima of the frame-averaged g(r)); without glass they are
+        # measured on the first frame, so glass is read, never required
         return ("glass",)
     return ()
 
@@ -1611,6 +1814,35 @@ class ModelResult:
     def failed(self) -> dict[str, str]:
         return {name: out.error for name, out in self.outputs.items()
                 if out.error is not None}
+
+
+@dataclass(frozen=True, eq=False)
+class ChannelsResult:
+    """The ``raw`` of the channels analysis: the
+    :class:`~.md_channels.Landscape` and :class:`~.md_channels.AccessibleRegions`
+    of ``last_frame``, the last frame analysed (the only frame whose grids
+    are kept: a landscape is 17 bytes a grid point, 109 MB at 6.4 M points,
+    and the window's volume and highlight pages draw one frame), the
+    :class:`~.md_channels.PercolationThresholds` of every frame and the
+    accessible fractions of every frame at ``deltas_vu``."""
+
+    last_frame: int
+    landscape: object
+    regions: object
+    thresholds: Mapping[int, object]
+    fractions: Mapping[int, np.ndarray]
+    deltas_vu: np.ndarray
+
+
+@dataclass(frozen=True, eq=False)
+class VoidRegionsResult:
+    """The ``raw`` of the void-regions analysis: the
+    :class:`~.md_channels.VoidRegions` of ``last_frame`` with its label
+    grid, and every frame's without the grid (``per_frame``)."""
+
+    last_frame: int
+    regions: object
+    per_frame: Mapping[int, object]
 
 
 # ---------------------------------------------------------------------------
@@ -1932,7 +2164,14 @@ class _Run:
         self.glass_result = None
         self.outputs: dict[str, AnalysisOutput] = {}
         self.voronoi_cells: dict[int, object] = {}
+        # the empty spheres of the frame under way, from the empty-spheres
+        # analysis, for the void regions of the same frame
+        self.empty_spheres_cache: dict[int, object] = {}
         self.search_seconds = 0.0
+        # the units one pass-1 frame counts (PROGRESS_UNITS_PASS1 plus the
+        # channel analyses'), and the units done within the frame under way
+        self.p1_units = PROGRESS_UNITS_PASS1
+        self.p1_partial = 0
 
     # -- progress and cancel --------------------------------------------------
     def is_cancelled(self) -> bool:
@@ -1944,14 +2183,25 @@ class _Run:
 
     def report(self, stage: str) -> None:
         if self._progress is not None:
-            units = (self.p1_done * PROGRESS_UNITS_PASS1
+            units = (self.p1_done * self.p1_units + self.p1_partial
                      + self.p2_done * PROGRESS_UNITS_PASS2 + self.extra_steps)
             self._progress(min(units, self.total_steps), self.total_steps,
                            stage)
 
     def pass1_progress(self, done: int) -> None:
         """``done`` frames through pass 1 (never fewer than reported)."""
-        self.p1_done = max(self.p1_done, min(done, len(self.frames)))
+        new = max(self.p1_done, min(done, len(self.frames)))
+        if new > self.p1_done:
+            self.p1_done = new
+            self.p1_partial = 0
+
+    def partial_progress(self, units: int, stage: str) -> None:
+        """``units`` of the channel analyses' extra units done within the
+        pass-1 frame under way (never fewer than reported), then a progress
+        report naming the stage."""
+        extra = max(self.p1_units - PROGRESS_UNITS_PASS1, 0)
+        self.p1_partial = max(self.p1_partial, min(int(units), extra))
+        self.report(stage)
 
     def pass2_progress(self, done: int) -> None:
         if self.pass2_possible:
@@ -1966,7 +2216,7 @@ class _Run:
         steps_after = len([n for n in self.req.analyses
                            if n in TRAJECTORY_ANALYSES + POST_ANALYSES]) + 1
         n = len(self.frames)
-        self.frame_total = (n * PROGRESS_UNITS_PASS1
+        self.frame_total = (n * self.p1_units
                             + (n * PROGRESS_UNITS_PASS2
                                if self.pass2_possible else 0)
                             if self.has_frame_work else 0)
@@ -2101,25 +2351,28 @@ class _Run:
             if absorber not in present:
                 out.append(MissingInput("exafs", "exafs.absorber",
                                         f"the model holds no {absorber}"))
-        if self.a & {"empty-spheres", "free-volume"}:
+        if self.a & {"empty-spheres", "free-volume", "void-regions"}:
+            who_voids = "/".join(n for n in ("empty-spheres", "free-volume",
+                                             "void-regions") if n in self.a)
             radii = req.voids.radii
             if isinstance(radii, Mapping):
                 lacking = sorted(present - {validate_symbol(str(k))
                                             for k in radii})
                 if lacking:
                     out.append(MissingInput(
-                        "empty-spheres/free-volume", "voids.radii",
+                        who_voids, "voids.radii",
                         f"no radius for {', '.join(lacking)}"))
             elif radii == "vdw":
                 try:
                     md_order.vdw_radii_ang(self.species)
                 except ValueError as error:
-                    out.append(MissingInput("empty-spheres/free-volume",
-                                            "voids.radii", str(error)))
+                    out.append(MissingInput(who_voids, "voids.radii",
+                                            str(error)))
             elif radii not in RADII_NAMES:
-                out.append(MissingInput("empty-spheres/free-volume",
-                                        "voids.radii", f"{radii!r} is not one "
-                                        f"of {RADII_NAMES} or a map"))
+                out.append(MissingInput(who_voids, "voids.radii",
+                                        f"{radii!r} is not one of "
+                                        f"{RADII_NAMES} or a map"))
+        out.extend(self.channel_problems())
         if "conductivity" in self.a:
             try:
                 self.conductivity_charges()
@@ -2132,6 +2385,84 @@ class _Run:
                 out.append(MissingInput("nmr", "nmr.correlation",
                                         f"the model holds no {element}, the "
                                         "correlation's nucleus"))
+        return out
+
+    def channel_problems(self) -> list[MissingInput]:
+        """What the first frame shows the channel analyses cannot do: a
+        probe or a modifier the model does not hold or that is not a
+        cation here, a model without anions, a repulsion element that is
+        not a cation, user modifier cutoffs that join no modifier to an
+        anion or leave a present pair without one."""
+        ch, out = self.req.channels, []
+        present = set(self.species)
+        held = f"(it holds {', '.join(self.species)})"
+        anions = set(self.anions)
+        if "channels" in self.a:
+            probe = validate_symbol(str(ch.probe))
+            if probe not in present:
+                out.append(MissingInput("channels", "channels.probe",
+                                        f"the model holds no {probe} {held}"))
+            elif self.ox.ox[probe] <= 0:
+                out.append(MissingInput(
+                    "channels", "channels.probe",
+                    f"{probe} has oxidation state {self.ox.ox[probe]} here "
+                    f"({self.ox.source[probe]}); the probe is a cation whose "
+                    "formal valence the landscape matches, so a positive "
+                    "state is needed (ox_overrides)"))
+            if not anions:
+                out.append(MissingInput(
+                    "channels", "channels.probe",
+                    "the model holds no anion (no element with a negative "
+                    "oxidation state), so the probe has nothing to bond to"))
+            for symbol in _symbols_of(ch.repulsion_elements or ()):
+                if symbol not in present:
+                    out.append(MissingInput(
+                        "channels", "channels.repulsion_elements",
+                        f"the model holds no {symbol} {held}"))
+                elif symbol in anions:
+                    out.append(MissingInput(
+                        "channels", "channels.repulsion_elements",
+                        f"{symbol} is an anion of this model; the exclusion "
+                        "is around cations"))
+        if "modifier-density" in self.a:
+            mods = set(_symbols_of(ch.modifiers))
+            absent = sorted(mods - present)
+            if absent:
+                out.append(MissingInput(
+                    "modifier-density", "channels.modifiers",
+                    f"the model holds no {', '.join(absent)} {held}"))
+            anionic = sorted(mods & anions)
+            if anionic:
+                out.append(MissingInput(
+                    "modifier-density", "channels.modifiers",
+                    f"{', '.join(anionic)} are anions of this model "
+                    "(negative oxidation state); the modifiers are cations"))
+            if not anions:
+                out.append(MissingInput(
+                    "modifier-density", "channels.modifiers",
+                    "the model holds no anion (no element with a negative "
+                    "oxidation state) to count the modifiers around"))
+            if ch.modifier_cutoffs is not None and not absent and anions:
+                given = set()
+                for x, y in _pair_map(ch.modifier_cutoffs):
+                    if x in mods and y in anions:
+                        given.add((x, y))
+                    elif y in mods and x in anions:
+                        given.add((y, x))
+                    else:
+                        out.append(MissingInput(
+                            "modifier-density", "channels.modifier_cutoffs",
+                            f"the {x}-{y} cutoff joins no modifier "
+                            f"({', '.join(sorted(mods))}) to an anion of the "
+                            f"model ({', '.join(sorted(anions))})"))
+                lacking = [f"{m}-{x}" for m in sorted(mods)
+                           for x in sorted(anions) if (m, x) not in given]
+                if lacking:
+                    out.append(MissingInput(
+                        "modifier-density", "channels.modifier_cutoffs",
+                        f"no cutoff for {', '.join(lacking)}; every "
+                        "modifier-anion pair of the model needs one (or "
+                        "leave modifier_cutoffs out to measure them)"))
         return out
 
     def absent_elements(self) -> list[MissingInput]:
@@ -2217,7 +2548,9 @@ class _Run:
                       (_VoidConsumer, {"empty-spheres", "free-volume"}),
                       (_NetworkConsumer, {"rings", "coordination-sequences",
                                           "polyhedral-sharing", "components",
-                                          "warren-cowley"})]
+                                          "warren-cowley"}),
+                      (_ChannelConsumer, {"channels", "modifier-density",
+                                          "void-regions"})]
         for cls, names in candidates:
             if self.a & names:
                 consumer = cls(self)
@@ -2230,6 +2563,8 @@ class _Run:
         # cells before the order parameters that may read them)
         self.pass1_consumers.sort(key=lambda c: c.cost)
         self.has_frame_work = "glass" in self.a or bool(self.pass1_consumers)
+        self.p1_units = PROGRESS_UNITS_PASS1 + sum(
+            PROGRESS_UNITS_CHANNELS.get(name, 0) for name in self.a)
 
     def plan_pass1(self) -> None:
         """The pass-1 search radius and the copies each consumer keeps."""
@@ -2687,7 +3022,7 @@ class _Run:
                   "bond-valence estimated parameters (allow_estimated)":
                       bool(self.params.allow_estimated)}
         for group in ("glass", "scattering", "network", "order", "voids",
-                      "nmr", "exafs", "feff", "dynamics"):
+                      "channels", "nmr", "exafs", "feff", "dynamics"):
             method.update(_option_parameters(group, getattr(req, group)))
         notes.extend(self.model_notes)
         estimated, missing = self.tallies(self.used)
@@ -3855,6 +4190,8 @@ class _VoidConsumer(_Consumer):
         def spheres():
             result = md_order.empty_spheres(ctx.frame, self.radii,
                                             radii_source=self.radii_source)
+            # the void regions of this frame read the full result
+            self.run.empty_spheres_cache = {ctx.k: result}
             # only the radii are averaged; the tetrahedra are not kept
             self.spheres[ctx.k] = dataclasses.replace(
                 result, vertices=np.zeros((0, 4), np.int64),
@@ -3918,6 +4255,626 @@ class _VoidConsumer(_Consumer):
                 except ValueError as error:
                     out[name] = self.failed(name, error)
         return out
+
+
+# -- channels -----------------------------------------------------------------
+
+def _edges_from_triple(triple, what: str) -> np.ndarray:
+    """Bin edges first, first + step, ..., up to last (inclusive to within
+    half a step) from a (first, last, step) option; two edges at least."""
+    first, last, step = (float(v) for v in triple)
+    if step <= 0.0 or not last > first:
+        raise ValueError(f"{what}: (first, last, step) needs a step above 0 "
+                         "and last above first")
+    n = int(math.floor((last - first) / step + 1e-9)) + 1
+    edges = np.round(first + step * np.arange(max(n, 2)), 10)
+    return edges
+
+
+def _threshold_scalars(results: Sequence, used: Sequence[int], label: str,
+                       setting: str) -> dict[str, Scalar]:
+    """The Scalars ``md_channels.average_percolation_thresholds`` builds
+    (the same names, units and values), for frames whose grids differ
+    because their boxes do; ``setting`` is the landscape setting text of
+    the notes, with the per-frame grids."""
+    notes = (f"the smallest Delta at which an accessible region of {label} "
+             f"spans the axis (bisection over the grid's mismatch values); "
+             f"{setting}",)
+    out = {}
+    for k, axis in enumerate(md_channels.AXES):
+        out[axis] = Scalar(f"percolation threshold of {label} along {axis}",
+                           "v.u.", [float(r.delta_vu[k]) for r in results],
+                           frames=used, notes=notes)
+    out["any"] = Scalar(f"percolation threshold of {label}, any axis", "v.u.",
+                        [r.delta_any_vu for r in results], frames=used,
+                        notes=notes)
+    return out
+
+
+class _ChannelConsumer(_Consumer):
+    """The md_channels analyses on each frame: channels by charge (the
+    bond-valence landscape, its accessible fractions, regions and
+    percolation thresholds), modifier-density and void-regions.
+
+    Costly, so last within a frame (``cost``), and each stage reports its
+    progress and asks ``cancelled()`` between the landscape, the regions and
+    the thresholds (and between the empty spheres and their grouping): a
+    cancel made during a frame leaves that frame out of the analysis with
+    the reason. Per frame the channels analysis keeps the accessible
+    fractions, the thresholds, the region rows and the lowest mismatch, and
+    the full landscape and regions of the last frame only (a landscape is
+    17 bytes a grid point; md_channels.py, TIMINGS); the accessible-fraction
+    Series is therefore built here from the per-frame fractions, as
+    ``md_channels.average_accessible_fraction`` builds it from the
+    landscapes (``tests/test_md_analysis.py`` compares the two). The void
+    regions of every frame are kept without their label grid, the last
+    frame's with it. The modifier-anion cutoffs are the user's
+    (``channels.modifier_cutoffs``), the glass analysis's first minima
+    (pass 2, as Warren-Cowley reads them) or, without glass, those measured
+    on the first frame analysed from its own partial g(r) with the glass
+    minimum rule and applied to every frame (an average over frames needs
+    one cutoff; md_channels.average_modifier_density refuses mixed ones);
+    the minima measured on every frame are listed in a table. The empty
+    spheres of a frame are shared with the empty-spheres analysis when it
+    runs with the same radii.
+    """
+
+    names = ("channels", "modifier-density", "void-regions")
+    cost = 6
+    uses_pass2 = True
+
+    def __init__(self, run: _Run):
+        super().__init__(run)
+        o = self.req.channels
+        self.o = o
+        a = run.a
+        # by charge
+        self.probe = self.probe_ox = None
+        self.deltas = None
+        self.delta = None
+        self.repulsion = None
+        if "channels" in a:
+            self.probe = validate_symbol(str(o.probe))
+            self.probe_ox = int(run.ox.ox[self.probe])
+            self.deltas = np.array([float(v) for v in o.deltas_vu],
+                                   dtype=np.float64)
+            self.delta = float(o.delta_vu)
+            if o.repulsion_r_excl_ang is not None:
+                self.repulsion = md_channels.Repulsion(
+                    float(o.repulsion_r_excl_ang),
+                    None if o.repulsion_elements is None
+                    else frozenset(_symbols_of(o.repulsion_elements)))
+        self.fractions: dict[int, np.ndarray] = {}
+        self.thresholds: dict[int, object] = {}
+        self.region_rows: dict[int, list[dict]] = {}
+        self.region_fraction: dict[int, float] = {}
+        self.region_count: dict[int, int] = {}
+        self.lowest: dict[int, float] = {}
+        self.landscape_method: dict | None = None
+        self.landscape_notes: list[str] = []
+        self.last_landscape: tuple | None = None
+        # each frame's grid (shape, spacing): the box of an NPT run changes
+        # it, and md_channels's averages refuse landscapes of different
+        # grids as another setting, so the driver averages those itself
+        self.frame_grid: dict[int, tuple] = {}
+        # by modifier density
+        self.modifiers: tuple[str, ...] = ()
+        self.k_rich = None
+        self.mode = None
+        self.md_cut: dict | None = None
+        self.md_src: dict | None = None
+        self.md_pairs: list[tuple[str, str]] = []
+        self.measured_from: int | None = None
+        self.densities: dict[int, object] = {}
+        self.measured_rows: dict[int, list[dict]] = {}
+        self.slim_bonds: dict[int, bulk.Bonds] = {}
+        self.cut_notes: list[str] = []
+        if "modifier-density" in a:
+            self.modifiers = tuple(sorted(set(_symbols_of(o.modifiers))))
+            self.k_rich = int(o.k_rich)
+            self.md_pairs = [(m, x) for m in self.modifiers
+                             for x in run.anions]
+            if o.modifier_cutoffs is not None:
+                self.mode = "user"
+                self.md_cut, self.md_src = {}, {}
+                for (x, y), value in _pair_map(o.modifier_cutoffs).items():
+                    key = (x, y) if x in self.modifiers else (y, x)
+                    self.md_cut[key] = value
+                    self.md_src[key] = "user (channels.modifier_cutoffs)"
+            elif "glass" in a:
+                self.mode = "glass"
+            else:
+                self.mode = "measured"
+            # the bonds at v_bond give the speciation of each anion when the
+            # formers are named
+            self.needs_table = run.formers is not None
+            self.minimum = self.req.glass.minimum()
+            self.r_measure = run.glass_rdf_r_max()
+            self.dr = float(self.req.glass.rdf_dr_ang)
+        # by voids
+        self.void_probe = None
+        self.radii: dict[str, float] = {}
+        self.radii_source = ""
+        self.voids: dict[int, object] = {}
+        self.void_rows: dict[int, list[dict]] = {}
+        self.last_voids: tuple | None = None
+        self.spheres_shared = 0
+        self.spheres_own = 0
+        if "void-regions" in a:
+            self.void_probe = float(o.void_probe_radius_ang)
+            v = self.req.voids
+            if isinstance(v.radii, Mapping):
+                self.radii = {validate_symbol(str(key)): float(r)
+                              for key, r in v.radii.items()}
+                self.radii_source = str(v.radii_source)
+            elif v.radii == "zero":
+                self.radii = {s: 0.0 for s in run.species}
+                self.radii_source = "radii of 0 (the Delaunay circumspheres)"
+            else:
+                self.radii = dict(md_order.vdw_radii_ang(tuple(run.species)))
+                self.radii_source = md_order.VDW_RADII_SOURCE
+        self.frame_units = 0
+
+    # -- the search -----------------------------------------------------------
+    def md_phase(self) -> int:
+        return 2 if self.mode == "glass" else 1
+
+    def sinks(self, phase):
+        if not self.active("modifier-density") or phase != self.md_phase():
+            return []
+        if self.mode == "measured":
+            # the partial g(r) to the glass g(r) radius, then the counts
+            # within the cutoffs it gives (below that radius)
+            return [("modifier-density", self.r_measure + self.dr, False)]
+        if self.md_cut:
+            return [("modifier-density", max(self.md_cut.values()), False)]
+        return []
+
+    def may_need_pass2(self) -> bool:
+        return self.active("modifier-density") and self.mode == "glass"
+
+    def between_passes(self) -> None:
+        if self.active("modifier-density") and self.mode == "glass":
+            cutoffs, sources, notes = self.run.auto_cutoffs(self.md_pairs)
+            self.md_cut, self.md_src = cutoffs, sources
+            self.cut_notes = [f"modifier-anion cutoff: {n}" for n in notes]
+
+    # -- progress and cancel ------------------------------------------------------
+    def step(self, k: int, units: int, what: str) -> None:
+        self.frame_units += units
+        self.run.partial_progress(self.frame_units,
+                                  f"pass 1, frame {k}: {what}")
+
+    def poll(self, what: str) -> None:
+        if self.run.is_cancelled():
+            raise md_network.Cancelled(f"cancelled {what}")
+
+    # -- per frame ----------------------------------------------------------------
+    def frame(self, ctx, phase):
+        k = ctx.k
+        if phase == 1:
+            self.frame_units = 0
+            if self.active("channels"):
+                self.by_charge(ctx)
+            if self.active("void-regions"):
+                self.by_voids(ctx)
+            if self.active("modifier-density"):
+                if ctx.bonds is not None and self.run.formers is not None:
+                    b = ctx.bonds
+                    n = len(b)
+                    # the speciation reads the rows and the threshold only
+                    self.slim_bonds[k] = bulk.Bonds(
+                        cation=b.cation, anion=b.anion, image=b.image,
+                        vec_ang=np.broadcast_to(np.zeros(3), (n, 3)),
+                        d_ang=np.broadcast_to(np.zeros(1), (n,)),
+                        v_vu=np.broadcast_to(np.zeros(1), (n,)),
+                        v_bond_vu=b.v_bond_vu)
+                if self.mode != "glass":
+                    self.by_density(ctx, 1)
+            self.run.empty_spheres_cache = {}
+            return
+        if self.active("modifier-density") and self.mode == "glass" \
+                and k in self.run.used and self.md_cut:
+            self.by_density(ctx, 2)
+
+    def by_charge(self, ctx) -> None:
+        run, k, o = self.run, ctx.k, self.o
+        holder: dict = {}
+
+        def work():
+            ox_atom = run.ox.per_atom(ctx.frame.elements)
+            landscape = md_channels.bv_landscape(
+                ctx.frame, ox_atom, self.probe, self.probe_ox,
+                grid_spacing_ang=float(o.grid_spacing_ang),
+                r_cut_ang=float(o.r_cut_ang), params=run.params,
+                repulsion=self.repulsion)
+            self.step(k, 26, f"channels: landscape of {landscape.probe_label} "
+                             f"on {landscape.n_points} grid points done")
+            self.poll("after the landscape, before the regions")
+            fractions = md_channels.accessible_fraction(landscape, self.deltas)
+            regions = md_channels.accessible_regions(landscape, self.delta)
+            self.step(k, 1, f"channels: {regions.n_regions} accessible "
+                            f"regions at Delta {self.delta:g} v.u. labelled")
+            self.poll("after the regions, before the percolation thresholds")
+            thresholds = md_channels.percolation_thresholds(landscape)
+            self.step(k, 3, "channels: percolation thresholds found")
+            holder.update(landscape=landscape, fractions=fractions,
+                          regions=regions, thresholds=thresholds)
+        if not self.attempt("channels", k, work):
+            return
+        landscape, regions = holder["landscape"], holder["regions"]
+        self.fractions[k] = np.asarray(holder["fractions"], dtype=np.float64)
+        self.thresholds[k] = holder["thresholds"]
+        self.region_rows[k] = [{"frame": k, **row} for row in regions.as_rows()]
+        self.region_fraction[k] = float(regions.accessible_fraction)
+        self.region_count[k] = int(regions.n_regions)
+        self.lowest[k] = float(landscape.sorted_mismatch()[0])
+        self.frame_grid[k] = (tuple(landscape.shape),
+                              tuple(landscape.spacing_ang))
+        if self.landscape_method is None:
+            self.landscape_method = dict(landscape.method_parameters)
+            self.landscape_notes = [
+                n for n in landscape.notes
+                if not n.startswith("lowest mismatch on the grid")]
+            self.landscape_notes.append(
+                f"the landscape notes above are those of frame {k}, the "
+                "first analysed; the lowest mismatch of each frame is a "
+                "descriptor")
+        self.last_landscape = (k, landscape, regions)
+
+    def by_voids(self, ctx) -> None:
+        run, k, o = self.run, ctx.k, self.o
+        holder: dict = {}
+
+        def work():
+            spheres = run.empty_spheres_cache.get(k)
+            shared = (spheres is not None
+                      and spheres.radii_source == self.radii_source
+                      and {str(s): float(r) for s, r in
+                           spheres.radii_ang.items()} == self.radii)
+            if not shared:
+                spheres = md_order.empty_spheres(
+                    ctx.frame, self.radii, radii_source=self.radii_source)
+            self.step(k, 3, f"void-regions: {len(spheres)} empty spheres"
+                            + (" (shared with empty-spheres)" if shared
+                               else ""))
+            self.poll("after the empty spheres, before their grouping")
+            regions = md_channels.void_regions(
+                ctx.frame, spheres, probe_radius_ang=self.void_probe,
+                grid_spacing_ang=float(o.grid_spacing_ang),
+                lining_distance_ang=float(o.lining_distance_ang))
+            self.step(k, 5, f"void-regions: {regions.n_regions} void regions")
+            holder.update(regions=regions, shared=shared)
+        if not self.attempt("void-regions", k, work):
+            return
+        regions = holder["regions"]
+        if holder["shared"]:
+            self.spheres_shared += 1
+        else:
+            self.spheres_own += 1
+        self.void_rows[k] = [{"frame": k, **row} for row in regions.as_rows()]
+        # the label grid is kept for the last frame only
+        self.voids[k] = dataclasses.replace(
+            regions, label_grid=np.zeros((0, 0, 0), dtype=np.int64))
+        self.last_voids = (k, regions)
+
+    def by_density(self, ctx, phase: int) -> None:
+        run, k = self.run, ctx.k
+        sink = self.sink_of.get((phase, "modifier-density"))
+        if sink is None:
+            return
+        holder: dict = {}
+
+        def work():
+            blocks = sink.blocks
+            cut, src = self.md_cut, self.md_src
+            if self.mode == "measured":
+                measured = md_channels.measure_cutoffs(
+                    ctx.frame, blocks, self.md_pairs, self.minimum,
+                    r_max_ang=self.r_measure, dr_ang=self.dr)
+                rows = []
+                for pair in self.md_pairs:
+                    key = pair if pair in measured.minima else pair[::-1]
+                    found = measured.minima[key]
+                    floor = found.floor_r_ang or (None, None)
+                    rows.append({"frame": k, "pair": f"{pair[0]}-{pair[1]}",
+                                 "first minimum (Å)": found.r_ang,
+                                 "floor from (Å)": floor[0],
+                                 "floor to (Å)": floor[1],
+                                 "method": found.method,
+                                 "no minimum because": found.reason or None})
+                self.measured_rows[k] = rows
+                if cut is None:
+                    if measured.missing:
+                        raise ValueError(
+                            "no first minimum for " + "; ".join(
+                                f"{a}-{b}: {why}" for (a, b), why in
+                                sorted(measured.missing.items()))
+                            + " (channels.modifier_cutoffs gives the cutoffs "
+                            "explicitly, or add glass to the analyses)")
+                    cut = {}
+                    src = {}
+                    for pair in self.md_pairs:
+                        key = pair if pair in measured.cutoffs_ang \
+                            else pair[::-1]
+                        cut[pair] = float(measured.cutoffs_ang[key])
+                        src[pair] = measured.cutoff_sources[key]
+                    self.md_cut, self.md_src = cut, src
+                    self.measured_from = k
+            bonds = ctx.bonds if phase == 1 else self.slim_bonds.get(k)
+            with_speciation = bonds is not None and run.formers is not None
+            holder["density"] = md_channels.modifier_density(
+                ctx.frame, blocks, modifiers=self.modifiers,
+                anions=run.anions, cutoffs_ang=cut, cutoff_sources=src,
+                k_rich=self.k_rich,
+                bonds=bonds if with_speciation else None,
+                formers=run.formers if with_speciation else None)
+        if self.attempt("modifier-density", k, work):
+            self.densities[k] = holder["density"]
+            if phase == 1:
+                self.step(k, 1, "modifier-density: counts done")
+
+    # -- at the end ----------------------------------------------------------------
+    def finish(self):
+        out = {}
+        if self.active("channels"):
+            out["channels"] = self.finish_channels()
+        if self.active("modifier-density"):
+            out["modifier-density"] = self.finish_density()
+        if self.active("void-regions"):
+            out["void-regions"] = self.finish_voids()
+        return out
+
+    def finish_channels(self) -> AnalysisOutput:
+        name = "channels"
+        used = sorted(self.used[name])
+        if not used or self.last_landscape is None:
+            return self.output(name, {}, None)
+        last_k, landscape, regions = self.last_landscape
+        label = landscape.probe_label
+        o = self.o
+        grids = {self.frame_grid[k] for k in used}
+        one_grid = len(grids) == 1
+        landscape_method = dict(self.landscape_method)
+        grid_notes: list[str] = []
+        if not one_grid:
+            landscape_method["grid shape"] = "; ".join(
+                f"frame {k}: {' x '.join(str(n) for n in self.frame_grid[k][0])}"
+                for k in used)
+            landscape_method["grid spacing (Å)"] = "; ".join(
+                f"frame {k}: " + ", ".join(f"{v:.4g}" for v in
+                                           self.frame_grid[k][1])
+                for k in used)
+            grid_notes.append(
+                "the box changes between the frames used, so the grid of "
+                f"{o.grid_spacing_ang:g} Å asked for (channels.grid_spacing_ang) "
+                "has another shape and spacing on each frame (stated per "
+                "frame); the accessible fractions and the percolation "
+                "thresholds are each frame's own, on its own grid, and are "
+                "averaged over the frames here as such "
+                "(md_channels.average_percolation_thresholds takes one grid "
+                "shape only)")
+        method = {**landscape_method,
+                  "Delta (v.u.)": self.delta,
+                  "deltas (v.u.)": tuple(float(v) for v in self.deltas),
+                  **_option_parameters("channels", o)}
+        setting = "; ".join(f"{k} = {v}" for k, v in landscape_method.items())
+        notes = list(self.landscape_notes) + grid_notes + [
+            f"the Landscape and AccessibleRegions kept on the output (raw) "
+            f"are those of frame {last_k}, the last frame analysed; the "
+            "grids of the other frames were not kept (17 bytes a grid "
+            "point), their fractions, thresholds and region rows were",
+            "the accessible fraction at each Delta, the percolation "
+            "thresholds and the regions are averaged or listed over the "
+            "frames used; no energy, barrier or conductivity is computed "
+            "from the landscape"]
+
+        def work():
+            tables: dict[str, object] = {}
+            series = Series.from_frames(
+                self.deltas, [self.fractions[k] for k in used],
+                name=f"accessible volume fraction of {label}",
+                axis_name="delta_vu", axis_unit="v.u.", value_unit="1",
+                frames=used,
+                notes=(f"accessible volume fraction: non-excluded grid points "
+                       f"with |V - {landscape.target_vu:g}| <= Delta over all "
+                       f"grid points; {setting}",))
+            tables[series.name] = series
+            thresholds = [self.thresholds[k] for k in used]
+            if one_grid:
+                averaged = md_channels.average_percolation_thresholds(
+                    thresholds, frames=used)
+            else:
+                averaged = _threshold_scalars(thresholds, used, label, setting)
+            for scalar in averaged.values():
+                tables[scalar.name] = scalar
+            at = f"at Delta {self.delta:g} v.u."
+            scalars = [
+                Scalar(f"accessible volume fraction of {label} {at}", "1",
+                       [self.region_fraction[k] for k in used], frames=used,
+                       notes=(f"the fraction of the grid points with mismatch "
+                              f"<= {self.delta:g} v.u. (channels.delta_vu); "
+                              + setting,)),
+                Scalar(f"accessible regions of {label} {at}", "1",
+                       [float(self.region_count[k]) for k in used],
+                       frames=used,
+                       notes=(f"connected regions of the accessible points "
+                              f"at Delta {self.delta:g} v.u.; " + setting,)),
+                Scalar(f"lowest mismatch of {label} on the grid", "v.u.",
+                       [self.lowest[k] for k in used], frames=used,
+                       notes=(f"the smallest |V - {landscape.target_vu:g}| "
+                              "over the non-excluded grid points of each "
+                              "frame; " + setting,))]
+            for scalar in scalars:
+                tables[scalar.name] = scalar
+            rows = tuple(row for k in used for row in self.region_rows[k])
+            table_name = f"accessible regions {at}"
+            tables[table_name] = Table(
+                table_name, rows,
+                (f"one row per connected accessible region per frame at "
+                 f"Delta {self.delta:g} v.u., regions numbered largest first "
+                 f"within a frame; {setting}",)
+                + tuple(regions.notes))
+            return tables
+        try:
+            tables = self.timed(name, work)
+        except ValueError as error:
+            return self.failed(name, error)
+        provenance = self.run.provenance(
+            used, self.skipped_with_run(name), method=method, notes=notes)
+        raw = ChannelsResult(last_frame=last_k, landscape=landscape,
+                             regions=regions,
+                             thresholds={k: self.thresholds[k] for k in used},
+                             fractions={k: self.fractions[k] for k in used},
+                             deltas_vu=self.deltas)
+        return self.output(name, tables, provenance, raw=raw, notes=notes)
+
+    def finish_density(self) -> AnalysisOutput:
+        name = "modifier-density"
+        used = sorted(self.used[name])
+        if not used:
+            if self.mode == "glass" and not self.md_cut and self.run.used:
+                reason = ("no modifier-anion cutoff: " + "; ".join(
+                    self.cut_notes) if self.cut_notes else
+                    "the glass analysis gave no cutoff")
+                return AnalysisOutput(name, {}, None, error=reason,
+                                      seconds=self.seconds[name])
+            return self.output(name, {}, None)
+        first = self.densities[used[0]]
+        o = self.o
+        source = {
+            "user": "channels.modifier_cutoffs (given)",
+            "glass": "the glass analysis of this request: the first minimum "
+                     "of the frame-averaged partial g(r) (pass 2)",
+            "measured": f"those measured on frame {self.measured_from}, the "
+                        "first frame analysed, from its own partial g(r) "
+                        f"({self.minimum.describe()}), applied to every "
+                        "frame",
+        }[self.mode]
+        method = {**first.method_parameters,
+                  "modifier-anion cutoff source": source,
+                  **_option_parameters("channels", o)}
+        if self.mode == "measured":
+            m = self.minimum
+            method.update({
+                "first minimum": m.describe(),
+                "first minimum rule": m.rule,
+                "first minimum smooth_sigma_ang": m.smooth_sigma_ang,
+                "first minimum flat_rule": m.flat_rule,
+                "first minimum margin_std_errors": m.margin_std_errors,
+                "g(r) radius for the first minimum (Å)": self.r_measure,
+                "g(r) step (Å)": self.dr})
+        notes = [first.notes[0], f"modifier-anion cutoffs from {source}"]
+        if self.mode == "measured":
+            notes.append(
+                "an average over frames needs one cutoff per pair "
+                "(md_channels.average_modifier_density), so the cutoffs of "
+                f"frame {self.measured_from} count on every frame; the first "
+                "minimum of each frame's own g(r) is listed in 'modifier "
+                "cutoffs measured per frame', and the glass analysis in the "
+                "same request would give the first minimum of the "
+                "frame-averaged g(r) instead")
+        notes += self.cut_notes
+        notes += [n for n in first.notes if n.startswith("speciation by")
+                  or n.startswith("formers were given")]
+        notes.append(f"the engine notes above are those of frame {used[0]}, "
+                     "the first analysed; the counts of every frame are in "
+                     "the tables")
+
+        def work():
+            tables: dict[str, object] = {}
+            for value in md_channels.average_modifier_density(
+                    [self.densities[k] for k in used], frames=used).values():
+                tables[value.name] = value
+            rows = tuple(row for k in used
+                         for row in ({"frame": k, **r}
+                                     for r in self.densities[k].as_rows()))
+            tables["modifier clusters"] = Table(
+                "modifier clusters", rows,
+                ("one row per cluster of modifier-rich anions and their "
+                 "modifiers per frame, largest first within a frame; "
+                 + first.notes[0],))
+            if self.measured_rows:
+                frames = sorted(self.measured_rows)
+                tables["modifier cutoffs measured per frame"] = Table(
+                    "modifier cutoffs measured per frame",
+                    tuple(row for k in frames for row in self.measured_rows[k]),
+                    (f"the first minimum of each frame's own partial g(r) "
+                     f"({self.minimum.describe()}, to {self.r_measure:g} Å "
+                     f"in steps of {self.dr:g} Å); the counts use those of "
+                     f"frame {self.measured_from}",))
+            return tables
+        try:
+            tables = self.timed(name, work)
+        except ValueError as error:
+            return self.failed(name, error)
+        with_speciation = first.speciation is not None
+        provenance = self.run.provenance(
+            used, self.skipped_with_run(name), method=method, notes=notes,
+            bonds=with_speciation, formers=with_speciation,
+            cutoffs=dict(first.cutoffs_ang), sources=dict(first.cutoff_sources))
+        return self.output(name, tables, provenance,
+                           raw={k: self.densities[k] for k in used},
+                           notes=notes)
+
+    def finish_voids(self) -> AnalysisOutput:
+        name = "void-regions"
+        used = sorted(self.used[name])
+        if not used or self.last_voids is None:
+            return self.output(name, {}, None)
+        last_k, regions = self.last_voids
+        first = self.voids[used[0]]
+        o = self.o
+        method = {**first.method_parameters,
+                  **_option_parameters("channels", o),
+                  "radii (Å)": tuple(f"{s}={r:g}" for s, r in
+                                     self.radii.items()),
+                  "radii source": self.radii_source,
+                  "empty spheres shared with the empty-spheres analysis "
+                  "(frames)": self.spheres_shared,
+                  "empty spheres measured here (frames)": self.spheres_own}
+        volume_edges = _edges_from_triple(o.volume_edges_ang3,
+                                          "channels.volume_edges_ang3")
+        elongation_edges = _edges_from_triple(o.elongation_edges,
+                                              "channels.elongation_edges")
+        notes = [n for n in first.notes if not n.startswith("void spheres:")]
+        notes += [
+            f"the VoidRegions kept on the output (raw) are those of frame "
+            f"{last_k}, the last frame analysed, with their label grid; the "
+            "other frames' regions are kept without it",
+            f"histogram edges: region union volume {volume_edges[0]:g} to "
+            f"{volume_edges[-1]:g} Å^3 in steps of {o.volume_edges_ang3[2]:g} "
+            f"(channels.volume_edges_ang3), elongation {elongation_edges[0]:g} "
+            f"to {elongation_edges[-1]:g} in steps of {o.elongation_edges[2]:g} "
+            "(channels.elongation_edges); values beyond the edges are counted "
+            "in n_below and n_above",
+            f"the engine notes above are those of frame {used[0]}, the first "
+            "analysed; the counts of every frame are in the tables"]
+
+        def work():
+            tables: dict[str, object] = {}
+            for value in md_channels.average_void_regions(
+                    [self.voids[k] for k in used],
+                    volume_edges_ang3=volume_edges,
+                    elongation_edges=elongation_edges, frames=used).values():
+                tables[value.name] = value
+            rows = tuple(row for k in used for row in self.void_rows[k])
+            tables["void regions"] = Table(
+                "void regions", rows,
+                ("one row per void region per frame, largest union volume "
+                 "first within a frame; " + "; ".join(
+                     f"{k} = {v}" for k, v in first.method_parameters.items()
+                     if k != "radii (Å)"),))
+            return tables
+        try:
+            tables = self.timed(name, work)
+        except ValueError as error:
+            return self.failed(name, error)
+        provenance = self.run.provenance(
+            used, self.skipped_with_run(name), method=method, notes=notes)
+        raw = VoidRegionsResult(last_frame=last_k, regions=regions,
+                                per_frame={k: self.voids[k] for k in used})
+        return self.output(name, tables, provenance, raw=raw, notes=notes)
 
 
 # -- the network --------------------------------------------------------------

@@ -494,3 +494,112 @@ def test_python_m_facet_md_imports_no_qt():
                             env=dict(os.environ, PYTHONIOENCODING="utf-8"))
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().endswith("CLEAN")
+
+
+# ---------------------------------------------------------------------------
+# the channel analyses from the command line
+# ---------------------------------------------------------------------------
+
+def test_analyses_lists_the_channel_analyses_and_their_inputs():
+    listing = run("analyses")
+    assert listing.returncode == cli.EXIT_OK
+    for text in ("  channels (per frame)",
+                 "needs: channels.delta_vu, channels.deltas_vu, channels.probe",
+                 "  modifier-density (per frame)",
+                 "needs: channels.k_rich, channels.modifiers",
+                 "  void-regions (per frame)",
+                 "needs: channels.void_probe_radius_ang, voids.radii",
+                 "per 10 000 atoms per frame"):
+        assert text in listing.stdout, text
+    template = run("template")
+    spec = tomllib.loads(template.stdout)
+    assert spec["channels"]["grid_spacing_ang"] == 0.3
+    assert spec["channels"]["r_cut_ang"] == 6.0
+    assert "probe" not in spec["channels"] and "k_rich" not in spec["channels"]
+    request = cli.request_from_mapping(spec)
+    assert request.channels.probe is None
+
+
+def test_set_values_of_the_channel_options_are_typed():
+    """Lists as comma-separated values, a Delta list as first:last:step, a
+    cutoff map as pair=value."""
+    request = cli.request_from_mapping({
+        "channels": {"probe": "Na", "modifiers": "Na,Ca", "k_rich": "3",
+                     "delta_vu": "0.3", "deltas_vu": "0.05:1.0:0.05",
+                     "modifier_cutoffs": "Na-O=3.0,Ca-O=3.2",
+                     "volume_edges_ang3": "0,100,2",
+                     "repulsion_elements": "Si"},
+        "dynamics": {"lag_t_ps": "1,2.5"}})
+    c = request.channels
+    assert c.probe == "Na" and c.modifiers == ("Na", "Ca") and c.k_rich == 3
+    assert c.delta_vu == 0.3
+    assert len(c.deltas_vu) == 20
+    assert c.deltas_vu[0] == 0.05 and c.deltas_vu[-1] == 1.0
+    assert c.deltas_vu[2] == 0.15
+    assert c.modifier_cutoffs == {("Na", "O"): 3.0, ("Ca", "O"): 3.2}
+    assert c.volume_edges_ang3 == (0.0, 100.0, 2.0)
+    assert c.repulsion_elements == ("Si",)
+    assert request.dynamics.lag_t_ps == (1.0, 2.5)
+    assert cli.request_from_mapping(
+        {"channels": {"deltas_vu": "0.1,0.2"}}).channels.deltas_vu == (0.1, 0.2)
+    with pytest.raises(cli.UsageError, match="first:last:step"):
+        cli.request_from_mapping({"channels": {"deltas_vu": "0.1:0.5"}})
+    with pytest.raises(cli.UsageError, match="not a whole number"):
+        cli.request_from_mapping({"channels": {"k_rich": "2.5"}})
+
+
+def test_analyse_runs_the_channel_analyses_on_the_glass_file(tmp_path):
+    """The five-atom glass file, a 1 Å grid: the three analyses write their
+    CSV files with every method parameter in the header."""
+    folder = tmp_path / "r"
+    result = run("analyse", MD / "glass.extxyz", "--only",
+                 "channels,modifier-density,void-regions",
+                 "--set", "channels.probe=Na",
+                 "--set", "channels.modifiers=Na",
+                 "--set", "channels.k_rich=1",
+                 "--set", "channels.delta_vu=0.3",
+                 "--set", "channels.deltas_vu=0.1:0.5:0.1",
+                 "--set", "channels.grid_spacing_ang=1",
+                 "--set", "channels.modifier_cutoffs=Na-O=3.0",
+                 "--set", "channels.void_probe_radius_ang=0.5",
+                 "--set", "voids.radii=vdw",
+                 "--out", folder, "--quiet")
+    assert result.returncode == cli.EXIT_OK, result.stdout + result.stderr
+    for name in ("channels", "modifier-density", "void-regions"):
+        assert f"  {name}" in result.stdout, name
+    with open(folder / "index.csv", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(line for line in handle
+                                   if not line.startswith("#")))
+    assert {row["analysis"] for row in rows} == \
+        {"channels", "modifier-density", "void-regions"}
+    fractions = folder / "channels__accessible_volume_fraction_of_Na1+.csv"
+    assert fractions.exists()
+    header = fractions.read_text(encoding="utf-8")
+    assert "channels.deltas_vu = (0.1, 0.2, 0.3, 0.4, 0.5)" in header
+    assert "channels.grid_spacing_ang = 1.0" in header
+    assert "Delta (v.u.) = 0.3" in header
+    assert (folder / "void-regions__void_regions.csv").exists()
+    assert (folder / "modifier-density__modifier_clusters.csv").exists()
+    names = {row["descriptor"] for row in rows}
+    assert "percolation threshold of Na1+ along a" in names
+    assert "modifier count per anion (Na around O)" in names
+    assert "void region union volume" in names
+
+
+def test_channel_analyses_without_their_inputs_exit_2(tmp_path):
+    result = run("analyse", MD / "glass.extxyz", "--only",
+                 "channels,modifier-density,void-regions", "--out",
+                 tmp_path / "r")
+    assert result.returncode == cli.EXIT_USAGE
+    for name in ("channels.probe", "channels.deltas_vu", "channels.delta_vu",
+                 "channels.modifiers", "channels.k_rich",
+                 "channels.void_probe_radius_ang", "voids.radii"):
+        assert name in result.stderr, name
+    assert not (tmp_path / "r").exists()
+    absent = run("analyse", MD / "glass.extxyz", "--only", "channels",
+                 "--set", "channels.probe=Al", "--set", "channels.delta_vu=0.3",
+                 "--set", "channels.deltas_vu=0.1,0.2", "--out",
+                 tmp_path / "s")
+    assert absent.returncode == cli.EXIT_USAGE
+    assert "the model holds no Al" in absent.stderr
+    assert not (tmp_path / "s").exists()

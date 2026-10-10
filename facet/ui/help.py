@@ -484,6 +484,11 @@ line to move the bond threshold; everything above follows it.</p>
 <p {note}>Both splitters can be dragged, and the docks can be undocked or
 closed. The window remembers nothing between runs, so a layout you liked has to
 be set up again — that is a limitation, not a preference.</p>
+<h2>An MD model</h2>
+<p>When the row selected in the Structures dock is an MD model, the same
+five regions show the Model workspace instead: an Elements dock, the frame
+stepper, the frame or a figure, the threshold strip, and the Setup, Results,
+Highlight and Notes tabs. See <i>MD models and the Model workspace</i>.</p>
 """),
 
         ("site", "Reading the Site tab", f"""
@@ -843,7 +848,8 @@ Theme tab. The separation is an angle rather than a distance, so the depth
 survives zooming.</p>
 """),
 
-        (MD_SECTION, "MD models", _md_section_html(note)),
+        (MD_SECTION, "MD models and the Model workspace",
+         _md_section_html(note)),
 
         ("shortcuts", "Keyboard and mouse", """
 <h1>Keyboard and mouse</h1>
@@ -873,8 +879,10 @@ survives zooming.</p>
 <p>A drag that moves more than a few pixels is a rotation, not a click, so
 turning the structure and releasing over an atom does not select it.</p>
 <p>Files can be dropped onto the window, one or many. An MD model or
-trajectory among them opens in a Model window of its own (see <i>MD
-models</i>).</p>
+trajectory among them is listed in the Structures dock and opens the Model
+workspace (see <i>MD models</i>), where <b>Page Down</b> / <b>Page Up</b>,
+<b>Home</b> and <b>End</b> step through the frames and <b>H</b> opens the
+Highlight tab.</p>
 """),
 
         ("limits", "What FACET does not do", f"""
@@ -1057,11 +1065,54 @@ def _md_analyses_rows() -> str:
     return "".join(rows)
 
 
+def _md_presets_rows() -> str:
+    """One row per preset of the Setup page, from ``md_presets`` itself."""
+    try:
+        from ..core import md_presets
+
+        presets = md_presets.PRESETS
+    except Exception as error:        # a build without the MD engine
+        return (f"<tr><td colspan=2>The presets could not be loaded "
+                f"({_esc(error)}).</td></tr>")
+    return "".join(f"<tr><td width='28%'><b>{_esc(p.name)}</b></td>"
+                   f"<td>{_esc(p.description)}</td></tr>" for p in presets)
+
+
+def _md_questions_rows() -> str:
+    """The Setup tree's groups, each with its analyses, from the page."""
+    try:
+        from .md_setup import ANALYSES_BY_QUESTION
+
+        groups = ANALYSES_BY_QUESTION
+    except Exception as error:        # a build without the Model workspace
+        return (f"<tr><td colspan=2>The Setup tree could not be loaded "
+                f"({_esc(error)}).</td></tr>")
+    return "".join(
+        f"<tr><td width='28%'><b>{_esc(group)}</b></td><td>"
+        + ", ".join(f"{_esc(text)} (<code>{_esc(name)}</code>)"
+                    for name, text in members) + "</td></tr>"
+        for group, members in groups)
+
+
+# Where F1 opens the MD section for each tab of the Model workspace (and for
+# the read panel): the anchors of _md_section_html.
+MD_ANCHORS = {"Setup": "md-setup", "Results": "md-results",
+              "Highlight": "md-highlight", "Notes": "md-notes",
+              "read-options": "md-open"}
+
+
+def md_anchor_for(tab: str) -> str:
+    """The anchor of the MD section that documents ``tab`` ('' when none)."""
+    return MD_ANCHORS.get(str(tab), "")
+
+
 def _md_section_html(note: str) -> str:
-    """The manual's MD models section: what opens, how, what a run needs,
-    every analysis, the threshold, export, the command line, and what is
-    not done. Numbers come from the code (the thresholds, the mass
-    tolerance, the ddof of the spread)."""
+    """The manual's MD models section: what opens and how, the Model
+    workspace tab by tab (Setup with its presets and its tree by question,
+    Results, Highlight with its rules and channels, Notes), the frames and
+    the threshold strip, the Model menu, export, the command line, and what
+    is not done. Numbers come from the code (the thresholds, the mass
+    tolerance, the ddof of the spread, the atoms-only limit)."""
     try:
         from ..core import md_readers, md_stats
 
@@ -1077,20 +1128,40 @@ def _md_section_html(note: str) -> str:
     except Exception:
         former_readers, no_formers = "the network analyses", "none"
     try:
-        from .md_workspace import ATOMS_ONLY_ABOVE
+        from .md_workspace import ATOMS_ONLY_ABOVE, CLOSE_WAIT_MS
 
         atoms_only = f"{ATOMS_ONLY_ABOVE:d}"
-    except Exception:                 # the Model window not in this build
-        atoms_only = "a few thousand"
+        close_wait = f"{CLOSE_WAIT_MS / 1000:g}"
+    except Exception:                 # the workspace not in this build
+        atoms_only, close_wait = "a few thousand", "a few"
+    try:
+        from .md_highlight import (DIM_ATOM_RADIUS, DIM_BOND_RADIUS,
+                                   DIM_KEEP)
+
+        dim = (f"{100 * DIM_KEEP:.0f} % of its colour over the background, "
+               f"{100 * DIM_ATOM_RADIUS:.0f} % of its radius (a bond "
+               f"{100 * DIM_BOND_RADIUS:.0f} %)")
+    except Exception:
+        dim = "a fraction of its colour and radius"
     return f"""
-<h1>MD models</h1>
+<h1>MD models and the Model workspace</h1>
 <p>FACET reads the models and trajectories that molecular-dynamics programs
 write and measures them: coordination by bond valence and by distance, the
 network (Q<sup><i>n</i></sup>, speciation, rings, connectivity), scattering,
 local order, spectroscopy and dynamics. Each descriptor is measured on every
 frame chosen and reported as the mean over those frames with its spread,
 alongside the provenance that produced it. FACET runs no simulation.</p>
+<p>A model is listed in the <b>Structures</b> dock beside the crystals, on
+two lines (its name; its atoms and frames). Selecting it switches the window
+to the <b>Model workspace</b>: the Sites dock becomes an <b>Elements</b>
+dock, the toolbar steps through the frames, the centre shows the frame or a
+figure, the strip along the bottom is the frame's threshold staircase, and
+the right column holds four tabs, <b>Setup</b>, <b>Results</b>,
+<b>Highlight</b> and <b>Notes</b>. Selecting a crystal row brings the crystal
+workspace back; both keep their state. <b>F1</b> opens this section at the
+part that matches the tab shown.</p>
 
+<a name="md-open"></a>
 <h2>What opens as an MD model</h2>
 <p>A file is recognised by its content, whatever its name: a LAMMPS dump saved
 as <code>.txt</code> opens as a dump, and a CIF opens as a crystal whatever it
@@ -1107,9 +1178,8 @@ or typed in; no box is invented.</p>
 
 <h2>Opening one</h2>
 <ul>
-<li><b>Drop it</b> on the crystal window. It opens in a <b>Model window</b> of
-its own, never in the crystal window's 3D view or its tabs. CIFs dropped with
-it load in the crystal window as before.</li>
+<li><b>Drop it</b> on the window. It is listed in the Structures dock as a
+model and read at once; CIFs dropped with it load as crystals, as before.</li>
 <li><i>File &rsaquo; Open MD model&hellip;</i> lists every MD format above.
 <i>File &rsaquo; Open&hellip;</i> takes MD files too, under <i>All
 files</i>.</li>
@@ -1120,54 +1190,105 @@ order of their names: digits compare as numbers, so dump.20 comes before
 dump.100.</li>
 <li>Files dropped together are one model only when their format writes one
 snapshot per file (LAMMPS <code>dump cfg</code>) and they share a folder and
-a name up to its digits. Any other files open one window each, so two runs
-named <code>glass_300K</code> and <code>glass_600K</code> are never averaged
-into one.</li>
+a name up to its digits. Any other files are listed one model each, so two
+runs named <code>glass_300K</code> and <code>glass_600K</code> are never
+averaged into one.</li>
 <li>From the command line, <code>py -3.11 -m facet glass.lammpstrj</code>
-opens FACET with that model in a Model window.</li>
+opens FACET with that model listed and shown.</li>
+<li><i>File &rsaquo; Save session</i> records a model as its file, the read
+options it was read with and the request of its Setup, never a result; the
+session reopens the model and fills Setup again.</li>
 </ul>
 
-<h2>Type maps: which element each atom is</h2>
+<h2>Type maps and the read panel</h2>
 <p>LAMMPS numbers its atom types, and a number is not an element. An element
 is taken only from what a file states: an element column, type labels, or a
 mass that matches one element's standard atomic weight to within {mass_tol}
 amu (a LAMMPS data file's <code>Masses</code> section names the types of a
 dump of the same run). A whole-number mass names no element, since force
 fields often round masses to integers. Nothing is guessed: a type that no
-source names stays unnamed until an element is given for it. The Model
-window then shows the reader's message in full and, for each type, the
-reader's evidence (its label, element column or mass, and its atoms in the
-first frame), and asks for the element; the masses can also come from a
-LAMMPS data file of the same run. A topology (DCD, XTC, AMBER NetCDF) and a
-box (a plain XYZ) are asked for the same way, with no element filled in for
-the user.</p>
+source names stays unnamed until an element is given for it. The centre then
+shows the <b>read panel</b>: the reader's message in full and, for each type,
+the reader's evidence (its label, element column or mass, and its atoms in
+the first frame), with a field for the element; the masses can also come
+from a LAMMPS data file of the same run, offered with a button when it was
+dropped with the dump. A topology (DCD, XTC, AMBER NetCDF) and a box (a
+plain XYZ) are asked for the same way, with no element filled in. <i>Read
+again</i> reads the file with what was typed; the read options stay under
+<i>Setup &rsaquo; More&hellip;</i> afterwards, to read it again with
+others.</p>
 
-<h2>Oxidation states</h2>
-<p>They are inputs of the model, never resolved from the geometry: each
-element takes its common state unless another is given, and an element with
-no common state needs one. They decide which atoms are cations and which
-anions in the bond-valence split, and which parameters apply.</p>
+<a name="md-setup"></a>
+<h2>The Setup tab</h2>
+<p>The few inputs a run usually needs, in one column, over the complete set
+of options (<i>More&hellip;</i> and the fields a greyed analysis names).</p>
+<p><b>Preset.</b> A preset is what a user who opens a glass model and asks one
+question would tick by hand: the analyses that answer it, the network formers
+among the cations present, and the method inputs those analyses require and
+have no default for (the ring criterion and largest ring, the void radii, the
+free-volume probe and grid, the scattering window and radiations). Nothing
+physical is filled in: no timestep, no temperature, no charges, no measured
+curve, no absorber. What a preset needs and cannot give is said back as a
+note beside the box. Every value stays editable; any edit flips the preset to
+<i>Custom</i>. The same ten are under <i>Model &rsaquo; Presets</i>.</p>
+<table cellpadding="3" width="100%">
+{_md_presets_rows()}
+</table>
+<p><b>Composition</b> is frame 0 as read. <b>Formers</b> are chips, one per
+cation present, none ticked at first: FACET assumes no network former. The
+analyses that read formers ({_esc(former_readers)}) stay greyed, with the
+reason beside them, until formers are ticked; <i>No former to name</i> under
+More&hellip; (<code>{_esc(no_formers)}</code>) runs the glass analysis
+without the former-dependent descriptors. <b>Frames</b> are first, last and
+every n-th readable frame; the line under them states the frames, their
+timesteps and whether the file holds frame times. <b>Threshold</b> is
+<i>v</i><sub>bond</sub>; <i>v</i><sub>list</sub>, the parameter file, the
+time axis and the oxidation states (model inputs, never resolved from the
+geometry) are under More&hellip;. A preset that needs a time axis the file
+lacks shows the timestep field in the column.</p>
+<p><b>Analyses, by the question they answer.</b> A tick runs an analysis; a
+group's box ticks its children. The second column says what a runnable
+analysis runs with (its method inputs, and the analyses whose results it
+reads) or what a greyed one needs; double-clicking an analysis goes to its
+inputs, in a small dialog when the page itself does not show them.</p>
+<table cellpadding="3" width="100%">
+{_md_questions_rows()}
+</table>
+<p><b>Run analyses</b> (Ctrl+R) sits under the column with the line that says
+what will run, or what the run still needs. While it runs, a progress bar
+shows the engine's stage and <b>Cancel</b> stops it after the frame in
+progress; what was finished is kept as a cancelled run, and the last
+complete run is never replaced by it.</p>
 
-<h2>Network formers</h2>
-<p>FACET assumes no network former. The picker lists the cations present in
-the model with none ticked, and the analyses that read formers
-({_esc(former_readers)}) stay disabled, with the reason shown beside them,
-until formers are ticked. Stating that the model has none
-(<i>No former to name</i>, <code>{_esc(no_formers)}</code>) runs the glass
-analysis only, without the former-dependent descriptors (speciation,
-Q<sup><i>n</i></sup>, connectivity); the network analyses (rings,
-coordination sequences, polyhedral sharing, components) still need named
-formers, or their graph elements, centres and T elements given explicitly,
-and say so beside their boxes. No timestep, temperature, charge, NMR
-coefficient or radius is assumed either.</p>
+<h2>Oxidation states and formers</h2>
+<p>Oxidation states are inputs of the model: each element takes its common
+state unless another is given, and an element with no common state needs
+one. They decide which atoms are cations and which anions in the bond-valence
+split, and which parameters apply. The network analyses (rings, coordination
+sequences, polyhedral sharing, components) need named formers, or their graph
+elements, centres and T elements given explicitly, and say so beside their
+boxes. No timestep, temperature, charge, NMR coefficient or radius is assumed
+either.</p>
 
-<h2>Frames</h2>
-<p>Frames are chosen as first, last and stride. Each descriptor is measured
-frame by frame and reported as the mean over the frames used with the
-sample standard deviation across them (ddof&nbsp;=&nbsp;{ddof}): the spread
-between frames, not a standard error, because the frames of one trajectory
-are correlated. A frame that cannot be read is left out and named with its
-reason, and the provenance of every result lists the frames it used.</p>
+<a name="md-results"></a>
+<h2>The Results tab</h2>
+<p>One line names the run (file, frames, thresholds, formers, FACET version);
+<i>Provenance</i> unfolds the header every export carries, and <i>Export
+all&hellip;</i> writes every descriptor. The tree lists each analysis with
+its descriptors (those that differ only by element gathered under one node,
+with their mean &plusmn; spread); the filter field hides the names that do
+not contain its text. Clicking a descriptor draws its figure and rows in the
+centre, with the notes of the analysis under them; the toolbar's
+<b>3D view</b> brings the frame back and <b>Figure</b> the descriptor. An
+analysis that produced nothing is listed with the reason the engine gave.</p>
+
+<h2>Frames and the spread</h2>
+<p>Each descriptor is measured frame by frame and reported as the mean over
+the frames used with the sample standard deviation across them
+(ddof&nbsp;=&nbsp;{ddof}): the spread between frames, not a standard error,
+because the frames of one trajectory are correlated. A frame that cannot be
+read is left out and named with its reason, and the provenance of every
+result lists the frames it used.</p>
 
 <h2>The analyses</h2>
 <p>The per-frame analyses share one neighbour search per pass over the
@@ -1176,14 +1297,13 @@ frames; a second pass runs only when a cutoff comes from the frame-averaged
 received. The dynamics read the unwrapped positions of the chosen frames
 once more. A run that lacks an input is refused before any frame is read,
 with every missing input named at once; the inputs in the right-hand column
-have no default, and the Model window labels each one as written there,
-with its request name. Method choices have defaults, each stated in the
-provenance: most set a resolution (bin widths, grid steps, the first-minimum
-rule), and some change the numbers themselves. Removing the centre-of-mass
-drift, off by default, changes every MSD and every diffusion coefficient
-fitted from it; the Model window shows that choice beside the dynamics
-inputs, and an MSD figure states the centre of mass's own MSD when the drift
-is left in.</p>
+have no default, and Setup labels each one as written there, with its
+request name. Method choices have defaults, each stated in the provenance:
+most set a resolution (bin widths, grid steps, the first-minimum rule), and
+some change the numbers themselves. Removing the centre-of-mass drift, off by
+default, changes every MSD and every diffusion coefficient fitted from it;
+an MSD figure states the centre of mass's own MSD when the drift is left
+in.</p>
 <table cellpadding="3" width="100%">
 <tr><td width="18%"><b>Analysis</b></td><td width="37%"><b>What it
 measures</b></td><td><b>Inputs it needs</b></td></tr>
@@ -1194,35 +1314,114 @@ names that the model does not hold, formers none of which are present, a
 scattering range beyond half the box, a frame selection that selects
 nothing.</p>
 
-<h2>The bond threshold</h2>
-<p>The coordination numbers by bond valence count the contacts above
-<i>v</i><sub>bond</sub> ({bv.V_BOND_DEFAULT:g} v.u. unless another is set),
-and contacts are listed down to <i>v</i><sub>list</sub>
-({bv.V_LIST_DEFAULT:g} v.u.), as in the crystal window. The threshold panel
-shows one frame, never an average: a slider on a logarithmic scale from
-<i>v</i><sub>list</sub> to the frame's largest valence, and at the threshold
-it sets, the coordination number of each element with the distributions of
-its bond-valence sum and &phi;. Each move re-reads the frame's valence table
-with no new neighbour search. The staircase beside it, the mean coordination
-number of each element against <i>v</i><sub>bond</sub>, sets the threshold
-where it is clicked. The frame-averaged tables of a run keep the
-<i>v</i><sub>bond</sub> the run used, which their provenance states, and the
-panel names both thresholds whenever they differ; carrying another threshold
-into every table is a new run. The distance-cut numbers, from the first
-minima of the partial <i>g</i>(<i>r</i>), do not depend on
+<a name="md-frames"></a>
+<h2>The frame, the threshold strip and the Elements dock</h2>
+<p>The centre draws one frame from that frame's own valence table (the bulk
+engine's one search), so the drawn bonds are the contacts the coordination
+numbers count, each as thick as its valence, with the ones below
+<i>v</i><sub>bond</sub> thin and faded. The toolbar steps through the frames
+(<i>View &rsaquo; Frame</i>: Page Down and Page Up, Home and End); the
+drawing style, the atom and bond labels, the box and the projection are
+beside it, and its note states the frame's timestep and bond count. Without
+OpenGL (the QPainter renderer), a frame of more than {atoms_only} atoms is
+drawn as atoms only, with a note saying so; the OpenGL renderers draw its
+bonds. The status bar names the renderer in use and the time the frame took
+to draw.</p>
+<p>The <b>threshold strip</b> along the bottom is the mean coordination number
+of each element against <i>v</i><sub>bond</sub> on the frame shown, from
+<i>v</i><sub>list</sub> ({bv.V_LIST_DEFAULT:g} v.u. unless another is set)
+to the frame's largest valence on a logarithmic scale; the vertical line is
+the current <i>v</i><sub>bond</sub> ({bv.V_BOND_DEFAULT:g} v.u. unless
+another is set), and a dashed one the threshold of the last run when it
+differs. Dragging the slider, typing a value or clicking the staircase moves
+<i>v</i><sub>bond</sub>: the drawn bonds restyle, the Elements dock and the
+highlight rules follow, and no neighbour search is run. One frame is shown,
+never an average; the frame-averaged tables of a run keep the
+<i>v</i><sub>bond</sub> the run used, and carrying another into every table
+is a new run. The distance-cut numbers do not depend on
 <i>v</i><sub>bond</sub>.</p>
+<p>The <b>Elements</b> dock lists each element of the frame with its atoms,
+its oxidation state and its mean CN at the strip's threshold. Clicking an
+element draws its atoms in full and the others dimmed; clicking it again
+draws every atom alike.</p>
 
-<h2>A frame in 3D</h2>
-<p>The <b>3D view</b> tab draws the frame chosen by its number from that
-frame's own valence table, so the drawn bonds are the contacts the
-coordination numbers count, each as thick as its valence, with the ones
-below <i>v</i><sub>bond</sub> thin and faded. On small frames the bond set
-is identical to the one the crystal window draws for the same atoms; it is
-built without that window's neighbour search, which takes seconds on a few
-thousand atoms. Without OpenGL (the QPainter renderer), a frame of more than
-{atoms_only} atoms is drawn as atoms only, with a note saying so; the OpenGL
-renderers draw its bonds.</p>
+<a name="md-highlight"></a>
+<h2>The Highlight tab</h2>
+<p>Rules that change the 3D view of the frame shown. Each can be switched off
+or removed, and the view follows after a short pause; the rules edit the
+drawn arrays, so every renderer tier draws them, the QPainter one included,
+and the exported figure carries them. The line under the rules states the
+frame, <i>v</i><sub>bond</sub> and what was drawn with which values. A rule
+the frame cannot serve (a descriptor that needs formers, a channel backend
+this build lacks) is greyed with its reason, never drawn as something
+else.</p>
+<p><b>Colour atoms by</b> element, bond-valence sum, coordination number or
+&phi; (the crystal workspace's colour modes, on the frame at
+<i>v</i><sub>bond</sub>, the cations on the ramp and the anions in their
+element colour); by Q<sup><i>n</i></sup> or by modifier-rich O, which read
+the formers ticked in Setup or those of the last run; or by channel
+membership, which needs a channels rule that is on.</p>
+<p><b>Show only</b> [an element or any] where [CN, former CN, BVS, &phi; or
+Q<sup><i>n</i></sup>] [&le; or &ge;] a value. CN counts bonds to every
+counter-ion at <i>v</i><sub>bond</sub>; former CN counts an anion's bonds to
+the formers only (an O with former CN 1 is non-bridging); Q<sup><i>n</i></sup>
+is a former cation's bonds to anions bonded to two or more formers. With
+<i>Dim the rest</i> on, an atom outside the rule keeps {dim}, so the inside
+of a box stays visible; off, it is left out of the scene. The count of atoms
+matched is written under the rules.</p>
+<p><b>Voids</b> at or above a volume in &Aring;&sup3;, drawn as translucent
+spheres: the empty spheres of the frame (FACET's van der Waals radii), each
+with the radius of a sphere of that volume or more. An elongation above 1
+keeps only the spheres whose void region (merged empty spheres) is at least
+that many times longer than it is wide; it reads the void regions of
+<code>facet.core.md_channels</code> and is greyed with the reason when the
+build lacks them.</p>
+<p><b>Channels</b>, three ways of measuring where a mobile ion has room, each
+reading <code>facet.core.md_channels</code> on the frame shown:</p>
+<ul>
+<li><b>by charge</b>: the bond-valence landscape of the probe ion (its sum on
+a grid of the stated spacing, from the anions within <i>r</i><sub>cut</sub>),
+the regions where the mismatch to the probe's valence is at most &Delta;,
+and the isosurface at &Delta; drawn in the view; the count line states the
+regions, the fraction of the box they fill and which box axes they span.
+Measured, not inferred: a connected region is a statement about the sum, not
+about a path an ion takes.</li>
+<li><b>by modifier density</b>: the anions with <i>k</i> or more atoms of the
+modifier element within the M&ndash;anion cutoff, and the clusters they form
+(bonded through the formers when they are named).</li>
+<li><b>by voids</b>: the void regions of the frame for the probe radius
+given, kept when at least as elongated as the rule says.</li>
+</ul>
+<p>Under channel membership each atom in a region takes the region's colour
+and the atoms outside every region are dimmed. The by-charge landscape of
+3 000 atoms on a 1 &Aring; grid takes seconds and is computed on a worker
+thread; the status bar says so, and the window stays usable.</p>
 
+<a name="md-notes"></a>
+<h2>The Notes tab</h2>
+<p>Every note and provenance line of the run on show, in order: the run
+header (file, frames used and left out, type map and its source, oxidation
+states, bond-valence set and thresholds, formers, cutoffs, method
+parameters, FACET version), then each analysis's notes, provenance and time,
+the timings, the frame shown with its highlight line, and the load summary
+(what the reader read and assumed). A refused run states its reason here
+with the notes of the run that stays on show.</p>
+
+<a name="md-menu"></a>
+<h2>The Model menu</h2>
+<p>Every item acts on the model selected in the Structures dock. <i>Run
+analyses</i> (Ctrl+R) and <i>Cancel run</i>; <i>Presets</i>, the ten of the
+Setup tab; <i>Export results</i> as CSV files or an XLSX workbook, and the
+figure or the rows shown; <i>Save request&hellip;</i> writes the setup as a
+TOML request file, <i>Load request&hellip;</i> fills the setup from one;
+<i>Show the last complete run</i> and <i>Show the cancelled run's partial
+result</i> switch between the two runs the model keeps. <i>View &rsaquo;
+Frame</i> steps through the frames and <i>View &rsaquo; Highlight&hellip;</i>
+(H) opens the rules. Closing the window during a run cancels it and waits at
+most {close_wait} s for the engine to notice; work that takes longer finishes
+in the background.</p>
+
+<a name="md-export"></a>
 <h2>Export</h2>
 <p>Results go out as CSV files, one per descriptor with an index, or as one
 XLSX workbook (which needs the openpyxl package). Every file starts with the
@@ -1231,8 +1430,10 @@ out, the type map and its source, the oxidation states, the bond-valence
 parameter set, <i>v</i><sub>bond</sub> and <i>v</i><sub>list</sub>, the
 cutoffs and where they came from, the method parameters and the FACET
 version. Numbers are written in full. Figures export as SVG or PDF, which
-are vector, and as PNG at 600 dpi.</p>
+are vector, and as PNG at 600 dpi; <i>File &rsaquo; Export image</i> and
+<i>Export vector</i> write the frame shown with its highlight rules.</p>
 
+<a name="md-cli"></a>
 <h2>From the command line</h2>
 <p>The same engine runs without a window, on a workstation or a cluster
 node:</p>
@@ -1240,13 +1441,15 @@ node:</p>
 py -3.11 -m facet.md analyses
 py -3.11 -m facet.md template --out request.toml
 py -3.11 -m facet.md analyse dump.lammpstrj --type-map 1=Si,2=O,3=Na \\
-    --formers Si --frames 0:100:5 --out results.xlsx</pre>
+    --formers Si --frames 0:100:5 --out results.xlsx
+py -3.11 -m facet.md analyse dump.lammpstrj --request request.toml</pre>
 <p><code>describe</code> says what the reader finds, <code>analyses</code>
 lists the analyses and their inputs, <code>template</code> writes a request
 file holding every option, and <code>analyse</code> runs them and writes the
-results with their provenance. Without <code>--only</code>, every analysis
-whose inputs are given runs and the others are listed with what they
-lack.</p>
+results with their provenance. A request file saved from the Model menu
+repeats a run of the window exactly. Without <code>--only</code>, every
+analysis whose inputs are given runs and the others are listed with what
+they lack.</p>
 
 <h2>What is not done</h2>
 <ul>
@@ -1259,7 +1462,8 @@ ships with FACET.</li>
 coefficient is assumed.</li>
 <li>No result is labelled as a match or a mismatch with experiment: a
 comparison with measured data reports the two side by side with their
-difference.</li>
+difference. No channel is labelled a conduction path: the rules draw what a
+landscape, a density or a void set measures on one frame.</li>
 </ul>
 """
 
@@ -1368,8 +1572,14 @@ class ManualDialog(QDialog):
         self.browser.setHtml("".join(b for _k, _t, b in self._sections))
         self.browser.verticalScrollBar().setValue(0)
 
-    def show_section(self, key: str = "") -> None:
-        """Open the section named ``key``, or the first one."""
+    def show_section(self, key: str = "", anchor: str = "") -> None:
+        """Open the section named ``key``, or the first one, scrolled to
+        ``anchor`` (an ``<a name>`` of that section) when one is given."""
         keys = [k for k, _t, _b in self._sections]
         row = keys.index(key) if key in keys else 0
-        self.contents.setCurrentRow(row)
+        if self.contents.currentRow() != row:
+            self.contents.setCurrentRow(row)
+        else:
+            self._show_row(row)
+        if anchor:
+            self.browser.scrollToAnchor(anchor)

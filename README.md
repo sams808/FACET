@@ -78,8 +78,9 @@ The coordination analysis is the argument; these are the tools that go with it.
 
 **Structures.** Reads CIF, VASP POSCAR/CONTCAR, XYZ, VESTA, SHELX .res/.ins, PDB
 and CrystalMaker .cmtx. Several at once, shown together or one at a time. Writes
-CIF, POSCAR, XYZ, VESTA, FEFF, CSV and XLSX. MD models and trajectories open in
-a window of their own (see *Glass models from molecular dynamics* below).
+CIF, POSCAR, XYZ, VESTA, FEFF, CSV and XLSX. MD models and trajectories open
+beside the crystals in the same window (see *Glass models from molecular
+dynamics* below).
 
 **The 3D view.** Ball-and-stick, space-filling, stick and wireframe; coordination
 polyhedra; lattice planes and slabs by Miller indices; per-atom, per-site and
@@ -173,23 +174,40 @@ crystal tiled into a supercell, that engine returns, atom for atom, what the
 crystal analysis returns.
 
 **Opening a model.** Drop the file on FACET's window, or use *File ▸ Open MD
-model…*; it opens in a Model window of its own. *File ▸ Open MD series as one
-model…* reads several files of one run as one trajectory. A file is recognised
+model…*; it joins the crystals in the Structures dock, and choosing it turns
+the window into the Model workspace: an Elements table where the Sites list
+is, frame navigation in the toolbar, the coordination-against-threshold
+staircase along the bottom, and four tabs — Setup, Results, Highlight, Notes.
+*File ▸ Open MD series as one model…* reads several files of one run as one
+trajectory. A file is recognised
 by its content, so a renamed dump still opens as a dump. Where the file leaves
 out something only the person who ran the simulation knows — which element a
 LAMMPS type number stands for, the data file a DCD needs for its elements, the
 box of a plain XYZ — the window shows the reader's message and asks for exactly
 that. No element is guessed.
 
-The setup then takes the oxidation states (the common ones, each editable, never
-resolved from the geometry), the network formers (none ticked: which cations
-form the network is a chemical decision, and FACET does not make it), the frames
-(first, last and stride), the thresholds and the analyses. The run goes in the
-background with progress and cancel. Each descriptor comes back as a figure
-beside its rows, as the mean over frames with the spread across them; a
-threshold slider moves the bond threshold on one frame without a new search; one
-frame can be turned in 3D. *Help ▸ MD models and the Model window* is the
-manual's section on all of it.
+**Setup.** A preset — silicate, aluminosilicate, borosilicate, phosphate,
+oxyfluoride, ion conduction, scattering against experiment, dynamics,
+everything — ticks the analyses, ticks the network formers among the cations
+present and fills the method inputs those analyses read; editing anything
+afterwards leaves it on Custom, and nothing is filled in that only the person
+who ran the simulation knows. Under it the composition, the formers as chips,
+the frames, the threshold, and the rest folded away; the oxidation states are
+the common ones, each editable, never resolved from the geometry. The analyses
+are a tree by the question they answer, each row stating the inputs it will
+use, or, greyed, what it still needs. The run goes in the background with
+progress and cancel. Each descriptor comes back as a figure beside its rows, as
+the mean over frames with the spread across them; a threshold slider moves the
+bond threshold on one frame without a new search.
+
+**Highlighting.** The Highlight tab drives the 3D view: colour the atoms by
+element, bond-valence sum, coordination number, φ, Qⁿ, how modifier-rich an
+anion is, or which channel an atom belongs to; keep only the atoms a rule
+matches — *oxygen where the coordination to formers is at most 1* draws the
+non-bridging oxygens and nothing else; draw the voids above a volume and an
+elongation, and the channels, as translucent surfaces, with the rest dimmed.
+*Help ▸ MD models and the Model workspace* is the manual's section on all of
+it.
 
 **From the command line.** `python -m facet.md` runs the same analyses with no
 window, on a workstation or a cluster node. Unlike the application, it needs
@@ -233,7 +251,18 @@ chosen, with the spread across them; the dynamics follow the trajectory in time.
 - *Local order:* Steinhardt and tetrahedral order; polyhedron distortion and
   ECoN; Voronoi cells.
 - *Voids:* the empty sphere of every Delaunay tetrahedron; free volume for a
-  probe radius.
+  probe radius; the spheres joined into void regions where a probe passes
+  between them, with each region's volume, elongation, extent and whether it
+  crosses the box.
+- *Channels:* where a mobile ion can go, three ways. By charge: the
+  bond-valence landscape a probe ion sees on a grid, its mismatch against the
+  formal valence, the accessible volume fraction against that mismatch, the
+  connected regions at one mismatch, and the mismatch at which a path first
+  crosses the box along each axis. By modifier density: the modifier cations
+  within the measured first minimum of each anion's g(r), which anions are
+  rich at a count you set, and whether they and their modifiers form a cluster
+  that spans the box. By voids: the void regions above a volume and an
+  elongation.
 - *NMR:* the model's Qⁿ, N₄, Al CN and speciation beside fractions from an NMR
   fit; shifts and spectra from a published correlation the user supplies.
 - *EXAFS:* shell cumulants N, R, σ², C₃ and C₄; FEFF inputs for absorbers drawn

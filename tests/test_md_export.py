@@ -287,3 +287,112 @@ def test_a_descriptor_over_fewer_frames_says_which(result):
         result, "glass", "CN Si (BV)",
         result.outputs["glass"].tables["CN Si (BV)"])
     assert not any(line.startswith("descriptor frames used") for line in whole)
+
+
+# ---------------------------------------------------------------------------
+# the channel analyses: their containers through the same paths
+# ---------------------------------------------------------------------------
+
+CHANNEL_NAMES = ("channels", "modifier-density", "void-regions")
+
+
+@pytest.fixture(scope="module")
+def channel_result():
+    """Two quartz frames; the probe and the 'modifier' are Si (quartz holds
+    nothing else), the cutoff measured on the first frame, a 1 Å grid."""
+    structure = readers.read(QUARTZ)
+    base, _ = md_model.supercell_frame(structure, (3, 3, 3))
+    rng = np.random.default_rng(4)
+    frames = []
+    for k in range(2):
+        cart = base.cart_ang + rng.normal(0.0, 0.03, base.cart_ang.shape)
+        frames.append(md_model.frame_from_arrays(
+            base.elements, cart, box_ang=base.box_ang, timestep=k * 100))
+    request = ma.AnalysisRequest(
+        analyses=CHANNEL_NAMES, formers={"Si"},
+        voids=ma.VoidOptions(radii="vdw"),
+        channels=ma.ChannelOptions(
+            probe="Si", grid_spacing_ang=1.0, deltas_vu=(0.5, 1.0, 1.5),
+            delta_vu=0.5, modifiers=("Si",), k_rich=2,
+            void_probe_radius_ang=0.0))
+    return ma.analyse(md_model.MemoryTrajectory(frames), request)
+
+
+def test_channel_csvs_read_back_as_their_descriptors(channel_result,
+                                                      tmp_path):
+    for name in CHANNEL_NAMES:
+        assert channel_result.outputs[name].ok, channel_result.outputs[name].error
+    paths = md_export.write_csv_files(channel_result, tmp_path)
+    _, index = _read_csv(tmp_path / "index.csv")
+    listed = [row for row in index if row["file"]]
+    assert {row["analysis"] for row in listed} == set(CHANNEL_NAMES)
+    assert len(listed) == len(paths) - 2
+    kinds = {row["kind"] for row in listed}
+    assert {"Series", "Scalar", "Histogram", "Distribution", "Table"} <= kinds
+    for row in listed:
+        container = channel_result.outputs[row["analysis"]].tables[
+            row["descriptor"]]
+        expected = md_export.descriptor_rows(container)
+        _, rows = _read_csv(tmp_path / row["file"])
+        if not expected:
+            assert rows == [{"note": "no rows"}], row["file"]
+            continue
+        assert len(rows) == len(expected), row["file"]
+        assert list(rows[0]) == list(expected[0]), row["file"]
+        for got, want in zip(rows, expected, strict=True):
+            for key, value in want.items():
+                assert _csv_text_matches(value, got[key]), \
+                    (row["file"], key, value, got[key])
+
+
+def test_channel_headers_state_every_method_parameter(channel_result,
+                                                       tmp_path):
+    md_export.write_csv_files(channel_result, tmp_path)
+    header, _ = _read_csv(
+        tmp_path / "channels__accessible_volume_fraction_of_Si4+.csv")
+    text = "\n".join(header)
+    for field in ("analysis: channels",
+                  "method parameter: channels.probe = Si",
+                  "method parameter: channels.grid_spacing_ang = 1.0",
+                  "method parameter: channels.r_cut_ang = 6.0",
+                  "method parameter: r_cut (Å) = 6.0",
+                  "method parameter: grid shape = (15, 15, 17)",
+                  "method parameter: Delta (v.u.) = 0.5",
+                  "method parameter: deltas (v.u.) = (0.5, 1.0, 1.5)",
+                  "method parameter: repulsion exclusion = none",
+                  "method parameter: bond-valence parameters = ",
+                  "the last frame analysed"):
+        assert field in text, field
+    header, _ = _read_csv(
+        tmp_path / "modifier-density__modifier_count_per_anion_(Si_around_O)"
+                   ".csv")
+    text = "\n".join(header)
+    for field in ("method parameter: k_rich = 2",
+                  "method parameter: modifier-anion cutoff source = those "
+                  "measured on frame 0",
+                  "method parameter: first minimum rule = valley",
+                  "distance cutoff: O-Si:", "network formers: Si",
+                  "bond threshold v_bond:"):
+        assert field in text, field
+    header, _ = _read_csv(
+        tmp_path / "void-regions__void_fraction_(union_of_the_void_spheres)"
+                   ".csv")
+    text = "\n".join(header)
+    for field in ("method parameter: probe radius (Å) = 0.0",
+                  "method parameter: channels.void_probe_radius_ang = 0.0",
+                  "method parameter: lining distance (Å) = 0.5",
+                  "method parameter: channels.volume_edges_ang3 = "
+                  "(0.0, 200.0, 5.0)",
+                  "method parameter: radii source =",
+                  "method parameter: empty spheres measured here (frames) = 2",
+                  "histogram edges: region union volume 0 to 200"):
+        assert field in text, field
+
+
+def test_channel_sheets_are_written_with_their_tags(channel_result, tmp_path):
+    path = md_export.write_workbook(channel_result, tmp_path / "run.xlsx")
+    book = openpyxl.load_workbook(path, read_only=True)
+    names = book.sheetnames
+    book.close()
+    for tag in ("chan ", "mdens ", "vreg "):
+        assert any(n.startswith(tag) for n in names), tag

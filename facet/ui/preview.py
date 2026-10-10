@@ -35,8 +35,10 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QDoubleSpinBox,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
     QTabWidget,
     QTextBrowser,
@@ -71,14 +73,47 @@ class PolyhedraMode:
     ALL = "all cations"
 
 
+class _PageStack(QStackedWidget):
+    """A stack whose size hints are the shown page's, not the largest of
+    every page's.
+
+    A QStackedWidget asks for the largest minimum among all its pages, so
+    the crystal toolbar's row (782 px wide) would cap the right column at
+    400 px while an MD model is shown, and the model's figure page (350 px
+    tall) would put the window's minimum height above a 768 px screen
+    while a crystal is shown. Each region follows what it shows instead;
+    the window's minimum is then that of the workspace on screen.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(self._page_changed)
+
+    def _page_changed(self, _index: int) -> None:
+        self.updateGeometry()
+
+    def sizeHint(self):
+        page = self.currentWidget()
+        if page is None:
+            return super().sizeHint()
+        return page.sizeHint().expandedTo(page.minimumSize())
+
+    def minimumSizeHint(self):
+        page = self.currentWidget()
+        if page is None:
+            return super().minimumSizeHint()
+        return page.minimumSizeHint().expandedTo(page.minimumSize())
+
+
 class _WorkspaceView(StructureView):
-    """The crystal window's 3D view, whose empty state also says where an MD
-    model goes: a dropped or opened dump, data file or trajectory opens in a
-    Model window of its own (:meth:`PreviewWindow.open_md_models`), never in
-    this view."""
+    """The crystal 3D view, whose empty state also says where an MD model
+    goes: a dropped or opened dump, data file or trajectory is listed in the
+    Structures dock as a model with its own workspace
+    (:meth:`PreviewWindow.open_md_models`), never drawn in this view."""
 
     MD_HINT = ("MD models and trajectories (LAMMPS dump or data, extended "
-               "XYZ, XDATCAR, DL_POLY, DCD, XTC, ...) open in a Model window")
+               "XYZ, XDATCAR, DL_POLY, DCD, XTC, ...) are listed in the "
+               "Structures dock and open the Model workspace")
 
     def _paint_placeholder(self, painter) -> None:
         super()._paint_placeholder(painter)
@@ -92,6 +127,11 @@ class _WorkspaceView(StructureView):
 
 
 class PreviewWindow(QMainWindow):
+    # The width the right column is given when an MD model is first shown
+    # (md_setup lays its page out for 450-500 px; the Highlight rule rows
+    # need about 470).
+    MODEL_COLUMN = 480
+
     def __init__(self, path: str | None = None):
         super().__init__()
         self.setWindowTitle(f"{NAME} {__version__}")
@@ -108,9 +148,7 @@ class PreviewWindow(QMainWindow):
         self.show_vectors = False
         self.show_void_cones = False
         self.vector_scale = 0.6
-        # The Model windows opened from here (open_md_models): each is a
-        # top-level window of its own, never a tab of this one.
-        self._model_windows: list = []
+        self._manual_dialog = None
 
         self.view = _WorkspaceView()
         self.view.set_theme(self.theme)
@@ -230,9 +268,30 @@ class PreviewWindow(QMainWindow):
 
     @site_index.setter
     def site_index(self, value):
-        entry = self.project.current
+        entry = self._crystal()
         if entry is not None:
             entry.selected_site = value
+
+    def _crystal(self):
+        """The active entry when it is a crystal, else None: what every
+        crystal-only code path reads, so a selected MD model is left to its
+        own workspace."""
+        entry = self.project.current
+        return entry if entry is not None and entry.kind == "crystal" \
+            else None
+
+    def _model(self):
+        """The active MD model's controller, or None."""
+        entry = self.project.current
+        if entry is None or entry.kind != "model":
+            return None
+        return entry.controller
+
+    @property
+    def models(self) -> list:
+        """The controllers of every MD model listed, in order."""
+        return [e.controller for e in self.project.models
+                if e.controller is not None]
 
     @property
     def v_bond(self) -> float:
@@ -251,6 +310,10 @@ class PreviewWindow(QMainWindow):
         self.addDockWidget(Qt.LeftDockWidgetArea, structures)
         structures.setMinimumWidth(210)
 
+        # The Sites dock, the toolbar, the centre, the right column and the
+        # bottom strip are each a stack: page 0 is the crystal's widget, and
+        # every MD model listed adds its own page (ModelController.widgets).
+        # Selecting a row of the Structures dock switches all five at once.
         sites = QDockWidget("Sites", self)
         site_box = QWidget()
         site_layout = QVBoxLayout(site_box)
@@ -258,11 +321,14 @@ class PreviewWindow(QMainWindow):
         site_layout.setSpacing(4)
         site_layout.addWidget(self.site_list)
         site_layout.addWidget(self.anion_check)
-        sites.setWidget(site_box)
+        self.sites_stack = _PageStack()
+        self.sites_stack.addWidget(site_box)
+        sites.setWidget(self.sites_stack)
         sites.setFeatures(QDockWidget.DockWidgetMovable
                           | QDockWidget.DockWidgetFloatable)
         self.addDockWidget(Qt.LeftDockWidgetArea, sites)
         sites.setMinimumWidth(210)
+        self.sites_dock = sites
 
         tabs = QTabWidget()
         # Every page scrolls. A page that cannot scroll sets a floor under the
@@ -296,17 +362,26 @@ class PreviewWindow(QMainWindow):
         # which is worse than scrolling: with the arrows the names that are on
         # screen are at least the real names.
         tabs.tabBar().setElideMode(Qt.ElideNone)
+        self.crystal_tabs = tabs
+        self.column_stack = _PageStack()
+        self.column_stack.addWidget(tabs)
 
         centre = QWidget()
         col = QVBoxLayout(centre)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(0)
-        col.addWidget(self._toolbar_row())
-        col.addWidget(self.view, 1)
+        self.toolbar_stack = _PageStack()
+        self.toolbar_stack.addWidget(self._toolbar_row())
+        self.toolbar_stack.setSizePolicy(QSizePolicy.Preferred,
+                                         QSizePolicy.Maximum)
+        self.centre_stack = _PageStack()
+        self.centre_stack.addWidget(self.view)
+        col.addWidget(self.toolbar_stack)
+        col.addWidget(self.centre_stack, 1)
 
         split = QSplitter(Qt.Horizontal)
         split.addWidget(centre)
-        split.addWidget(tabs)
+        split.addWidget(self.column_stack)
         # The panels used to have stretch 0, so a wider window made the 3-D view
         # wider and left them at 400 px for ever -- measured identical at 1400,
         # 1600 and 1920. They now take a quarter of the growth, which is what
@@ -317,13 +392,24 @@ class PreviewWindow(QMainWindow):
         # column narrower than that hides some of them behind scroll arrows
         # from the moment the window opens.
         split.setSizes([980, 500])
+        self.split = split
 
+        self.bottom_stack = _PageStack()
+        self.bottom_stack.addWidget(self.explorer)
         vertical = QSplitter(Qt.Vertical)
         vertical.addWidget(split)
-        vertical.addWidget(self.explorer)
+        vertical.addWidget(self.bottom_stack)
         vertical.setStretchFactor(0, 1)
         vertical.setSizes([640, 230])
+        self.vertical = vertical
         self.setCentralWidget(vertical)
+
+    def _stacks(self) -> tuple:
+        """The five stacked regions, in the order of
+        ``ModelController.widgets``: the right column, the Sites dock, the
+        toolbar, the centre, the bottom strip."""
+        return (self.column_stack, self.sites_stack, self.toolbar_stack,
+                self.centre_stack, self.bottom_stack)
 
     @staticmethod
     def _fit_combo(box: QComboBox) -> None:
@@ -517,19 +603,28 @@ class PreviewWindow(QMainWindow):
             export.addAction(action)
 
         m.addSeparator()
-        load_params = QAction("Load &parameters…", self)
+        # one row for the three parameter actions: File stays within twelve
+        params = QMenu("&Bond-valence parameters", m)
+        params.menuAction().setToolTip(
+            "The R0 and b of every element pair: the built-in Brese & "
+            "O'Keeffe table, or a published set read from a file.")
+        load_params = QAction("&Load…", self)
         load_params.setToolTip(
             "Read a published parameter set: the IUCr bvparm distribution, a "
             "softBV-style table, or a FACET parameter file. FACET does not ship "
             "the large compilations, because each comes with its own terms.")
         load_params.triggered.connect(self._load_parameters)
-        reset_params = QAction("Use the &built-in parameters", self)
+        reset_params = QAction("Use the &built-in", self)
+        reset_params.setToolTip("Back to the parameter set FACET ships.")
         reset_params.triggered.connect(self._reset_parameters)
-        save_params = QAction("Save parameter&s…", self)
+        save_params = QAction("&Save…", self)
+        save_params.setToolTip("Write the set in use as a FACET parameter "
+                               "file, so an edited one can be passed on.")
         save_params.triggered.connect(self._save_parameters)
-        m.addAction(load_params)
-        m.addAction(save_params)
-        m.addAction(reset_params)
+        params.addAction(load_params)
+        params.addAction(save_params)
+        params.addAction(reset_params)
+        m.addMenu(params)
 
         m.addSeparator()
         session_save = QAction("Save sessio&n…", self)
@@ -587,6 +682,30 @@ class PreviewWindow(QMainWindow):
             "block. Right-click an atom to turn about that atom instead.")
         cell_centre.triggered.connect(self._center_on_cell)
         v.addAction(cell_centre)
+
+        v.addSeparator()
+        # an MD model's frames and highlight rules: enabled for a model
+        frames = QMenu("&Frame", v)
+        frames.menuAction().setToolTip("Step through the frames of the MD "
+                                       "model shown.")
+        self.frame_actions = {}
+        for text, key, step in (("&Next", "PgDown", 1), ("&Previous", "PgUp", -1),
+                                ("&First", "Home", "first"),
+                                ("&Last", "End", "last")):
+            act = QAction(text, self)
+            act.setShortcut(QKeySequence(key))
+            act.triggered.connect(lambda _=False, s=step: self._frame_step(s))
+            frames.addAction(act)
+            self.frame_actions[text.replace("&", "").lower()] = act
+        v.addMenu(frames)
+        self.frames_menu = frames
+        self.highlight_action = QAction("&Highlight…", self)
+        self.highlight_action.setShortcut("H")
+        self.highlight_action.setToolTip("Rules that colour, filter and "
+                                         "annotate the frame shown (the "
+                                         "Highlight tab of an MD model).")
+        self.highlight_action.triggered.connect(self._show_highlight)
+        v.addAction(self.highlight_action)
 
         v.addSeparator()
         self.vector_action = QAction("Show bond-&valence vector", self)
@@ -648,10 +767,15 @@ class PreviewWindow(QMainWindow):
         v.addMenu(themes)
         self._sync_theme_menu(self.theme)
 
+        self._build_model_menu()
+
         h = self.menuBar().addMenu("&Help")
         manual = QAction("&Manual", self)
         manual.setShortcut(QKeySequence.HelpContents)
-        manual.triggered.connect(self._show_manual)
+        manual.setToolTip("The manual; F1 opens it at the part that matches "
+                          "the tab shown.")
+        manual.triggered.connect(self._show_context_help)
+        self.manual_action = manual
         h.addAction(manual)
         shortcuts = QAction("&Keyboard and mouse", self)
         shortcuts.triggered.connect(lambda: self._show_manual("shortcuts"))
@@ -666,6 +790,198 @@ class PreviewWindow(QMainWindow):
         about = QAction("&About " + NAME, self)
         about.triggered.connect(self._about)
         h.addAction(about)
+
+    def _build_model_menu(self) -> None:
+        """The Model menu: a run, the presets, the exports, the request as
+        a file, and the stored runs; every item acts on the MD model
+        selected in the Structures dock."""
+        md = self.menuBar().addMenu("&Model")
+        self.model_menu = md
+
+        def act(menu, text, handler, tip="", shortcut=None):
+            action = QAction(text, self)
+            if tip:
+                action.setToolTip(tip)
+                action.setStatusTip(tip)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(handler)
+            menu.addAction(action)
+            return action
+
+        self.run_action = act(md, "&Run analyses", self._run_model,
+                              "Run the analyses ticked in Setup on the "
+                              "frames chosen there.", "Ctrl+R")
+        self.cancel_action = act(md, "&Cancel run", self._cancel_model,
+                                 "Stop after the frame in progress; what was "
+                                 "finished is kept as a cancelled run.")
+        md.addSeparator()
+        self.presets_menu = QMenu("&Presets", md)
+        self.presets_menu.menuAction().setToolTip(
+            "A preset ticks the analyses a question needs, names the formers "
+            "among the cations present and fills the method inputs they "
+            "require; every value stays editable in Setup.")
+        self.preset_actions: dict = {}
+        self._preset_group = QActionGroup(self)
+        self._preset_group.setExclusive(True)
+        self.presets_menu.aboutToShow.connect(self._fill_presets_menu)
+        md.addMenu(self.presets_menu)
+        md.addSeparator()
+        export = QMenu("&Export results", md)
+        export.menuAction().setToolTip("The last run's descriptors, each "
+                                       "with its provenance header.")
+        self.export_csv_action = act(
+            export, "CSV &files…", lambda: self._model_call("choose_export_csv"),
+            "A folder of CSV files, one per descriptor with an index.")
+        self.export_xlsx_action = act(
+            export, "&XLSX workbook…",
+            lambda: self._model_call("choose_export_xlsx"),
+            "One workbook, a sheet per descriptor (needs openpyxl).")
+        self.export_figure_action = act(
+            export, "Save the fi&gure shown…",
+            lambda: self._model_call("save_figure_shown"),
+            "The figure in the centre as SVG, PDF or a 600 dpi PNG.")
+        self.export_rows_action = act(
+            export, "Save the ro&ws shown…",
+            lambda: self._model_call("save_rows_shown"),
+            "The rows in the centre as CSV, the provenance as '#' lines.")
+        md.addMenu(export)
+        self.export_results_menu = export
+        self.save_request_action = act(
+            md, "Save re&quest…", lambda: self._model_call("choose_save_request"),
+            "A TOML request file: py -3.11 -m facet.md analyse FILE "
+            "--request it.toml repeats the run without the window.")
+        self.load_request_action = act(
+            md, "L&oad request…", lambda: self._model_call("choose_load_request"),
+            "Fill Setup from a request file written here or by hand.")
+        md.addSeparator()
+        self.show_complete_action = act(
+            md, "Show the &last complete run",
+            lambda: self._model_call("show_complete_result"),
+            "The last run that finished uncancelled; a cancelled run after "
+            "it does not replace it.")
+        self.show_partial_action = act(
+            md, "Show the cancelled run's p&artial result",
+            lambda: self._model_call("show_partial_result"),
+            "What the cancelled run finished, frame by frame.")
+        self._update_model_actions()
+
+    def _fill_presets_menu(self) -> None:
+        """The ten presets, built on first use (md_presets imports the MD
+        engine, which the crystal side never needs)."""
+        if self.preset_actions:
+            self._sync_preset_menu()
+            return
+        from ..core import md_presets
+
+        for preset in md_presets.PRESETS:
+            action = QAction(preset.name, self)
+            action.setCheckable(True)
+            action.setToolTip(preset.description)
+            action.setStatusTip(preset.description)
+            action.triggered.connect(
+                lambda _=False, n=preset.name: self._apply_preset(n))
+            self._preset_group.addAction(action)
+            self.presets_menu.addAction(action)
+            self.preset_actions[preset.name] = action
+        self._sync_preset_menu()
+
+    def _sync_preset_menu(self) -> None:
+        controller = self._model()
+        current = (controller.page.preset.currentText()
+                   if controller is not None and controller.page is not None
+                   else "")
+        for name, action in self.preset_actions.items():
+            action.setChecked(name == current)
+            action.setEnabled(bool(current))
+
+    def _apply_preset(self, name: str) -> None:
+        controller = self._model()
+        if controller is None or controller.page is None:
+            self.statusBar().showMessage(
+                "A preset fills the Setup of an MD model: select one in the "
+                "Structures dock first.", 9000)
+            return
+        applied = controller.page.apply_preset(name)
+        controller.show_tab("Setup")
+        notes = " ".join(getattr(applied, "notes", ()) or ())
+        self.statusBar().showMessage(
+            f"Preset {name}: {len(applied.analyses)} analyses ticked"
+            + (f"; {notes}" if notes else ""), 12000)
+
+    def _model_call(self, name: str) -> None:
+        controller = self._model()
+        if controller is None:
+            self.statusBar().showMessage(
+                "This acts on an MD model: select one in the Structures "
+                "dock first (File > Open MD model… lists one).", 9000)
+            return
+        getattr(controller, name)()
+
+    def _run_model(self) -> None:
+        controller = self._model()
+        if controller is None:
+            self._model_call("run_analysis")
+            return
+        controller.run_analysis()
+
+    def _cancel_model(self) -> None:
+        self._model_call("cancel")
+
+    def _frame_step(self, step) -> None:
+        controller = self._model()
+        if controller is None or controller.summary is None:
+            return
+        if step == "first":
+            controller.go_to_frame(0)
+        elif step == "last":
+            controller.go_to_frame(int(controller.summary.n_frames) - 1)
+        else:
+            controller.step_frame(int(step))
+
+    def _show_highlight(self) -> None:
+        controller = self._model()
+        if controller is None:
+            self.statusBar().showMessage(
+                "Highlight rules act on an MD model's frame: select a model "
+                "in the Structures dock first.", 9000)
+            return
+        controller.show_highlight()
+
+    def _update_model_actions(self) -> None:
+        """Enable the Model menu and View > Frame for the model selected, by
+        its state (nothing while a crystal is selected)."""
+        if not hasattr(self, "show_partial_action"):
+            return
+        controller = self._model()
+        ready = (controller is not None and controller.trajectory is not None
+                 and controller.page is not None)
+        running = ready and controller.is_running()
+        has = ready and controller.result is not None
+        can_run = ready and not running and controller.can_run()[0]
+        self.run_action.setEnabled(bool(can_run))
+        self.cancel_action.setEnabled(bool(running))
+        self.presets_menu.menuAction().setEnabled(ready)
+        self.export_results_menu.menuAction().setEnabled(has)
+        self.export_csv_action.setEnabled(has)
+        self.export_xlsx_action.setEnabled(has)
+        self.export_figure_action.setEnabled(has and controller.figure_shown())
+        self.export_rows_action.setEnabled(has and controller.rows_shown())
+        self.save_request_action.setEnabled(ready)
+        self.load_request_action.setEnabled(ready and not running)
+        self.show_complete_action.setEnabled(
+            ready and controller.complete_result is not None
+            and controller.result is not controller.complete_result)
+        self.show_partial_action.setEnabled(
+            ready and controller.partial_result is not None
+            and controller.result is not controller.partial_result)
+        many = ready and int(controller.summary.n_frames) > 1
+        for action in self.frame_actions.values():
+            action.setEnabled(many)
+        self.frames_menu.menuAction().setEnabled(many)
+        self.highlight_action.setEnabled(ready)
+        if self.preset_actions:
+            self._sync_preset_menu()
 
     def _on_show_vectors(self, on: bool) -> None:
         self.show_vectors = bool(on)
@@ -721,7 +1037,7 @@ class PreviewWindow(QMainWindow):
         they can be nearly 2 Å apart. The user asked for the centre of the
         cell, so this is the cell.
         """
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return None
         import numpy as np
@@ -894,41 +1210,45 @@ class PreviewWindow(QMainWindow):
         self.structure_panel.refresh()
         if added:
             self.project.set_active(len(self.project) - len(added))
-            self._after_load(reframe=True)
+            self._show_entry(reframe=True)
+        opened = []
         if models:
-            self.open_md_models(model_groups(models), dropped_with=models)
+            opened = self.open_md_models(model_groups(models),
+                                         dropped_with=models)
+            if not added and opened:
+                index = self.project.index_of(opened[0].entry)
+                if index is not None:
+                    self.project.set_active(index)
+                    self.structure_panel.refresh()
+                    self._show_entry()
         if failed:
             detail = "\n".join(f"{Path(p).name}: {why}" for p, why in failed)
-            opened = (f", {len(models)} opened in a Model window" if models
+            listed = (f", {len(opened)} listed as MD models" if opened
                       else "")
             QMessageBox.warning(
                 self, "Some files could not be read",
-                f"{len(added)} loaded{opened}, {len(failed)} skipped.\n\n"
+                f"{len(added)} loaded{listed}, {len(failed)} skipped.\n\n"
                 f"{detail}")
 
     def load(self, path: str) -> None:
         self.load_many([path])
 
-    # -- MD models: a Model window each ------------------------------------
-    @property
-    def model_windows(self) -> list:
-        """The Model windows opened from this window that are still open."""
-        self._model_windows = [w for w in self._model_windows if _open(w)]
-        return list(self._model_windows)
-
+    # -- MD models: an entry and a controller each -------------------------
     def open_md_models(self, groups, *, read_options=None,
-                       dropped_with=None) -> list:
-        """Open each model in a Model window of its own; return the windows.
+                       dropped_with=None, request_specs=None) -> list:
+        """List each model in the Structures dock and read it; return the
+        controllers (``md_workspace.ModelController``) made.
 
         ``groups`` holds one entry per model: a path, or a list of paths that
-        are one model's files in order (:func:`model_groups`). The window
-        (``md_workspace.open_model_window``) reads the model, asks for what
-        the file does not state (a type map, a box) and runs the analyses; a
-        fault in opening one window is listed with its file, and the others
-        still open. ``dropped_with``: the (path, MD format) pairs opened
-        together; a LAMMPS data file among them is offered to the windows
-        of the other files of its folder (:func:`md_companions`), never
-        filled in.
+        are one model's files in order (:func:`model_groups`). The
+        controller reads the model on a worker thread, asks for what the
+        file does not state (a type map, a box) and runs the analyses; a
+        fault in building one is listed with its file, and the others are
+        still listed. ``dropped_with``: the (path, MD format) pairs opened
+        together; a LAMMPS data file among them is offered to the models of
+        the other files of its folder (:func:`md_companions`), never filled
+        in. ``request_specs``: per group, a request mapping (a session's)
+        put into Setup once the file reads.
         """
         groups = list(groups)
         if not groups:
@@ -937,51 +1257,133 @@ class PreviewWindow(QMainWindow):
             from . import md_workspace
         except ImportError as error:
             QMessageBox.warning(
-                self, "The Model window is not available",
+                self, "The Model workspace is not available",
                 "These files are MD models or trajectories, which open in the "
-                "Model window, and this build of FACET does not hold it "
+                "Model workspace, and this build of FACET does not hold it "
                 f"({error}). They can be analysed from the command line: "
                 "py -3.11 -m facet.md analyse <file>.\n\n"
                 + "\n".join(_group_name(g) for g in groups))
             return []
         opened, refused = [], []
-        for paths in groups:
+        for i, paths in enumerate(groups):
+            entry = self.project.add_model(paths, read_options)
+            if request_specs and i < len(request_specs) and request_specs[i]:
+                entry.request_spec = dict(request_specs[i])
+            entry.companions = tuple(md_companions(paths, dropped_with or ()))
             try:
-                window = md_workspace.open_model_window(
-                    paths, self, read_options=read_options)
+                controller = md_workspace.ModelController(entry, self)
             except Exception as error:        # listed below, never silent
                 refused.append(f"{_group_name(paths)}: "
                                f"{type(error).__name__}: {error}")
+                index = self.project.index_of(entry)
+                if index is not None:
+                    self.project.remove(index)
                 continue
-            if window is not None:
-                opened.append(window)
-                offered = md_companions(paths, dropped_with or ())
-                setter = getattr(window, "set_companions", None)
-                if offered and setter is not None:
-                    setter(offered)
-        # open_model_window may append to _model_windows itself; each once
-        kept: list = []
-        for w in self._model_windows + opened:
-            if _open(w) and not any(w is k for k in kept):
-                kept.append(w)
-        self._model_windows = kept
+            controller.opened.connect(self._on_model_opened)
+            controller.statusMessage.connect(self._on_model_status)
+            controller.stateChanged.connect(self._update_model_actions)
+            for widget, stack in zip(controller.widgets, self._stacks()):
+                stack.addWidget(widget)
+            opened.append(controller)
+        self.structure_panel.refresh()
         if opened:
             names = ", ".join(_group_name(g) for g in groups[:3]) + (
                 f" and {len(groups) - 3} more" if len(groups) > 3 else "")
             self.statusBar().showMessage(
-                f"Opened in a Model window: {names}", 12000)
+                f"Listed as MD models in the Structures dock: {names}",
+                12000)
         if refused:
-            QMessageBox.warning(self, "A Model window did not open",
+            QMessageBox.warning(self, "A model could not be listed",
                                 "\n".join(refused))
         return opened
+
+    def _on_model_opened(self, _outcome) -> None:
+        """A model read (or refused): its row names its atoms and frames,
+        and the title and status follow when it is the one shown."""
+        controller = self.sender()
+        self.structure_panel.refresh()
+        current = self.project.current
+        if current is not None and controller is not None \
+                and getattr(controller, "entry", None) is current:
+            self._show_model(current)
+
+    def _on_model_status(self, text: str) -> None:
+        controller = self.sender()
+        current = self._model()
+        if controller is current or current is None:
+            self.statusBar().showMessage(text, 0)
+        else:
+            entry = getattr(controller, "entry", None)
+            name = entry.name.splitlines()[0] if entry is not None else "model"
+            self.statusBar().showMessage(f"{name}: {text}", 12000)
+
+    def _show_entry(self, reframe: bool = True) -> None:
+        """Put the active entry on show: a crystal in the crystal widgets,
+        an MD model in its workspace."""
+        entry = self.project.current
+        if entry is None:
+            return
+        if entry.kind == "model":
+            self._show_model(entry)
+        else:
+            self._show_crystal()
+            self._after_load(reframe=reframe)
+
+    def _show_crystal(self) -> None:
+        for stack in self._stacks():
+            stack.setCurrentIndex(0)
+        self.sites_dock.setWindowTitle("Sites")
+        self._update_model_actions()
+
+    def _show_model(self, entry) -> None:
+        controller = entry.controller
+        if controller is None:
+            return
+        for widget, stack in zip(controller.widgets, self._stacks()):
+            if stack.indexOf(widget) < 0:
+                stack.addWidget(widget)
+            stack.setCurrentWidget(widget)
+        # The Setup tree (a name and what it runs with) and the Highlight
+        # rules want a column of 450-500 px; the crystal's tabs are laid out
+        # at a third of the splitter, about 400 at a 1440 px window. Widened
+        # once, the first time a model is shown narrower than that; the
+        # splitter stays where the user puts it afterwards.
+        sizes = self.split.sizes()
+        if len(sizes) == 2 and sum(sizes) > 0 and sizes[1] < self.MODEL_COLUMN:
+            total = sum(sizes)
+            self.split.setSizes([max(total - self.MODEL_COLUMN, 320),
+                                 self.MODEL_COLUMN])
+        self.sites_dock.setWindowTitle("Elements")
+        first = entry.name.splitlines()[0]
+        self.setWindowTitle(
+            f"{NAME} {__version__} — {first}  ·  MD model"
+            + (f"   [{len(self.project)} structures]" if len(self.project) > 1
+               else ""))
+        self.statusBar().showMessage(controller.status_line(), 0)
+        self._update_model_actions()
+
+    def _close_model(self, entry) -> None:
+        """Stop a model's work and free its widgets (the entry removed, or
+        the window closing)."""
+        controller = entry.controller
+        if controller is None:
+            return
+        controller.shutdown()
+        for widget, stack in zip(controller.widgets, self._stacks()):
+            try:
+                if stack.indexOf(widget) >= 0:
+                    stack.removeWidget(widget)
+            except RuntimeError:
+                pass
+        controller.dispose()
 
     def open_md_paths(self, paths, *, series: bool = False) -> list:
         """Open files chosen as MD models (File > Open MD model…).
 
-        A file an MD reader recognises (:func:`md_format_of`) opens in a
-        Model window even where the crystal reader would also read it (a
+        A file an MD reader recognises (:func:`md_format_of`) is listed as
+        a model even where the crystal reader would also read it (a
         one-frame extended XYZ, a POSCAR); any other file goes to
-        :meth:`load_many`, which loads a crystal here and lists what neither
+        :meth:`load_many`, which loads a crystal and lists what neither
         reader takes. With ``series`` the MD files are one model, read in
         the natural order of their names (dump.20 before dump.100);
         otherwise :func:`model_groups` decides.
@@ -1004,7 +1406,14 @@ class PreviewWindow(QMainWindow):
                              key=md_readers.natural_sort_key)]
         else:
             groups = model_groups(models)
-        return self.open_md_models(groups)
+        opened = self.open_md_models(groups)
+        if opened:
+            index = self.project.index_of(opened[0].entry)
+            if index is not None:
+                self.project.set_active(index)
+                self.structure_panel.refresh()
+                self._show_entry()
+        return opened
 
     def _choose_md_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -1028,9 +1437,10 @@ class PreviewWindow(QMainWindow):
         """
         open_md = QAction("Open MD &model…", self)
         open_md.setToolTip(
-            "An MD model or trajectory, each file in a Model window of its "
-            "own, which reads every frame and runs the MD analyses. "
-            "Dropping the file on this window does the same.")
+            "An MD model or trajectory, listed in the Structures dock beside "
+            "the crystals; selecting it shows the Model workspace, which "
+            "reads every frame and runs the MD analyses. Dropping the file "
+            "on this window does the same.")
         open_md.triggered.connect(self._choose_md_files)
         self.open_md_action = open_md
         open_series = QAction("Open MD se&ries as one model…", self)
@@ -1042,7 +1452,10 @@ class PreviewWindow(QMainWindow):
         _insert_after(self._menu_bar_action("File"), "Open folder…",
                       (open_md, open_series))
 
-        help_md = QAction("MD models and the Model &window", self)
+        help_md = QAction("MD models and the Model &workspace", self)
+        help_md.setToolTip("The manual's MD section: presets, the Setup "
+                           "tree, Highlight rules and channels, the Model "
+                           "menu, frames, export, the command line.")
         help_md.triggered.connect(self._show_md_manual)
         self.md_help_action = help_md
         _insert_after(self._menu_bar_action("Help"), "Keyboard and mouse",
@@ -1052,6 +1465,21 @@ class PreviewWindow(QMainWindow):
         from .help import MD_SECTION
 
         self._show_manual(MD_SECTION)
+
+    def _show_context_help(self) -> None:
+        """F1 and Help > Manual: the manual, at the part that matches what
+        is shown (the Setup, Results, Highlight or Notes tab of an MD
+        model, or its read panel); the start otherwise."""
+        controller = self._model()
+        if controller is None:
+            self._show_manual()
+            return
+        from .help import MD_SECTION, md_anchor_for
+
+        tab = controller.current_tab()
+        if not tab and controller.canvas_shown() == "read-options":
+            tab = "read-options"
+        self._show_manual(MD_SECTION, md_anchor_for(tab))
 
     def _menu_bar_action(self, title: str):
         """The menu bar's action whose title (without its &) is ``title``.
@@ -1066,13 +1494,13 @@ class PreviewWindow(QMainWindow):
         return None
 
     def _after_load(self, reframe: bool = False) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         results = self.project.results_for(entry)
         if entry.selected_site is None and results:
             entry.selected_site = results[0].site_index
-        elements = sorted({e for x in self.project for e in
+        elements = sorted({e for x in self.project.crystals for e in
                            x.structure.elements_present})
         self.theme_panel.set_elements(elements)
         self._fill_site_list()
@@ -1126,7 +1554,7 @@ class PreviewWindow(QMainWindow):
             return
         style = self.style_box.currentData() or Style.BALL_AND_STICK
         cell_range = tuple(b.value() for b in self.range_boxes)
-        active = self.project.current
+        active = self._crystal()
 
         scenes = []
         for entry in entries:
@@ -1313,7 +1741,7 @@ class PreviewWindow(QMainWindow):
 
     def _on_structure_row(self, row: int) -> None:
         self.project.set_active(row)
-        self._after_load(reframe=not self.project.overlay)
+        self._show_entry(reframe=not self.project.overlay)
 
     def _on_overlay(self, on: bool, spacing: float) -> None:
         self.project.set_overlay(on, spacing)
@@ -1321,13 +1749,17 @@ class PreviewWindow(QMainWindow):
         self._rebuild(reframe=True)
 
     def _on_remove(self, row: int) -> None:
-        if row < 0:
+        if row < 0 or row >= len(self.project):
             return
+        entry = self.project.entries[row]
+        if entry.kind == "model":
+            self._close_model(entry)
         self.project.remove(row)
         self.structure_panel.refresh()
         if len(self.project):
-            self._after_load(reframe=True)
+            self._show_entry(reframe=True)
         else:
+            self._show_crystal()
             self.scene = None
             # and tell the viewport, which otherwise keeps drawing the file
             # that has just been closed -- along with its analysis panels, its
@@ -1417,13 +1849,11 @@ class PreviewWindow(QMainWindow):
         """Colour mode, palette, sizes: the vertex arrays must be rebuilt."""
         self._apply_theme_everywhere(theme)
         self._rebuild()
-        # The Model windows opened from here take it too. Only here, not on
-        # every cosmetic step of a slider: a Model window adopting a theme
-        # loads its frame again (ModelWindow.apply_theme).
-        for window in self.model_windows:
-            adopt = getattr(window, "apply_theme", None)
-            if adopt is not None:
-                adopt(theme)
+        # The MD models listed take it too. Only here, not on every cosmetic
+        # step of a slider: a model adopting a theme draws its frame again
+        # (ModelController.apply_theme).
+        for controller in self.models:
+            controller.apply_theme(theme)
 
     def _sync_theme_menu(self, theme) -> None:
         """Tick the View > Theme entry matching the theme now in use.
@@ -1474,7 +1904,7 @@ class PreviewWindow(QMainWindow):
         Undo changes how a structure is drawn, never what it is: loading a file,
         closing one, and anything written to disk are all outside it.
         """
-        entry = self.project.current
+        entry = self._crystal()
         slab = self.planes_panel.slab
         return {
             "overrides": (entry.overrides.to_dict() if entry is not None
@@ -1494,7 +1924,7 @@ class PreviewWindow(QMainWindow):
     def _restore(self, snapshot: dict) -> None:
         if not snapshot:
             return
-        entry = self.project.current
+        entry = self._crystal()
         if entry is not None and snapshot.get("overrides") is not None:
             entry.overrides = overrides_mod.StyleOverrides.from_dict(
                 snapshot["overrides"])
@@ -1570,7 +2000,7 @@ class PreviewWindow(QMainWindow):
         A configuration choice is therefore not undoable -- undo covers how a
         structure is drawn, and this changes which structure it is.
         """
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         entry.invalidate()
@@ -1621,7 +2051,7 @@ class PreviewWindow(QMainWindow):
         self.statusBar().showMessage("redid: " + description, 6000)
 
     def _clear_overrides(self) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None or entry.overrides.is_empty:
             return
         entry.overrides.clear()
@@ -1659,7 +2089,7 @@ class PreviewWindow(QMainWindow):
         """
         from PySide6.QtWidgets import QMenu
 
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return None
         scene = self.scene
@@ -1758,7 +2188,7 @@ class PreviewWindow(QMainWindow):
         return menu
 
     def _show_polyhedron_for(self, site_index: int) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         entry.selected_site = site_index
@@ -1766,7 +2196,7 @@ class PreviewWindow(QMainWindow):
         self._rebuild()
 
     def _apply_override(self, level: str, target, verb: str, **fields) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         if level == "site":
@@ -1780,7 +2210,7 @@ class PreviewWindow(QMainWindow):
 
     def _scale_override(self, level: str, target, factor: float) -> None:
         """Multiply the drawn size, compounding with any scale already set."""
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         if level == "site":
@@ -1806,7 +2236,7 @@ class PreviewWindow(QMainWindow):
             color=(chosen.redF(), chosen.greenF(), chosen.blueF()))
 
     def _clear_override(self, level: str, target) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         if level == "site":
@@ -1882,7 +2312,7 @@ class PreviewWindow(QMainWindow):
         # What the bond topology alone would give for each bond. Computed
         # from an analysis that covers the anions, cached on the entry, and
         # only when a panel asks for it -- see Entry.network.
-        entry = self.project.current
+        entry = self._crystal()
         apriori_rows, apriori_reason = (
             self.project.network_for(entry) if entry is not None else ({}, ""))
         split = apriori_rows.get(r.site_index)
@@ -2037,7 +2467,7 @@ class PreviewWindow(QMainWindow):
             self._wrote(out)
 
     def _export_cif(self) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         path = self._ask("Export as CIF", f"{Path(entry.name).stem}_facet.cif",
@@ -2049,7 +2479,7 @@ class PreviewWindow(QMainWindow):
             self._wrote(path)
 
     def _export_poscar(self) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         path = self._ask("Export as POSCAR", "POSCAR", "VASP (POSCAR*);;All (*)")
@@ -2058,7 +2488,7 @@ class PreviewWindow(QMainWindow):
             self._wrote(path)
 
     def _export_xyz(self) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         path = self._ask("Export as XYZ", f"{Path(entry.name).stem}.xyz",
@@ -2070,7 +2500,7 @@ class PreviewWindow(QMainWindow):
             self._wrote(path)
 
     def _export_vesta(self) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         if entry is None:
             return
         path = self._ask("Export for VESTA", f"{Path(entry.name).stem}.vesta",
@@ -2081,7 +2511,7 @@ class PreviewWindow(QMainWindow):
             self._wrote(path)
 
     def _export_feff(self) -> None:
-        entry = self.project.current
+        entry = self._crystal()
         result = self._current_result()
         if entry is None or result is None:
             QMessageBox.information(self, "No site selected",
@@ -2097,10 +2527,22 @@ class PreviewWindow(QMainWindow):
         path = self._ask("Save the session", "facet_session.json",
                          "FACET session (*.json)")
         if path:
-            exporters.save_session(self.project, path, theme=self.theme,
-                                   camera=self.view.camera, labels=self.labels,
-                                   presentation=self._snapshot())
+            self.save_session(path)
             self._wrote(path)
+
+    def save_session(self, path) -> None:
+        """Write the session: the crystals with their styling, and each MD
+        model as its source, read options and the request of its Setup
+        (never a result)."""
+        for controller in self.models:
+            if controller.page is not None:
+                try:
+                    controller.request_spec()
+                except (ValueError, TypeError):
+                    pass
+        exporters.save_session(self.project, path, theme=self.theme,
+                               camera=self.view.camera, labels=self.labels,
+                               presentation=self._snapshot())
 
     def _open_session(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open a session", "",
@@ -2121,10 +2563,25 @@ class PreviewWindow(QMainWindow):
         dialog is the part that cannot be. The same split as the context menus,
         for the same reason.
         """
-        paths = [e["path"] for e in data.get("entries", []) if e.get("path")]
-        missing = [p for p in paths if not Path(p).exists()]
+        records = [e for e in data.get("entries", []) if e.get("path")]
+        crystals = [e["path"] for e in records if e.get("kind") != "model"]
+        models = [e for e in records if e.get("kind") == "model"]
+        paths = crystals + [
+            p for e in models
+            for p in (e["path"] if isinstance(e["path"], list) else [e["path"]])]
+        missing = [p for p in paths if not Path(str(p)).exists()]
+        self._close_models()
         self.project.clear()
-        self.load_many([p for p in paths if Path(p).exists()])
+        self.load_many([p for p in crystals if Path(p).exists()])
+        for record in models:
+            source = record["path"]
+            files = source if isinstance(source, list) else [source]
+            if not all(Path(str(p)).exists() for p in files):
+                continue
+            self.open_md_models([source if isinstance(source, list)
+                                 else str(source)],
+                                read_options=record.get("read_options") or None,
+                                request_specs=[record.get("request") or None])
 
         self.project.set_bond_threshold(data.get("v_bond",
                                                  self.project.v_bond))
@@ -2159,8 +2616,8 @@ class PreviewWindow(QMainWindow):
         # loses the overrides for the files that are gone and keeps the rest,
         # instead of applying one structure's overrides to another.
         by_path = {e.get("path"): e for e in data.get("entries", [])
-                   if e.get("path")}
-        for entry in self.project.entries:
+                   if e.get("path") and e.get("kind") != "model"}
+        for entry in self.project.crystals:
             saved = by_path.get(entry.path)
             if saved and saved.get("disorder") and entry.disorder is not None:
                 # before the overrides, because the configuration decides how
@@ -2179,14 +2636,32 @@ class PreviewWindow(QMainWindow):
         if presentation:
             self._restore(presentation)
         self._rebuild(reframe="camera" not in data)
-        active = self.project.current
+        if self.project.current is not None and \
+                self.project.current.kind == "model":
+            self._show_model(self.project.current)
         self.history.reset(self._snapshot(), "opened the session")
         self._refresh_history_actions()
         if missing:
             QMessageBox.information(
                 self, "Some files have moved",
                 "A session records where the files were, not their contents.\n\n"
-                + "\n".join(Path(p).name for p in missing))
+                + "\n".join(Path(str(p)).name for p in missing))
+
+    def _close_models(self) -> None:
+        for entry in list(self.project.models):
+            self._close_model(entry)
+
+    def closeEvent(self, event) -> None:
+        """Stop every model's work (cancel, then wait at most
+        md_workspace.CLOSE_WAIT_MS each) before the window goes."""
+        for entry in list(self.project.models):
+            controller = entry.controller
+            if controller is not None:
+                try:
+                    controller.shutdown()
+                except RuntimeError:
+                    pass
+        super().closeEvent(event)
 
     # -- bond-valence parameters -------------------------------------------
     def _load_parameters(self) -> None:
@@ -2297,9 +2772,10 @@ class PreviewWindow(QMainWindow):
         """A resolution-free figure, drawn as shapes rather than pixels."""
         from ..gl import vector_export
 
-        if self.scene is None:
+        view, name = self._shown_view()
+        if view is None or view.scene is None:
             return
-        name = (self.structure.name or "structure").replace(" ", "_")
+        name = name.replace(" ", "_")
         path, chosen = QFileDialog.getSaveFileName(
             self, "Export a vector figure", f"{name}.svg",
             vector_export.FILE_FILTER)
@@ -2321,21 +2797,35 @@ class PreviewWindow(QMainWindow):
                       if answer == QMessageBox.Yes
                       else vector_export.Background.THEME)
         try:
-            self.view.save_vector(path, background=background,
-                                  title=self.structure.name or "")
+            view.save_vector(path, background=background, title=name)
         except Exception as error:
             QMessageBox.warning(self, "Could not write the figure", str(error))
             return
         self._wrote(path)
 
+    def _shown_view(self) -> tuple:
+        """(the 3D view on show, its name): the crystal's, or the frame
+        view of the MD model selected."""
+        controller = self._model()
+        if controller is not None:
+            entry = controller.entry
+            stem = Path(entry.source_path).stem if entry.source_path else "model"
+            k = controller.frame_view.k if controller.frame_view else 0
+            return controller.view, f"{stem}_frame{k}"
+        if self.structure is None:
+            return self.view, "structure"
+        return self.view, (self.structure.name or "structure")
+
     def _save_image(self) -> None:
-        if self.scene is None:
+        view, name = self._shown_view()
+        if view is None or view.scene is None:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export image", "structure.png", "PNG image (*.png)")
+            self, "Export image", f"{name.replace(' ', '_')}.png",
+            "PNG image (*.png)")
         if not path:
             return
-        self.view.grab_image(2400, 1800, supersample=2).save(path)
+        view.grab_image(2400, 1800, supersample=2).save(path)
         self.statusBar().showMessage(f"Wrote {path}", 8000)
 
     def _about(self) -> None:
@@ -2353,8 +2843,9 @@ class PreviewWindow(QMainWindow):
         self._about_dialog = dialog          # keep it alive while it is open
         dialog.exec()
 
-    def _show_manual(self, section: str = "") -> None:
-        """Open the manual, at ``section`` if one is named.
+    def _show_manual(self, section: str = "", anchor: str = "") -> None:
+        """Open the manual, at ``section`` if one is named (and scrolled to
+        ``anchor`` within it).
 
         Held on the window rather than shown modally, so the manual can stay
         open beside the workspace while its instructions are followed.
@@ -2362,14 +2853,20 @@ class PreviewWindow(QMainWindow):
         from .help import ManualDialog
 
         existing = getattr(self, "_manual_dialog", None)
-        if existing is not None and existing.isVisible():
-            existing.show_section(section)
+        try:
+            alive = existing is not None and existing.isVisible()
+        except RuntimeError:            # closed and deleted
+            alive = False
+        if alive:
+            existing.show_section(section, anchor)
             existing.raise_()
             existing.activateWindow()
             return
         dialog = ManualDialog(self, section=section, theme=self.theme)
         self._manual_dialog = dialog
         dialog.show()
+        if anchor:
+            dialog.show_section(section, anchor)
 
 
 # ---------------------------------------------------------------------------
@@ -2659,16 +3156,6 @@ def _group_name(group) -> str:
         return (f"{Path(group[0]).name} .. {Path(group[-1]).name} "
                 f"({len(group)} files)")
     return Path(group).name
-
-
-def _open(window) -> bool:
-    """Whether a Model window still exists and is shown."""
-    try:
-        import shiboken6
-
-        return bool(shiboken6.isValid(window) and window.isVisible())
-    except Exception:              # a window deleted under us is not open
-        return False
 
 
 def _insert_after(bar_action, text: str, actions) -> None:

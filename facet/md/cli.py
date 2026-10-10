@@ -35,7 +35,9 @@ network formers; a blank value leaves them not given.
 
 Options are given in three layers, each overriding the one before: a
 request file (``--request``, TOML or JSON, laid out as ``template``
-prints), the flags, and ``--set group.option=value``.
+prints), the flags, and ``--set group.option=value``. A list of numbers is
+comma-separated (``1,2.5``) or, when it is a range, ``first:last:step``
+(``0.05:1.0:0.05``, the Delta list of the channels).
 
 EXIT CODES
 ----------
@@ -69,8 +71,8 @@ EXIT_CANCELLED = 4
 EXIT_WRITE = 5
 
 # The option groups of a request, in the order the template prints them.
-GROUPS = ("glass", "scattering", "network", "order", "voids", "nmr", "exafs",
-          "feff", "dynamics")
+GROUPS = ("glass", "scattering", "network", "order", "voids", "channels",
+          "nmr", "exafs", "feff", "dynamics")
 # Top-level request fields a request file or --set may give, by name, with
 # the friendlier names the command line uses.
 _TOP_ALIASES = {"ox": "ox_overrides", "type_map": "type_map",
@@ -193,8 +195,26 @@ def _shells(value, where: str) -> tuple:
     return tuple(out)
 
 
+def _float_range(text: str, where: str) -> tuple:
+    """'first:last:step' -> first, first + step, ..., up to last (within
+    half a step), as a list of numbers is written when it is a range (the
+    Delta list of the channels, say); rounded to 10 decimals."""
+    parts = text.split(":")
+    if len(parts) != 3:
+        raise UsageError(f"{where}: {text!r} is not first:last:step")
+    first, last, step = (_float(p, where) for p in parts)
+    if step <= 0.0 or not last > first:
+        raise UsageError(f"{where}: {text!r} needs a step above 0 and last "
+                         "above first")
+    n = int(math.floor((last - first) / step + 1e-9)) + 1
+    return tuple(round(first + k * step, 10) for k in range(n))
+
+
 def _floats(value, where: str, count: int | None = None) -> tuple:
-    out = tuple(_float(v, where) for v in _list(value))
+    if isinstance(value, str) and ":" in value and "," not in value:
+        out = _float_range(value.strip(), where)
+    else:
+        out = tuple(_float(v, where) for v in _list(value))
     if count is not None and len(out) != count:
         raise UsageError(f"{where}: {count} numbers are needed, not "
                          f"{len(out)} ({value!r})")
@@ -412,7 +432,8 @@ def _group_class(name: str):
 
     return {"glass": ma.GlassOptions, "scattering": ma.ScatteringOptions,
             "network": ma.NetworkOptions, "order": ma.OrderOptions,
-            "voids": ma.VoidOptions, "nmr": ma.NmrOptions,
+            "voids": ma.VoidOptions, "channels": ma.ChannelOptions,
+            "nmr": ma.NmrOptions,
             "exafs": ma.ExafsOptions, "feff": ma.FeffOptions,
             "dynamics": ma.DynamicsOptions}[name]
 
@@ -565,6 +586,12 @@ _LEFT_OUT_MEANS = {
     ("scattering", "r_max_ang"): "the largest grid the boxes hold",
     ("scattering", "termination_q_min_inv_ang"): "the first Q of the grid",
     ("exafs", "r_max_ang"): "the glass g(r) radius",
+    ("channels", "repulsion_r_excl_ang"): "no repulsion exclusion",
+    ("channels", "repulsion_elements"): "every cation element but the "
+                                        "probe's (with repulsion_r_excl_ang)",
+    ("channels", "modifier_cutoffs"): "the glass analysis's cutoffs when "
+                                      "glass runs, else the first minimum "
+                                      "of the first frame's own g(r)",
 }
 
 
@@ -697,6 +724,11 @@ examples:
   py -3.11 -m facet.md analyse dump.lammpstrj --type-map 1=Si,2=O,3=Na \\
       --formers Si --only glass,rings --set network.ring_criterion=primitive \\
       --set network.ring_max_size=12 --out results/
+  py -3.11 -m facet.md analyse dump.lammpstrj --type-map 1=Si,2=O,3=Na \\
+      --only channels,modifier-density,void-regions --set channels.probe=Na \\
+      --set channels.deltas_vu=0.05:1.0:0.05 --set channels.delta_vu=0.3 \\
+      --set channels.modifiers=Na --set channels.k_rich=3 \\
+      --set channels.void_probe_radius_ang=0.5 --set voids.radii=vdw --out r/
   py -3.11 -m facet.md template > request.toml   (then --request request.toml)
 
 exit codes: 0 every analysis asked for was computed; 1 some analysis

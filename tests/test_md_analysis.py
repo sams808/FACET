@@ -980,3 +980,411 @@ def test_the_driver_imports_no_qt():
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "CLEAN" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# the channel analyses (md_channels) through the driver
+# ---------------------------------------------------------------------------
+
+from facet.core import md_channels as mc  # noqa: E402
+
+GLASS_XYZ = Path(__file__).resolve().parent / "data" / "md" / "glass.extxyz"
+CHANNEL_NAMES = ("channels", "modifier-density", "void-regions")
+# a coarse grid: the quartz supercell gives 15 x 15 x 17 points, the
+# five-atom glass file 10 x 10 x 9
+COARSE_GRID = 1.0
+
+
+def _channel_options(**kw):
+    """Quartz holds Si and O only, so Si4+ is the probe and the 'modifier'
+    counted around O; k_rich 2 is a bridging oxygen's count."""
+    base = dict(probe="Si", grid_spacing_ang=COARSE_GRID,
+                deltas_vu=(0.5, 1.0, 1.5), delta_vu=0.5, modifiers=("Si",),
+                k_rich=2, void_probe_radius_ang=0.0)
+    base.update(kw)
+    return ma.ChannelOptions(**base)
+
+
+def _direct_landscapes(trajectory, ox, probe, probe_ox, delta):
+    out = {}
+    for k in FRAMES:
+        frame = trajectory.frame(k)
+        landscape = mc.bv_landscape(frame, ox.per_atom(frame.elements), probe,
+                                    probe_ox, grid_spacing_ang=COARSE_GRID,
+                                    r_cut_ang=6.0)
+        out[k] = (landscape, mc.accessible_regions(landscape, delta),
+                  mc.percolation_thresholds(landscape))
+    return out
+
+
+def _void_direct(frame, probe_radius):
+    spheres = md_order.empty_spheres(
+        frame, md_order.vdw_radii_ang(tuple(frame.species)),
+        radii_source=md_order.VDW_RADII_SOURCE)
+    return mc.void_regions(frame, spheres, probe_radius_ang=probe_radius,
+                           grid_spacing_ang=COARSE_GRID,
+                           lining_distance_ang=0.5)
+
+
+@pytest.fixture(scope="module")
+def channel_run(trajectory):
+    """Every channel analysis with glass (its Si-O first minimum is the
+    modifier-density cutoff) and the empty spheres (shared with the void
+    regions) on the three quartz frames."""
+    return ma.analyse(trajectory, ma.AnalysisRequest(
+        analyses=("glass", "empty-spheres") + CHANNEL_NAMES,
+        formers={"Si"}, voids=ma.VoidOptions(radii="vdw"),
+        channels=_channel_options()))
+
+
+def test_channels_through_the_driver_equal_md_channels_on_each_frame(
+        channel_run, trajectory, ox):
+    """The landscape field of the last frame, the accessible fractions, the
+    percolation thresholds and the region volumes: md_channels called
+    directly on the same frames, to 1e-10."""
+    out = channel_run.outputs["channels"]
+    assert out.ok, out.error
+    direct = _direct_landscapes(trajectory, ox, "Si", 4, 0.5)
+    raw = out.raw
+    assert isinstance(raw, ma.ChannelsResult) and raw.last_frame == FRAMES[-1]
+    last = direct[FRAMES[-1]]
+    np.testing.assert_allclose(raw.landscape.mismatch_vu, last[0].mismatch_vu,
+                               rtol=0, atol=1e-10)
+    np.testing.assert_allclose(raw.landscape.bvs_vu, last[0].bvs_vu, rtol=0,
+                               atol=1e-10)
+    np.testing.assert_array_equal(raw.regions.label_grid, last[1].label_grid)
+    deltas = np.array([0.5, 1.0, 1.5])
+    fractions = mc.average_accessible_fraction([direct[k][0] for k in FRAMES],
+                                               deltas, frames=FRAMES)
+    mine = out.tables["accessible volume fraction of Si4+"]
+    np.testing.assert_array_equal(mine.axis, fractions.axis)
+    np.testing.assert_allclose(mine.per_frame, fractions.per_frame, rtol=0,
+                               atol=1e-10)
+    assert mine.notes == fractions.notes
+    thresholds = mc.average_percolation_thresholds(
+        [direct[k][2] for k in FRAMES], frames=FRAMES)
+    for scalar in thresholds.values():
+        np.testing.assert_allclose(out.tables[scalar.name].per_frame,
+                                   scalar.per_frame, rtol=0, atol=1e-10,
+                                   equal_nan=True)
+    table = out.tables["accessible regions at Delta 0.5 v.u."]
+    for k in FRAMES:
+        regions = direct[k][1]
+        rows = [r for r in table.rows if r["frame"] == k]
+        assert len(rows) == regions.n_regions > 0
+        np.testing.assert_allclose([r["volume (Å^3)"] for r in rows],
+                                   regions.volume_ang3, rtol=0, atol=1e-10)
+        np.testing.assert_allclose([r["elongation"] for r in rows],
+                                   regions.elongation, rtol=0, atol=1e-10,
+                                   equal_nan=True)
+        assert [r["dimensionality"] for r in rows] == \
+            list(regions.dimensionality)
+        assert [r["Si atoms inside"] for r in rows] == \
+            [int(a.size) for a in regions.probe_atoms]
+    at = out.tables["accessible volume fraction of Si4+ at Delta 0.5 v.u."]
+    np.testing.assert_allclose(
+        at.per_frame, [direct[k][1].accessible_fraction for k in FRAMES],
+        rtol=0, atol=1e-10)
+    assert any("frame 2, the last frame analysed" in n for n in out.notes)
+    method = out.provenance.method_parameters
+    assert method["channels.grid_spacing_ang"] == COARSE_GRID
+    assert method["r_cut (Å)"] == 6.0 and method["Delta (v.u.)"] == 0.5
+
+
+def test_modifier_density_reads_the_glass_cutoff_when_glass_runs(
+        channel_run, trajectory, tables):
+    """With glass in the request the Si-O cutoff is glass's first minimum
+    (pass 2), the counts equal md_channels on the module's own search with
+    that cutoff and the bonds of the same frame, and the note says where
+    the cutoff came from."""
+    out = channel_run.outputs["modifier-density"]
+    assert out.ok, out.error
+    glass_cut = channel_run.outputs["glass"].raw.cutoffs_ang[("Si", "O")]
+    assert list(out.provenance.cutoffs_ang.values()) == [glass_cut]
+    assert "glass analysis" in out.provenance.method_parameters[
+        "modifier-anion cutoff source"]
+    assert any("from the glass analysis" in n for n in out.notes)
+    assert channel_run.searches == {k: (1, 1) for k in FRAMES}
+    direct = []
+    for k in FRAMES:
+        frame, _, _, bonds = tables[k]
+        pairs = bulk.find_pairs(frame, glass_cut + 0.5)
+        density = mc.modifier_density(
+            frame, pairs, modifiers={"Si"}, anions={"O"},
+            cutoffs_ang={("Si", "O"): glass_cut},
+            cutoff_sources={("Si", "O"): "test"}, k_rich=2, bonds=bonds,
+            formers={"Si"})
+        np.testing.assert_array_equal(out.raw[k].count, density.count)
+        np.testing.assert_array_equal(out.raw[k].rich, density.rich)
+        assert out.raw[k].speciation == density.speciation
+        direct.append(density)
+    averaged = mc.average_modifier_density(direct, frames=FRAMES)
+    for key in ("count", "rich fraction", "clusters", "rich by speciation"):
+        _same(out.tables[averaged[key].name], averaged[key], exact=True,
+              where=key)
+    clusters = out.tables["modifier clusters"]
+    assert sum(1 for r in clusters.rows if r["frame"] == 0) == \
+        direct[0].n_clusters
+
+
+def test_modifier_density_measures_its_cutoff_without_glass(trajectory,
+                                                            tables):
+    """Without glass the cutoff is the first minimum of the first analysed
+    frame's own g(r) (measure_cutoffs, the glass minimum rule), applied to
+    every frame, and the note says so; the minima of every frame are
+    listed."""
+    result = ma.analyse(trajectory, ma.AnalysisRequest(
+        analyses=("modifier-density",), formers={"Si"},
+        channels=_channel_options()))
+    out = result.outputs["modifier-density"]
+    assert out.ok, out.error
+    assert result.searches == {k: (1, 0) for k in FRAMES}
+    method = out.provenance.method_parameters
+    r_max = method["g(r) radius for the first minimum (Å)"]
+    frame0 = trajectory.frame(0)
+    measured = mc.measure_cutoffs(frame0, bulk.find_pairs(frame0, r_max + 0.1),
+                                  [("Si", "O")], ma.GlassOptions().minimum(),
+                                  r_max_ang=r_max)
+    cutoff = measured.cutoffs_ang[("O", "Si")]
+    assert list(out.provenance.cutoffs_ang.values()) == [cutoff]
+    assert "measured on frame 0" in method["modifier-anion cutoff source"]
+    assert any("measured on frame 0" in n and "applied to every frame" in n
+               for n in out.notes)
+    per_frame = out.tables["modifier cutoffs measured per frame"]
+    assert [r["frame"] for r in per_frame.rows] == FRAMES
+    assert per_frame.rows[0]["first minimum (Å)"] == cutoff
+    for k in FRAMES:
+        frame, _, _, bonds = tables[k]
+        density = mc.modifier_density(
+            frame, bulk.find_pairs(frame, cutoff + 0.5), modifiers={"Si"},
+            anions={"O"}, cutoffs_ang={("Si", "O"): cutoff},
+            cutoff_sources={("Si", "O"): "test"}, k_rich=2, bonds=bonds,
+            formers={"Si"})
+        np.testing.assert_array_equal(out.raw[k].count, density.count)
+    assert ma.dependencies(ma.AnalysisRequest(
+        analyses=("modifier-density",)), "modifier-density") == ()
+    assert ma.dependencies(ma.AnalysisRequest(
+        analyses=("glass", "modifier-density")), "modifier-density") == \
+        ("glass",)
+
+
+def test_void_regions_through_the_driver_equal_md_channels(channel_run,
+                                                           trajectory):
+    """The void regions of every frame against void_regions on the empty
+    spheres of the same frame (shared with the empty-spheres analysis),
+    the last frame's label grid kept."""
+    out = channel_run.outputs["void-regions"]
+    assert out.ok, out.error
+    raw = out.raw
+    assert isinstance(raw, ma.VoidRegionsResult)
+    assert raw.last_frame == FRAMES[-1]
+    direct = {k: _void_direct(trajectory.frame(k), 0.0) for k in FRAMES}
+    for k in FRAMES:
+        assert direct[k].n_regions > 0
+        np.testing.assert_allclose(raw.per_frame[k].volume_union_ang3,
+                                   direct[k].volume_union_ang3, rtol=0,
+                                   atol=1e-10)
+        np.testing.assert_allclose(raw.per_frame[k].elongation,
+                                   direct[k].elongation, rtol=0, atol=1e-10,
+                                   equal_nan=True)
+        assert raw.per_frame[k].label_grid.size == 0
+    np.testing.assert_array_equal(raw.regions.label_grid,
+                                  direct[FRAMES[-1]].label_grid)
+    averaged = mc.average_void_regions(
+        list(direct.values()), volume_edges_ang3=np.arange(0.0, 200.01, 5.0),
+        elongation_edges=np.arange(1.0, 11.01, 0.25), frames=FRAMES)
+    for key in ("void fraction", "regions", "region volume",
+                "region elongation"):
+        _same(out.tables[averaged[key].name], averaged[key], exact=True,
+              where=key)
+    method = out.provenance.method_parameters
+    assert method["empty spheres shared with the empty-spheres analysis "
+                  "(frames)"] == len(FRAMES)
+    assert method["probe radius (Å)"] == 0.0
+    assert method["channels.lining_distance_ang"] == 0.5
+    rows = [r for r in out.tables["void regions"].rows if r["frame"] == 1]
+    assert len(rows) == direct[1].n_regions
+
+
+def test_the_channel_analyses_on_the_glass_file_whose_box_changes():
+    """The five-atom glass file (Na, Si, O3; another box in each frame): the
+    per-frame numbers equal md_channels's, the grid follows each frame's
+    box with a note, a user Na-O cutoff feeds the modifier density, the
+    progress total counts the channel units, and no note carries a
+    verdict."""
+    import re
+
+    trajectory = ma.read_model(GLASS_XYZ)
+    frames = list(range(trajectory.n_frames))
+    assert len(frames) == 2
+    events = []
+    request = ma.AnalysisRequest(
+        analyses=CHANNEL_NAMES, voids=ma.VoidOptions(radii="vdw"),
+        channels=ma.ChannelOptions(
+            probe="Na", grid_spacing_ang=COARSE_GRID,
+            deltas_vu=(0.1, 0.2, 0.3, 0.5), delta_vu=0.3, modifiers=("Na",),
+            k_rich=1, modifier_cutoffs={("Na", "O"): 3.0},
+            void_probe_radius_ang=0.5))
+    result = ma.analyse(trajectory, request,
+                        progress=lambda d, t, s: events.append((d, t, s)))
+    for name in CHANNEL_NAMES:
+        assert result.outputs[name].ok, result.outputs[name].error
+    units = ma.PROGRESS_UNITS_PASS1 + sum(ma.PROGRESS_UNITS_CHANNELS.values())
+    assert events[-1][1] == len(frames) * units + 1
+    done = [d for d, _, _ in events]
+    assert done == sorted(done) and events[-1][0] == events[-1][1]
+    assert any("channels: landscape" in s for _, _, s in events)
+    ox = md_model.model_oxidation(trajectory.frame(0).species)
+    channels = result.outputs["channels"]
+    deltas = np.array([0.1, 0.2, 0.3, 0.5])
+    for k in frames:
+        frame = trajectory.frame(k)
+        landscape = mc.bv_landscape(frame, ox.per_atom(frame.elements), "Na",
+                                    1, grid_spacing_ang=COARSE_GRID,
+                                    r_cut_ang=6.0)
+        np.testing.assert_allclose(
+            channels.tables["accessible volume fraction of Na1+"].per_frame[k],
+            mc.accessible_fraction(landscape, deltas), rtol=0, atol=1e-10)
+        thresholds = mc.percolation_thresholds(landscape)
+        for axis, key in zip("abc", range(3)):
+            scalar = channels.tables[f"percolation threshold of Na1+ along "
+                                     f"{axis}"]
+            np.testing.assert_allclose(scalar.per_frame[k],
+                                       thresholds.delta_vu[key], rtol=0,
+                                       atol=1e-10, equal_nan=True)
+        voids = _void_direct(frame, 0.5)
+        np.testing.assert_allclose(
+            result.outputs["void-regions"].raw.per_frame[k].volume_union_ang3,
+            voids.volume_union_ang3, rtol=0, atol=1e-10)
+        density = mc.modifier_density(
+            frame, bulk.find_pairs(frame, 3.5), modifiers={"Na"},
+            anions={"O"}, cutoffs_ang={("Na", "O"): 3.0},
+            cutoff_sources={("Na", "O"): "test"}, k_rich=1)
+        np.testing.assert_array_equal(
+            result.outputs["modifier-density"].raw[k].count, density.count)
+    assert channels.raw.last_frame == 1
+    assert set(channels.raw.thresholds) == {0, 1}
+    assert any("box changes between the frames" in n for n in channels.notes)
+    assert "frame 0" in channels.provenance.method_parameters["grid shape"]
+    density_out = result.outputs["modifier-density"]
+    assert "channels.modifier_cutoffs" in density_out.provenance.method_parameters[
+        "modifier-anion cutoff source"]
+    assert density_out.provenance.cutoffs_ang == {("Na", "O"): 3.0}
+    pattern = re.compile(r"\b(" + "|".join(VERDICT_WORDS) + r")\b",
+                         re.IGNORECASE)
+    texts = list(result.notes)
+    for out in result.outputs.values():
+        texts += list(out.notes) + out.provenance.as_lines()
+        for container in out.tables.values():
+            texts += list(getattr(container, "notes", ()))
+    found = sorted({m.group(0) for text in texts for m in pattern.finditer(text)})
+    assert not found, found
+
+
+def test_channel_inputs_missing_or_impossible_are_named_before_any_frame():
+    """The physical choices have no default and are named at once; a value
+    no analysis can take is refused without reading a frame; a probe or a
+    modifier the model does not hold, or that is not a cation, is refused
+    against the first frame."""
+    request = ma.AnalysisRequest(analyses=CHANNEL_NAMES)
+    names = {m.name: m.why for m in ma.missing_inputs(request)}
+    for name in ("channels.probe", "channels.deltas_vu", "channels.delta_vu",
+                 "channels.modifiers", "channels.k_rich",
+                 "channels.void_probe_radius_ang", "voids.radii"):
+        assert name in names, name
+    assert "oxidation state" in names["channels.probe"]
+    assert ma.ChannelOptions().probe is None and \
+        ma.ChannelOptions().k_rich is None
+    runnable, left = ma.available_analyses(
+        ma.AnalysisRequest(analyses=(), formers={"Si"}))
+    for name in CHANNEL_NAMES:
+        assert name not in runnable
+    assert "channels.probe" in left["channels"]
+    assert "channels.modifiers" in left["modifier-density"]
+    assert "channels.void_probe_radius_ang" in left["void-regions"]
+    bad = ma.AnalysisRequest(
+        analyses=CHANNEL_NAMES, voids=ma.VoidOptions(radii="vdw"),
+        channels=ma.ChannelOptions(
+            probe="O", grid_spacing_ang=0.0, r_cut_ang=-1.0,
+            deltas_vu=(0.5, 0.2), delta_vu=0.3, modifiers=("Si",), k_rich=0,
+            repulsion_elements=("Si",), void_probe_radius_ang=-0.1,
+            elongation_edges=(2.0, 1.0, 0.1)))
+    named = {m.name: m.why for m in ma.invalid_inputs(bad)}
+    for name in ("channels.probe", "channels.grid_spacing_ang",
+                 "channels.r_cut_ang", "channels.deltas_vu", "channels.k_rich",
+                 "channels.repulsion_elements",
+                 "channels.void_probe_radius_ang",
+                 "channels.elongation_edges"):
+        assert name in named, name
+    assert "oxidation state" in named["channels.probe"]
+    assert "increasing" in named["channels.deltas_vu"]
+    counting = _Counting(_frames(1))
+    with pytest.raises(ma.RequestError):
+        ma.analyse(counting, bad)
+    assert counting.loads == 0
+    absent = ma.AnalysisRequest(
+        analyses=("channels", "modifier-density"),
+        channels=_channel_options(probe="Al", modifiers=("Na",)))
+    counting = _Counting(_frames(1))
+    with pytest.raises(ma.RequestError) as error:
+        ma.analyse(counting, absent)
+    text = str(error.value)
+    assert "channels.probe: the model holds no Al" in text
+    assert "channels.modifiers: the model holds no Na" in text
+    assert counting.loads == 1
+    with pytest.raises(ma.RequestError, match="anions of this model"):
+        ma.analyse(md_model.MemoryTrajectory(_frames(1)), ma.AnalysisRequest(
+            analyses=("modifier-density",),
+            channels=_channel_options(modifiers=("O",))))
+    with pytest.raises(ma.RequestError, match="no cutoff for Si-O"):
+        ma.analyse(md_model.MemoryTrajectory(_frames(1)), ma.AnalysisRequest(
+            analyses=("modifier-density",),
+            channels=_channel_options(modifier_cutoffs={("Si", "Si"): 3.0})))
+
+
+def test_a_cancel_between_the_landscape_and_the_regions_leaves_the_frame_out(
+        trajectory):
+    """cancelled() is asked between the stages of a frame: a cancel after
+    the landscape of frame 1 leaves frame 1 out of the channels analysis
+    with the reason, frame 0 stays, and the thresholds of frame 1 are
+    never computed."""
+    seen = []
+    state = {"stop": False}
+
+    def progress(done, total, stage):
+        seen.append(stage)
+        if stage.startswith("pass 1, frame 1: channels: landscape"):
+            state["stop"] = True
+
+    result = ma.analyse(trajectory, ma.AnalysisRequest(
+        analyses=("channels", "voronoi"), channels=_channel_options()),
+        progress=progress, cancelled=lambda: state["stop"])
+    assert result.cancelled
+    out = result.outputs["channels"]
+    assert out.ok and out.provenance.frames_used == (0,)
+    assert "cancelled" in out.provenance.frames_skipped[1]
+    assert 2 in out.provenance.frames_skipped
+    assert out.raw.last_frame == 0
+    assert any(s.startswith("pass 1, frame 0: channels: percolation")
+               for s in seen)
+    assert not any(s.startswith("pass 1, frame 1: channels: percolation")
+                   for s in seen)
+    assert result.outputs["voronoi"].provenance.frames_used == (0, 1)
+
+
+def test_the_ion_conduction_preset_ticks_the_channel_analyses():
+    from facet.core import md_presets
+
+    preset = md_presets.preset_named("Ion conduction / channels")
+    assert set(CHANNEL_NAMES) <= set(preset.analyses)
+
+    class Summary:
+        species = ("Na", "Si", "O")
+        n_frames = 2
+        has_times = True
+        has_velocities = False
+
+    applied = md_presets.apply_preset(preset, Summary())
+    assert set(CHANNEL_NAMES) <= set(applied.analyses)
+    assert applied.formers == frozenset({"Si"})
+    assert ma.PROGRESS_UNITS_CHANNELS["channels"] > ma.PROGRESS_UNITS_PASS1
