@@ -1026,3 +1026,70 @@ def test_sheared_box_gives_the_brute_force_field_and_the_sphere_volume():
     assert np.abs(voids.centroid_ang[0] - np.array([0.5, 0.5, 0.5]) @ box).max() \
         < 1e-9
     assert abs(mc.regions_grid(voids).cell.volume - small.volume_ang3) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# G. cancellation and the grid cap
+# ---------------------------------------------------------------------------
+
+def test_the_landscape_stops_when_the_hook_flips_after_the_first_chunk(
+        monkeypatch):
+    """One grid point a chunk (PAIRS_PER_CHUNK patched to 1), a hook that is
+    False once and then True: the sum raises AnalysisCancelled at the second
+    chunk, well under a second, instead of walking the grid."""
+    import time
+
+    monkeypatch.setattr(mc, "PAIRS_PER_CHUNK", 1)
+    frame = na_o_frame()
+    answers = iter([False] + [True] * 1_000_000)
+    clock = time.perf_counter()
+    with pytest.raises(mc.AnalysisCancelled, match="cancelled"):
+        mc.bv_landscape(frame, ox_of(frame), "Na", 1, grid_spacing_ang=0.4,
+                        r_cut_ang=4.0, cancelled=lambda: next(answers))
+    assert time.perf_counter() - clock < 1.0
+
+
+def test_regions_thresholds_and_voids_ask_the_cancel_hook():
+    frame = na_o_frame()
+    land = mc.bv_landscape(frame, ox_of(frame), "Na", 1, grid_spacing_ang=1.0,
+                           r_cut_ang=4.0)
+    with pytest.raises(mc.AnalysisCancelled):
+        mc.accessible_regions(land, 0.3, cancelled=lambda: True)
+    with pytest.raises(mc.AnalysisCancelled):
+        mc.percolation_thresholds(land, cancelled=lambda: True)
+    with pytest.raises(mc.AnalysisCancelled):
+        mc.void_regions(frame, spheres_from(frame, [[0.5, 0.5, 0.5]], [1.5]),
+                        probe_radius_ang=0.0, grid_spacing_ang=0.5,
+                        lining_distance_ang=0.0, cancelled=lambda: True)
+    # a hook that never says stop changes nothing
+    same = mc.bv_landscape(frame, ox_of(frame), "Na", 1, grid_spacing_ang=1.0,
+                           r_cut_ang=4.0, cancelled=lambda: False)
+    assert np.array_equal(same.bvs_vu, land.bvs_vu)
+    # the analysis layer raises this very class (md_analysis aliases it)
+    from facet.core import md_analysis
+
+    assert md_analysis.AnalysisCancelled is mc.AnalysisCancelled
+
+
+def test_a_grid_beyond_the_cap_is_refused_with_the_numbers():
+    """The 12 Å box at 0.5 Å asks for 24 x 24 x 24 = 13 824 points: a cap of
+    1 000 refuses it before anything is allocated, naming the counts and a
+    spacing that fits; the default cap admits it."""
+    frame = na_o_frame()
+    with pytest.raises(ValueError) as err:
+        mc.bv_landscape(frame, ox_of(frame), "Na", 1, grid_spacing_ang=0.5,
+                        r_cut_ang=4.0, max_grid_points=1000)
+    text = str(err.value)
+    assert "24 x 24 x 24" in text and "13,824" in text and "1,000" in text
+    assert "0.5" in text and "would fit" in text
+    with pytest.raises(ValueError, match="grid points"):
+        mc.void_regions(frame, spheres_from(frame, [[0.5, 0.5, 0.5]], [1.5]),
+                        probe_radius_ang=0.0, grid_spacing_ang=0.5,
+                        lining_distance_ang=0.0, max_grid_points=1000)
+    shape, n_points, refusal = mc.grid_guard(frame.box_ang, 0.5, 1000)
+    assert shape == (24, 24, 24) and n_points == 13824
+    assert "13,824" in refusal
+    # the spacing suggested is the cube root of volume over the cap
+    assert f"{(frame.volume_ang3 / 1000) ** (1 / 3):.2g}" in refusal
+    assert mc.grid_guard(frame.box_ang, 0.5)[2] == ""
+    assert mc.MAX_GRID_POINTS == 20_000_000

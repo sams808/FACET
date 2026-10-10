@@ -531,11 +531,18 @@ class ResultsPage(QWidget):
         self.search.setPlaceholderText("Filter descriptors…  (name, element, "
                                        "analysis)")
         self.search.setClearButtonEnabled(True)
-        self.search.setToolTip("Hide the descriptors whose name does not "
-                               "contain this text; an analysis stays when "
+        self.search.setToolTip("Hide the descriptors whose label and engine "
+                               "id lack this text; an analysis stays when "
                                "one of its descriptors matches.")
         self.search.textChanged.connect(self.filter)
         column.addWidget(self.search)
+        # the kind chips sit with the search field, over the tree
+        chips = browser.kind_chips
+        if chips.parentWidget() is not None \
+                and chips.parentWidget().layout() is not None:
+            chips.parentWidget().layout().removeWidget(chips)
+        chips.setParent(None)
+        column.addWidget(chips)
         tree.setMinimumWidth(200)
         column.addWidget(tree, 1)
         self.note = _hint("Click a descriptor: its figure and rows are shown "
@@ -544,36 +551,14 @@ class ResultsPage(QWidget):
         column.addWidget(self.note)
 
     def filter(self, text: str) -> None:
-        text = text.strip().lower()
-        tree = self.browser.tree
-        for i in range(tree.topLevelItemCount()):
-            self._filter_item(tree.topLevelItem(i), text)
-
-    def _filter_item(self, item, text: str) -> bool:
-        own = text in item.text(0).lower()
-        shown = False
-        for k in range(item.childCount()):
-            if self._filter_item(item.child(k), text) or own:
-                shown = True
-        if item.childCount() == 0:
-            shown = own or not text
-        else:
-            shown = shown or own or not text
-            if text and shown:
-                item.setExpanded(True)
-        item.setHidden(not shown)
-        return shown
+        """The browser hides the rows whose label and engine id lack this
+        text, combined with the kind chips."""
+        self.browser.set_text_filter(text)
 
     def visible_descriptors(self) -> list[str]:
-        out = []
-        stack = [self.browser.tree.topLevelItem(i)
-                 for i in range(self.browser.tree.topLevelItemCount())]
-        while stack:
-            item = stack.pop(0)
-            if not item.isHidden() and item.childCount() == 0:
-                out.append(item.text(0))
-            stack[0:0] = [item.child(k) for k in range(item.childCount())]
-        return out
+        """The engine ids of the descriptor leaves the filters leave
+        shown."""
+        return self.browser.visible_descriptors()
 
 
 # ---------------------------------------------------------------------------
@@ -1595,6 +1580,12 @@ class ModelController(QObject):
         from .md_highlight import FrameData
 
         fv = self.frame_view
+        if fv is None or fv.table is None:
+            # a frame drawn without bonds carries no valence table, so there
+            # is no FrameData to build; redraw() says so to the user before
+            # it gets here, and a caller reaching this directly gets None
+            # rather than FrameData.from_frame's ValueError
+            return None
         formers = self.page.formers() if self.page is not None else frozenset()
         key = (id(fv), round(float(v_bond), 9), formers)
         if self.frame_data is not None and self._frame_data_key == key:

@@ -48,8 +48,24 @@ __all__ = [
     "ModelSummary", "Opened", "ReadProblem", "JobFailure", "FrameView",
     "READ_OPTION_TEXT", "source_label", "summarise", "read_options_taken",
     "diagnose", "open_model", "load_frame_view",
-    "Job", "AnalysisJob", "running_jobs",
+    "Job", "AnalysisJob", "running_jobs", "current_cancelled",
 ]
+
+# The cancel hook of the job whose work runs on the current thread, set for
+# the span of _Worker.run. What it is for: a computation deep under a job's
+# work (FrameData's landscapes and void regions under the highlight job)
+# can poll the job's cancel without the hook having been threaded through
+# every call between them; without this, a worker computing a large grid
+# never saw its cancel, the keeper's wait at quit ran out, and the
+# interpreter tore down a live QThread (STATUS_STACK_BUFFER_OVERRUN,
+# measured on the 43-million-point highlight landscape, 2026-10-10).
+_THREAD_CANCEL = threading.local()
+
+
+def current_cancelled() -> Callable[[], bool] | None:
+    """The cancel hook of the :class:`Job` running on this thread, or None
+    on any other thread (the GUI thread included)."""
+    return getattr(_THREAD_CANCEL, "hook", None)
 
 # How many bytes a file may hold for the window to read it a second time,
 # with stand-in elements, to count the atoms of each type in frame 0 when the
@@ -618,6 +634,7 @@ class _Worker(QObject):
     @Slot()
     def run(self) -> None:
         work, self._work = self._work, None
+        _THREAD_CANCEL.hook = self._cancel.is_set
         try:
             result = work(self._progress, self._cancel.is_set)
         except Exception as error:        # noqa: BLE001 - reported, not raised
@@ -628,6 +645,7 @@ class _Worker(QObject):
         else:
             self.succeeded.emit(result)
         finally:
+            _THREAD_CANCEL.hook = None
             # the work's closure holds what it read (a trajectory, a frame):
             # released here, whatever happens to this object afterwards
             work = result = None          # noqa: F841

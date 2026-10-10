@@ -409,3 +409,123 @@ def _isfloat(token: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# session validation: a corrupted file is refused in words, never half-restored
+# ---------------------------------------------------------------------------
+
+# Each corrupt shape the deep-scan sweep fed restore_session, with the words
+# the refusal carries (every message starts "the session file could not be
+# read:" and names the field).
+_CORRUPT_SESSIONS = [
+    ("entries is a string",
+     {"facet_session": 1, "entries": "quartz.cif"}, "'entries'"),
+    ("entry path is an int",
+     {"facet_session": 1, "entries": [{"path": 5}]}, "'path'"),
+    ("entry is a string",
+     {"facet_session": 1, "entries": ["x"]}, "entry 0"),
+    ("model path list with an int",
+     {"facet_session": 1, "entries": [{"kind": "model", "path": ["a.data", 7]}]},
+     "model's 'path'"),
+    ("model read_options a list",
+     {"facet_session": 1,
+      "entries": [{"kind": "model", "path": "a.data", "read_options": [1, 2]}]},
+     "read_options"),
+    ("model request a string",
+     {"facet_session": 1,
+      "entries": [{"kind": "model", "path": "a.data", "request": "glass"}]},
+     "request"),
+    ("theme is a string",
+     {"facet_session": 1, "entries": [{"path": "q.cif"}], "theme": "Dark"},
+     "'theme'"),
+    ("camera empty",
+     {"facet_session": 1, "entries": [{"path": "q.cif"}], "camera": {}},
+     "camera.target"),
+    ("camera wrong shapes",
+     {"facet_session": 1, "entries": [{"path": "q.cif"}],
+      "camera": {"target": [1], "distance": "far", "orientation": [1, 2],
+                 "fov": None, "orthographic": "yes"}}, "camera"),
+    ("presentation an int",
+     {"facet_session": 1, "entries": [{"path": "q.cif"}], "presentation": 7},
+     "'presentation'"),
+    ("presentation planes wrong",
+     {"facet_session": 1, "entries": [{"path": "q.cif"}],
+      "presentation": {"planes": [{"h": 1}], "slab": {"h": "a"},
+                       "v_bond": "x"}}, "presentation.planes[0]"),
+    ("v_bond a string",
+     {"facet_session": 1, "entries": [{"path": "q.cif"}], "v_bond": "abc"},
+     "'v_bond'"),
+    ("overlay a string",
+     {"facet_session": 1, "entries": [{"path": "q.cif"}], "overlay": "yes",
+      "overlay_spacing": "far"}, "'overlay"),
+    ("overrides wrong type",
+     {"facet_session": 1, "entries": [{"path": "q.cif",
+                                       "overrides": "hide Si"}]}, "overrides"),
+    ("disorder wrong type",
+     {"facet_session": 1, "entries": [{"path": "q.cif", "disorder": 3}]},
+     "disorder"),
+    ("selected_site a string",
+     {"facet_session": 1, "entries": [{"path": "q.cif",
+                                       "selected_site": "two"}]},
+     "selected_site"),
+    ("visible an int",
+     {"facet_session": 1, "entries": [{"path": "q.cif", "visible": 2}]},
+     "visible"),
+    ("top level a list", [1, 2], "top level"),
+]
+
+
+@pytest.mark.parametrize("label, data, words",
+                         _CORRUPT_SESSIONS,
+                         ids=[c[0] for c in _CORRUPT_SESSIONS])
+def test_a_corrupt_session_shape_is_refused_in_words(label, data, words):
+    with pytest.raises(ValueError, match="the session file could not be read"):
+        exporters.validate_session(data)
+    try:
+        exporters.validate_session(data)
+    except ValueError as error:
+        assert words in str(error), (label, str(error))
+
+
+def test_what_restore_session_tolerates_still_validates():
+    # the shapes the window restores without complaint keep validating: an
+    # empty mapping, a bare entry list, a model with options, missing files
+    for data in ({},
+                 {"facet_session": 1, "entries": []},
+                 {"facet_session": 1,
+                  "entries": [{"path": r"C:\nope\missing.cif"},
+                              {"kind": "model",
+                               "path": r"C:\nope\missing.lammpstrj",
+                               "read_options": {"type_map": {"1": "Si"}},
+                               "request": {"analyses": ["glass"]}}]},
+                 {"facet_session": 1, "entries": [{"path": "q.cif"}],
+                  "theme": {"name": "x"}}):
+        assert exporters.validate_session(data) is data
+
+
+def test_a_truncated_or_non_json_session_file_is_refused_in_words(tmp_path):
+    full = json.dumps({"facet_session": 1, "entries": [{"path": "q.cif"}]})
+    trunc = tmp_path / "session_trunc.json"
+    trunc.write_text(full[: len(full) // 2], encoding="utf-8")
+    with pytest.raises(ValueError, match="could not be read") as err:
+        exporters.load_session(trunc)
+    assert "JSON" in str(err.value)
+    not_json = tmp_path / "not_json.json"
+    not_json.write_text("data_quartz\n_cell_length_a 4.91\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="could not be read"):
+        exporters.load_session(not_json)
+    with pytest.raises(OSError):
+        exporters.load_session(tmp_path / "absent.json")
+
+
+def test_a_saved_session_passes_its_own_validation(two_structures, tmp_path):
+    from facet.core import theme as T
+    from facet.gl.camera import Camera
+
+    camera = Camera()
+    camera.frame([0, 0, 0], 5.0)
+    path = exporters.save_session(two_structures, tmp_path / "s.json",
+                                  theme=T.publication(), camera=camera)
+    data = exporters.load_session(path)      # load_session validates
+    assert exporters.validate_session(data) is data

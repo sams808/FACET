@@ -225,6 +225,31 @@ def test_the_crystal_loads_beside_a_model_and_each_keeps_its_state(
     window._on_threshold(0.05)
 
 
+def test_a_background_models_status_line_is_named_under_a_crystal_view(
+        qapp, window):
+    """With the crystal current, a model's status line (a frame drawn, a
+    read ending) is shown with the model's name and a timeout, never bare
+    and permanent as if it were the crystal's; the model on show keeps the
+    bare permanent line."""
+    controller = _open(qapp, window, DATA / "glass.extxyz")
+    assert _drawn(qapp, controller)
+    window.load(str(QUARTZ))
+    assert window.project.current.kind == "crystal"
+    qapp.processEvents()
+    controller.statusMessage.emit("frame 0 drawn in 0.34 s (probe)")
+    qapp.processEvents()
+    assert window.statusBar().currentMessage() == \
+        "glass.extxyz: frame 0 drawn in 0.34 s (probe)"
+    # back on the model, the line is its own again
+    window.structure_panel.list.setCurrentRow(0)
+    qapp.processEvents()
+    assert window.project.current is controller.entry
+    controller.statusMessage.emit("frame 1 drawn in 0.12 s (probe)")
+    qapp.processEvents()
+    assert window.statusBar().currentMessage() == \
+        "frame 1 drawn in 0.12 s (probe)"
+
+
 def test_a_dump_without_elements_shows_the_read_panel_and_reads_once_given(
         qapp, window):
     controller = _open(qapp, window, DATA / "dump_tri_x.lammpstrj")
@@ -1019,6 +1044,27 @@ def test_a_model_shown_widens_the_column_and_each_region_sizes_to_its_page(
     qapp.processEvents()
     assert window.project.current.kind == "crystal"
     assert window.minimumSizeHint() == crystal_min
+
+
+def test_removing_the_last_structure_empties_the_viewport(qapp, window,
+                                                          quartz_model):
+    """Removing the only structure clears the view instead of raising.
+
+    `_on_remove` hands the viewport `set_scene(None)`, and the OpenGL
+    renderer used to read `scene.n_bonds` off that None -- an AttributeError
+    on every remove-of-the-last-structure wherever a GL context exists. The
+    painter tier never minded, which is why offscreen runs stayed green while
+    the deep-scan sweep failed on the GPU in every scenario that ended by
+    emptying the window.
+    """
+    controller = _quartz(qapp, window, quartz_model)
+    assert _drawn(qapp, controller)
+    assert len(window.project.entries) == 1
+    window._on_remove(0)                      # must not raise, on any tier
+    qapp.processEvents()
+    assert len(window.project.entries) == 0
+    assert window.scene is None
+    assert window.view.scene is None
 
 
 def test_removing_the_model_shuts_its_work_and_frees_its_pages(qapp, window,

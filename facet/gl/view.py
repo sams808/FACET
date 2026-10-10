@@ -122,7 +122,7 @@ class StructureView(QOpenGLWidget):
                        if scene.n_atoms else 0.0)
             self.camera.set_bounds(scene.center, scene.radius, 3.0 * biggest)
 
-        if reframe:
+        if reframe and scene is not None:
             self.camera.frame(scene.center, scene.radius)
             # frame() has just overwritten the pivot, so any record of a chosen
             # centre is stale by definition; keeping it would make the read-out

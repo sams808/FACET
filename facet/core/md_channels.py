@@ -327,7 +327,7 @@ REFERENCES
 from __future__ import annotations
 
 import math
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -340,7 +340,8 @@ from .md_order import EmptySpheres
 from .md_stats import Distribution, Histogram, Scalar, Series
 
 __all__ = [
-    "PAIRS_PER_CHUNK", "AXES",
+    "PAIRS_PER_CHUNK", "AXES", "MAX_GRID_POINTS", "AnalysisCancelled",
+    "grid_guard",
     "Repulsion", "Landscape", "bv_landscape", "accessible_fraction",
     "AccessibleRegions", "accessible_regions",
     "PercolationThresholds", "percolation_thresholds",
@@ -363,6 +364,14 @@ __all__ = [
 # 3000-atom NS3 glass: 38 pairs a point at r_cut = 6 Å).
 PAIRS_PER_CHUNK: int = 4_000_000
 
+# The largest grid :func:`bv_landscape` and :func:`void_regions` attempt
+# before allocating anything, as volume.bond_valence_grid caps its own grid:
+# the three landscape fields are 17 bytes a point and every chunked pass
+# walks the whole grid, so a small spacing typed over a large box asks for
+# minutes of work and gigabytes of fields. Refused with the numbers instead
+# (grid_guard); a caller that means it passes a larger ``max_grid_points``.
+MAX_GRID_POINTS: int = 20_000_000
+
 # (sphere, grid offset) tests per chunk when marking the union of the void
 # spheres, and grid points per chunk when the region moments are summed.
 # Memory choices, never in a result.
@@ -377,6 +386,49 @@ AXES = ("a", "b", "c")
 _CONNECTIVITY_TEXT = ("6-connectivity: a grid point is joined to its two "
                       "neighbours along each of a, b and c, with periodic "
                       "boundaries")
+
+
+class AnalysisCancelled(Exception):
+    """The caller's ``cancelled()`` hook returned True mid-computation.
+
+    The one cancellation type of the analysis layer: ``md_analysis`` aliases
+    it (that module imports this one, so the class lives here), and the jobs
+    sort a failure on it.
+    """
+
+
+def _poll(cancelled: Callable[[], bool] | None, what: str) -> None:
+    """Raise :class:`AnalysisCancelled` when the caller's hook says stop."""
+    if cancelled is not None and cancelled():
+        raise AnalysisCancelled(f"cancelled {what}")
+
+
+def grid_guard(box_ang, grid_spacing_ang: float,
+               max_grid_points: int | None = None) -> tuple[tuple, int, str]:
+    """The grid ``grid_spacing_ang`` asks for over the box: its (shape,
+    point count, refusal text).
+
+    The refusal text is empty while the count fits ``max_grid_points``
+    (:data:`MAX_GRID_POINTS` when None); otherwise it states the numbers and
+    the spacing that would fit, so a page can show it before anything runs
+    and :func:`bv_landscape` / :func:`void_regions` refuse with the same
+    words before allocating anything.
+    """
+    box = np.asarray(box_ang, dtype=np.float64).reshape(3, 3)
+    h = _positive(grid_spacing_ang, "grid_spacing_ang")
+    shape = _grid_shape(box, h)
+    n_points = int(np.prod(shape))
+    cap = MAX_GRID_POINTS if max_grid_points is None else int(max_grid_points)
+    text = ""
+    if n_points > cap:
+        volume = float(abs(np.linalg.det(box)))
+        fits = (volume / max(cap, 1)) ** (1.0 / 3.0)
+        text = (f"a spacing of {h:g} Å over this box asks for "
+                f"{shape[0]} x {shape[1]} x {shape[2]} = {n_points:,} grid "
+                f"points, more than the {cap:,} this will attempt "
+                f"(max_grid_points); a spacing of about {fits:.2g} Å or more "
+                "would fit, and halving a spacing is eight times the points")
+    return tuple(int(v) for v in shape), n_points, text
 
 
 # ---------------------------------------------------------------------------
@@ -757,7 +809,9 @@ class Landscape:
 def bv_landscape(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
                  grid_spacing_ang: float, r_cut_ang: float,
                  params: bv.ParameterSet | None = None,
-                 repulsion: Repulsion | None = None) -> Landscape:
+                 repulsion: Repulsion | None = None,
+                 cancelled: Callable[[], bool] | None = None,
+                 max_grid_points: int | None = None) -> Landscape:
     """The bond-valence sum a probe ``probe``^``probe_ox`` would have at every
     point of a periodic grid over the frame, and its mismatch |V - n|.
 
@@ -769,7 +823,10 @@ def bv_landscape(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
     anion)``. ``repulsion`` excludes the grid points near the other cations.
     The sum runs in chunks of about :data:`PAIRS_PER_CHUNK` (grid point,
     anion image) pairs, so the memory does not grow with the grid beyond the
-    three fields themselves.
+    three fields themselves. ``cancelled`` is asked once per chunk and stops
+    the computation with :class:`AnalysisCancelled`; a grid of more than
+    ``max_grid_points`` points (:data:`MAX_GRID_POINTS` when None) is
+    refused with the numbers before anything is allocated (grid_guard).
     """
     from scipy.spatial import cKDTree
 
@@ -791,8 +848,12 @@ def bv_landscape(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
         raise ValueError(f"repulsion needs a Repulsion, not "
                          f"{type(repulsion).__name__}")
     box = frame.box_ang
+    # the grid cap, before anything is allocated: nothing typed in a spacing
+    # field can start a computation this size by itself
+    _, n_points, refusal = grid_guard(box, h, max_grid_points)
+    if refusal:
+        raise ValueError(refusal)
     shape = _grid_shape(box, h)
-    n_points = int(np.prod(shape))
     is_anion = ox < 0
     if not is_anion.any():
         raise ValueError("the model holds no anion (no atom with a negative "
@@ -866,6 +927,8 @@ def bv_landscape(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
     bvs = np.zeros(n_points)
     param_list = [(parameters[element], codes[element]) for element in parameters]
     for start in range(0, n_points, per_chunk):
+        _poll(cancelled, f"in the landscape sum at grid point {start} of "
+                         f"{n_points}")
         stop = min(n_points, start + per_chunk)
         points = bulk._lattice(_grid_frac(shape, start, stop), box)
         found = cKDTree(points).sparse_distance_matrix(
@@ -1119,16 +1182,19 @@ class AccessibleRegions:
         return rows
 
 
-def accessible_regions(landscape: Landscape, delta_vu: float
+def accessible_regions(landscape: Landscape, delta_vu: float, *,
+                       cancelled: Callable[[], bool] | None = None
                        ) -> AccessibleRegions:
     """The connected regions where the mismatch is at most ``delta_vu``
     (6-connectivity, periodic), with their volume, centroid, elongation,
-    dimensionality, spans and the probe atoms inside (module docstring)."""
+    dimensionality, spans and the probe atoms inside (module docstring).
+    ``cancelled`` is asked once before the labelling."""
     landscape = _check_landscape(landscape)
     delta = _nonnegative(delta_vu, "delta_vu")
     shape = np.array(landscape.shape, dtype=np.int64)
     box = landscape.box_ang
     n_points = landscape.n_points
+    _poll(cancelled, "before the regions were labelled")
     mask = _accessible_mask(landscape, delta)
     labels, n_lab, u, v, shift = _label_periodic(mask)
     probe_rows = np.flatnonzero(landscape.elements == landscape.probe)
@@ -1267,20 +1333,26 @@ class PercolationThresholds:
                 for k in range(3)]
 
 
-def percolation_thresholds(landscape: Landscape) -> PercolationThresholds:
+def percolation_thresholds(landscape: Landscape, *,
+                           cancelled: Callable[[], bool] | None = None
+                           ) -> PercolationThresholds:
     """The smallest mismatch threshold at which some accessible region spans
     a, b and c, by bisection over the sorted mismatch values of the grid
-    (module docstring). The result is a grid value, exact for this grid."""
+    (module docstring). The result is a grid value, exact for this grid.
+    ``cancelled`` is asked once per bisection step (each step one labelling
+    of the whole grid)."""
     landscape = _check_landscape(landscape)
     values = landscape.sorted_mismatch()
     if values.size == 0:
         raise ValueError("every grid point is excluded by the repulsion; no "
                          "threshold exists")
+    _poll(cancelled, "before the first labelling of the bisection")
     top = _spans_at(landscape, float(values[-1]))
     evaluations = 1
     lo = np.full(3, -1, dtype=np.int64)
     hi = np.full(3, values.size - 1, dtype=np.int64)
     while True:
+        _poll(cancelled, f"in the bisection after {evaluations} labelling(s)")
         width = np.where(top, hi - lo, 0)
         k = int(np.argmax(width))
         if width[k] <= 1:
@@ -1772,7 +1844,8 @@ def modifier_density(frame: Frame, pairs, *, modifiers, anions, cutoffs_ang: Map
 
 def _mark_spheres(centre_frac: np.ndarray, radii: np.ndarray, region: np.ndarray,
                   box: np.ndarray, shape: np.ndarray, label_flat: np.ndarray,
-                  depth_flat: np.ndarray) -> None:
+                  depth_flat: np.ndarray,
+                  cancelled: Callable[[], bool] | None = None) -> None:
     """Give every grid point strictly inside a sphere the region of the
     sphere it lies deepest inside (the largest r - d), in place.
 
@@ -1785,6 +1858,8 @@ def _mark_spheres(centre_frac: np.ndarray, radii: np.ndarray, region: np.ndarray
     order = np.argsort(-radii, kind="stable")
     start = 0
     while start < order.size:
+        _poll(cancelled, f"while marking the void spheres on the grid "
+                         f"(sphere {start} of {order.size})")
         r_max = float(radii[order[start]])
         offsets = md_order._stencil(box, shape, widths, r_max)
         per_chunk = max(1, _SPHERE_WORK_PER_CHUNK // offsets.shape[0])
@@ -1916,7 +1991,9 @@ def _reduce_by_group(group: np.ndarray, values: np.ndarray, n_groups: int,
 
 
 def void_regions(frame: Frame, spheres: EmptySpheres, *, probe_radius_ang: float,
-                 grid_spacing_ang: float, lining_distance_ang: float
+                 grid_spacing_ang: float, lining_distance_ang: float,
+                 cancelled: Callable[[], bool] | None = None,
+                 max_grid_points: int | None = None
                  ) -> VoidRegions:
     """Group the empty spheres of ``spheres`` (``md_order.empty_spheres`` on
     this frame) into void regions: spheres of radius at least
@@ -1924,8 +2001,11 @@ def void_regions(frame: Frame, spheres: EmptySpheres, *, probe_radius_ang: float
     docstring). ``grid_spacing_ang`` sets the periodic grid the union
     volumes are measured on and the label grid is exported from;
     ``lining_distance_ang`` is the largest gap between an atom's own sphere
-    and a sphere of the region for the atom to line it. Every argument is
-    required.
+    and a sphere of the region for the atom to line it. Every physical
+    argument is required. ``cancelled`` is asked once per chunk of each pass
+    and stops the computation with :class:`AnalysisCancelled`; a grid of
+    more than ``max_grid_points`` points (:data:`MAX_GRID_POINTS` when None)
+    is refused with the numbers before anything is allocated (grid_guard).
     """
     from scipy.spatial import cKDTree
 
@@ -1949,8 +2029,11 @@ def void_regions(frame: Frame, spheres: EmptySpheres, *, probe_radius_ang: float
         raise ValueError(f"the spheres carry no radius for {', '.join(absent)}")
     symbols = frame.elements
     box = frame.box_ang
+    # the grid cap, before anything is allocated (bv_landscape's guard)
+    _, n_points, refusal = grid_guard(box, h, max_grid_points)
+    if refusal:
+        raise ValueError(refusal)
     shape = _grid_shape(box, h)
-    n_points = int(np.prod(shape))
     voxel = volume / n_points
     spacing = tuple(float(v) for v in np.linalg.norm(box, axis=1) / shape)
     mean_spacing = (volume / n) ** (1.0 / 3.0)
@@ -2045,6 +2128,8 @@ def void_regions(frame: Frame, spheres: EmptySpheres, *, probe_radius_ang: float
         per_chunk = int(min(S, max(1, PAIRS_PER_CHUNK // estimate)))
         us, vs, ss = [], [], []
         for start in range(0, S, per_chunk):
+            _poll(cancelled, f"in the void overlap search at sphere {start} "
+                             f"of {S}")
             stop = min(S, start + per_chunk)
             found = cKDTree(home[start:stop]).sparse_distance_matrix(
                 tree, margin, output_type="ndarray")
@@ -2103,7 +2188,8 @@ def void_regions(frame: Frame, spheres: EmptySpheres, *, probe_radius_ang: float
     # the union volume on the grid
     label_flat = np.full(n_points, -1, dtype=np.int32)
     depth_flat = np.full(n_points, -np.inf)
-    _mark_spheres(cf, r, comp, box, shape, label_flat, depth_flat)
+    _mark_spheres(cf, r, comp, box, shape, label_flat, depth_flat,
+                  cancelled=cancelled)
     del depth_flat
     marked = label_flat >= 0
     union_count = np.bincount(label_flat[marked], minlength=n_regions)
@@ -2124,6 +2210,8 @@ def void_regions(frame: Frame, spheres: EmptySpheres, *, probe_radius_ang: float
     estimate = max(1.0, n / volume * 4.0 / 3.0 * math.pi * reach ** 3)
     per_chunk = int(min(S, max(1, PAIRS_PER_CHUNK // estimate)))
     for start in range(0, S, per_chunk):
+        _poll(cancelled, f"in the lining-atom search at sphere {start} of "
+                         f"{S}")
         stop = min(S, start + per_chunk)
         found = cKDTree(home[start:stop]).sparse_distance_matrix(
             atree, reach, output_type="ndarray")

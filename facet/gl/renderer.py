@@ -219,8 +219,20 @@ class Renderer:
         vao.release()
         self._counts[key] = count
 
-    def set_scene(self, scene: Scene) -> None:
-        """Upload a scene. Call on load, on a style change, or after restyling."""
+    def set_scene(self, scene: Scene | None) -> None:
+        """Upload a scene. Call on load, on a style change, or after restyling.
+
+        ``None`` empties the viewport: the last structure was removed, and the
+        renderer must stop drawing it. An empty :class:`Scene` is uploaded in
+        its place, which zeroes every vertex count, rather than guarding each
+        of the buffer builders below against ``None`` one by one. The painter
+        tier already survived ``None``; this tier crashed on it
+        (``scene.n_bonds`` on ``None``), which an app-wide stress sweep found
+        on every remove-of-the-last-structure once crystals and MD models
+        shared one window.
+        """
+        if scene is None:
+            scene = Scene()
         self._scene = scene
         self._sort_key = None          # the new geometry has not been ordered
         self._tube_sides = buffers.tube_sides_for(

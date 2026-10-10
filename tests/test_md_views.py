@@ -38,7 +38,8 @@ ROOT = Path(__file__).resolve().parent.parent
 MD_DATA = Path(__file__).resolve().parent / "data" / "md"
 QUARTZ = Path(__file__).resolve().parent / "data" / "crystals" / \
     "quartz_SiO2_cod9013321.cif"
-UI_MODULES = ("md_plot.py", "md_views.py", "md_threshold.py")
+UI_MODULES = ("md_plot.py", "md_views.py", "md_threshold.py",
+              "md_names.py", "md_results_overview.py")
 VERDICT = re.compile(
     r"\b(good|bad|poor|excellent|acceptable|unacceptable|correct|incorrect|"
     r"wrong|reliable|unreliable|trustworthy|untrustworthy|unusable|should|"
@@ -570,6 +571,125 @@ def test_a_cancelled_or_failed_run_is_named_in_the_banner(browser,
     assert not browser.banner.isHidden()
     assert "produced no result" in browser.banner.text()
     assert model_result.provenance.facet_version in browser.summary.text()
+
+
+# ---------------------------------------------------------------------------
+# the overview, the question groups and the display names
+# ---------------------------------------------------------------------------
+
+def test_the_overview_opens_first_with_a_card_per_question_group(
+        browser, model_result):
+    from facet.ui.md_names import group_of
+
+    overview = browser.overview
+    # a run lands on the overview, not on a descriptor
+    assert browser.stack.currentWidget() is overview
+    assert browser.current() == ("overview",)
+    # one card per question group that has results, each with at least one
+    # headline sentence and no verdict word
+    expected = {group_of(a) for a in model_result.outputs}
+    assert set(overview.card_groups()) == expected
+    assert len(expected) >= 3
+    for group in overview.card_groups():
+        sentences = overview.card_sentences(group)
+        assert sentences, group
+        assert [s for s in sentences if VERDICT.search(s)] == [], group
+    # the failed analysis shows the engine's reason on its card
+    dynamics = " ".join(overview.card_sentences("Dynamics"))
+    assert "the tracks hold no velocities" in dynamics
+    # the header names the run
+    header = overview.header.text()
+    source = Path(model_result.provenance.source_path).name
+    assert source in header and "formers" in header
+
+
+def test_display_names_translate_known_ids_and_keep_unknown_ones():
+    from facet.ui.md_names import display_name
+
+    table = {
+        "CN Si (BV)": "Coordination of Si — bond-valence cut",
+        "mean CN Na (distance)": "Mean coordination of Na — distance cut",
+        "Qn Si (BV)": "Qⁿ distribution of Si — bond-valence cut",
+        "Qn(mSi) Si (distance)": "Qⁿ bridges of Si to Si — distance cut",
+        "O speciation (BV)":
+            "O speciation: free, NBO, BO, tricluster — bond-valence cut",
+        "g Na-O": "Pair distribution g(r), Na–O",
+        "N O around Si": "Running coordination N(r): O around Si",
+        "angle Si-O-Si (BV)": "Bond angle Si–O–Si — bond-valence cut",
+        "phi Na (BV)":
+            "Threshold-stability index φ of Na — bond-valence cut",
+        "R_C(n), king rings": "Rings per node R_C(n) — King's criterion",
+        "ring sizes (nodes), king": "Ring sizes in nodes — King's criterion",
+        "S_NN(Q)": "Bhatia–Thornton number–number S(Q)",
+        "S(Q) neutron": "Total structure factor S(Q) — neutron",
+        "MSD Na": "Mean-square displacement of Na",
+        "VACF O": "Velocity autocorrelation of O",
+        "F_s(q = 1.2 1/Å, t) Na":
+            "Self intermediate scattering F_s(t) at q = 1.2 1/Å — Na",
+        "G_s(r, t = 0.01 ps) Na":
+            "Self van Hove function G_s(r) at t = 0.01 ps — Na",
+        "percolation threshold of Na1+, any axis":
+            "Percolation threshold of Na⁺, any axis",
+        "density": "Mass density",
+    }
+    for raw, label in table.items():
+        assert display_name(raw) == label, raw
+    # an id no rule covers is kept whole: nothing is hidden
+    for raw in ("a name no rule covers (x)", "q4 (Si)", "Al CN (BV, odd)"):
+        assert display_name(raw) == raw
+
+
+def test_the_kind_chips_filter_the_tree_by_container_kind(browser,
+                                                          model_result):
+    from collections import Counter
+
+    from facet.ui.md_names import kind_badge
+
+    by_kind = Counter(kind_badge(c)
+                      for _, _, c in model_result.descriptors())
+    counts = browser.kind_counts()
+    assert counts["all"] == sum(by_kind.values()) == len(browser.items())
+    for key in ("curve", "distribution", "number", "table"):
+        assert counts[key] == by_kind.get(key, 0), key
+    for key in ("curve", "number", "table", "distribution"):
+        browser.set_kind_filter(key)
+        shown = browser.visible_descriptors()
+        assert len(shown) == counts[key], key
+        assert all(kind_badge(model_result.outputs[a].tables[n]) == key
+                   for a, n in browser.items() if n in shown)
+    browser.set_kind_filter("all")
+    assert len(browser.visible_descriptors()) == counts["all"]
+
+
+def test_the_tree_is_grouped_by_question(browser, model_result):
+    from facet.ui.md_names import analysis_title, group_of
+
+    tree = browser.tree
+    tops = [tree.topLevelItem(i).text(0)
+            for i in range(tree.topLevelItemCount())]
+    assert tops[0] == "Overview"
+    assert tops[1].startswith("Run")
+    for group in ("Structure", "Compare with experiment", "Dynamics"):
+        assert group in tops, tops
+    # each analysis sits under its question group, titled as the Setup
+    # page titles it
+    for analysis in model_result.outputs:
+        node = browser.find_item(analysis)
+        assert node is not None, analysis
+        assert node.text(0) == analysis_title(analysis)
+        assert node.parent() is not None
+        assert node.parent().text(0) == group_of(analysis)
+
+
+def test_a_card_link_puts_the_tree_on_its_group(browser):
+    group = browser.overview.card_groups()[0]
+    # what a card's 'n descriptors →' link carries
+    browser.overview.groupRequested.emit(group)
+    assert browser.current() == ("group", group)
+    assert browser.tree.currentItem().text(0) == group
+    # the Overview item brings the cards back
+    assert browser.show_overview()
+    assert browser.stack.currentWidget() is browser.overview
 
 
 # ---------------------------------------------------------------------------

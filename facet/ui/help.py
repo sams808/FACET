@@ -1272,6 +1272,16 @@ either.</p>
 
 <a name="md-results"></a>
 <h2>The Results tab</h2>
+<p>A run opens on the <b>Overview</b>: one card per question of the Setup
+page (Structure, Voids and channels, Compare with experiment, Dynamics),
+each naming its analyses' headline measurements as plain sentences with
+units &mdash; mean coordinations under both cuts, the Q<sup>n</sup>
+distribution as a small fraction bar, percolation thresholds, diffusion
+coefficients &mdash; with a link into the tree positioned on that group.
+The tree groups the descriptors by the same questions, titles them in plain
+words (the engine id stays beside the label and in its tooltip), tags each
+row's kind (curve, distribution, number, table), and the chips over it keep
+one kind at a time; the Overview item at its top brings the cards back.</p>
 <p>One line names the run (file, frames, thresholds, formers, FACET version);
 <i>Provenance</i> unfolds the header every export carries, and <i>Export
 all&hellip;</i> writes every descriptor. The tree lists each analysis with

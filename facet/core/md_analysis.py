@@ -374,8 +374,12 @@ FORMER_READERS = ("glass", "rings", "coordination-sequences",
 _TIMED = TRAJECTORY_ANALYSES + ("bond-lifetimes",)
 
 
-class AnalysisCancelled(Exception):
-    """The run was cancelled before any frame was analysed."""
+# The cancellation the run raises when it was cancelled before any frame was
+# analysed, and the one a channels computation raises mid-grid when its
+# cancel hook flips: the same class, defined in md_channels (this module
+# imports md_channels, so the shared type lives there), so the jobs sort a
+# failure on one type.
+AnalysisCancelled = md_channels.AnalysisCancelled
 
 
 class FramesUnreadable(ValueError):
@@ -3182,7 +3186,9 @@ class _Consumer:
         clock = time.perf_counter()
         try:
             work()
-        except md_network.Cancelled:
+        except (md_network.Cancelled, AnalysisCancelled):
+            # md_network polls between graph passes, md_channels once per
+            # grid chunk: either way the frame is left out with the reason
             self.run._cancelled = True
             self.skipped[name][k] = "not analysed: the run was cancelled"
             return False
@@ -4487,16 +4493,18 @@ class _ChannelConsumer(_Consumer):
                 ctx.frame, ox_atom, self.probe, self.probe_ox,
                 grid_spacing_ang=float(o.grid_spacing_ang),
                 r_cut_ang=float(o.r_cut_ang), params=run.params,
-                repulsion=self.repulsion)
+                repulsion=self.repulsion, cancelled=run.is_cancelled)
             self.step(k, 26, f"channels: landscape of {landscape.probe_label} "
                              f"on {landscape.n_points} grid points done")
             self.poll("after the landscape, before the regions")
             fractions = md_channels.accessible_fraction(landscape, self.deltas)
-            regions = md_channels.accessible_regions(landscape, self.delta)
+            regions = md_channels.accessible_regions(landscape, self.delta,
+                                                     cancelled=run.is_cancelled)
             self.step(k, 1, f"channels: {regions.n_regions} accessible "
                             f"regions at Delta {self.delta:g} v.u. labelled")
             self.poll("after the regions, before the percolation thresholds")
-            thresholds = md_channels.percolation_thresholds(landscape)
+            thresholds = md_channels.percolation_thresholds(
+                landscape, cancelled=run.is_cancelled)
             self.step(k, 3, "channels: percolation thresholds found")
             holder.update(landscape=landscape, fractions=fractions,
                           regions=regions, thresholds=thresholds)
@@ -4542,7 +4550,8 @@ class _ChannelConsumer(_Consumer):
             regions = md_channels.void_regions(
                 ctx.frame, spheres, probe_radius_ang=self.void_probe,
                 grid_spacing_ang=float(o.grid_spacing_ang),
-                lining_distance_ang=float(o.lining_distance_ang))
+                lining_distance_ang=float(o.lining_distance_ang),
+                cancelled=run.is_cancelled)
             self.step(k, 5, f"void-regions: {regions.n_regions} void regions")
             holder.update(regions=regions, shared=shared)
         if not self.attempt("void-regions", k, work):

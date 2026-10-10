@@ -58,7 +58,8 @@ from .md_dialogs import _hint
 
 __all__ = [
     "FrameData", "Rule", "HighlightResult", "HighlightPage", "apply_rules",
-    "channel_backend", "sphere_mesh", "icosphere", "radius_for_volume",
+    "channel_backend", "grid_points_note", "sphere_mesh", "icosphere",
+    "radius_for_volume",
     "DESCRIPTORS", "COLOUR_MODES", "CHANNEL_MODES", "VOID_COLOUR",
     "CHANNEL_COLOUR",
 ]
@@ -296,10 +297,14 @@ class FrameData:
         return np.asarray(values, np.float64)
 
     def landscape(self, probe: str, grid_spacing_ang: float,
-                  r_cut_ang: float):
+                  r_cut_ang: float, cancelled=None):
         """The bond-valence landscape of ``probe`` on this frame
         (:func:`facet.core.md_channels.bv_landscape`), kept per
-        (probe, spacing, r_cut)."""
+        (probe, spacing, r_cut). ``cancelled`` (a ``() -> bool`` hook) is
+        forwarded to the engine, which polls it once per grid chunk; None
+        takes the cancel of the job running on this thread
+        (:func:`facet.ui.md_jobs.current_cancelled`), so a highlight worker
+        stops when its job is cancelled."""
         from ..core import md_channels
 
         key = (str(probe), float(grid_spacing_ang), float(r_cut_ang))
@@ -315,14 +320,17 @@ class FrameData:
             self._landscapes[key] = md_channels.bv_landscape(
                 self.frame, self.ox_atom, str(probe), probe_ox,
                 grid_spacing_ang=float(grid_spacing_ang),
-                r_cut_ang=float(r_cut_ang), params=self.params)
+                r_cut_ang=float(r_cut_ang), params=self.params,
+                cancelled=_cancel_hook(cancelled))
         return self._landscapes[key]
 
-    def void_regions(self, probe_radius_ang: float, grid_spacing_ang: float):
+    def void_regions(self, probe_radius_ang: float, grid_spacing_ang: float,
+                     cancelled=None):
         """The void regions of this frame
         (:func:`facet.core.md_channels.void_regions` on :attr:`spheres`,
         lining distance 0), kept per (probe radius, spacing);
-        :class:`ChannelUnavailable` when the build lacks them."""
+        :class:`ChannelUnavailable` when the build lacks them. ``cancelled``
+        is forwarded as :meth:`landscape` forwards it."""
         from ..core import md_channels
 
         ok, reason = channel_backend("by voids")
@@ -333,7 +341,8 @@ class FrameData:
             try:
                 self._void_regions[key] = md_channels.void_regions(
                     self.frame, self.spheres, probe_radius_ang=key[0],
-                    grid_spacing_ang=key[1], lining_distance_ang=0.0)
+                    grid_spacing_ang=key[1], lining_distance_ang=0.0,
+                    cancelled=_cancel_hook(cancelled))
             except TypeError as error:
                 raise ChannelUnavailable(
                     "md_channels.void_regions takes other arguments than "
@@ -345,6 +354,45 @@ class FrameData:
 
 def _thousands(n: int) -> str:
     return f"{int(n):,}".replace(",", " ")
+
+
+def _cancel_hook(cancelled):
+    """``cancelled`` itself, or, when None, the cancel of the job whose work
+    runs on this thread (:func:`facet.ui.md_jobs.current_cancelled`). The
+    highlight job's work reaches the landscapes through FrameData without
+    passing a hook down, so the default is what lets its cancel stop a grid
+    computation mid-chunk."""
+    if cancelled is not None:
+        return cancelled
+    try:
+        from .md_jobs import current_cancelled
+    except ImportError:
+        return None
+    return current_cancelled()
+
+
+def grid_points_note(fd, grid_spacing_ang: float) -> str:
+    """What the spacing asks for over the frame shown, before anything runs:
+    the grid's point count, or md_channels's refusal when the count exceeds
+    its cap (:data:`facet.core.md_channels.MAX_GRID_POINTS`)."""
+    if fd is None:
+        return ""
+    try:
+        from ..core import md_channels
+    except ImportError:
+        return ""
+    guard = getattr(md_channels, "grid_guard", None)
+    if not callable(guard):
+        return ""
+    try:
+        shape, n_points, refusal = guard(fd.frame.box_ang,
+                                         float(grid_spacing_ang))
+    except (ValueError, TypeError):
+        return ""
+    if refusal:
+        return refusal
+    return (f"grid {shape[0]} × {shape[1]} × {shape[2]} = "
+            f"{_thousands(n_points)} points at {grid_spacing_ang:g} Å")
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +485,12 @@ def _channels_by_charge(fd: FrameData, rule: Rule):
         raise ChannelUnavailable("by charge needs a grid spacing and an "
                                  "r_cut above 0 (both are shown in the rule)")
     landscape = fd.landscape(probe, rule.grid_spacing_ang, rule.r_cut_ang)
-    regions = md_channels.accessible_regions(landscape, rule.threshold)
+    try:
+        regions = md_channels.accessible_regions(
+            landscape, rule.threshold, cancelled=_cancel_hook(None))
+    except TypeError:
+        # an older md_channels without the hook: the labelling runs through
+        regions = md_channels.accessible_regions(landscape, rule.threshold)
     grid = md_channels.landscape_grid(landscape, "mismatch")
     vertices, faces, normals = volume.isosurface(grid, float(rule.threshold))
     mesh = _triangle_mesh(vertices, faces, normals, CHANNEL_COLOUR,
@@ -857,6 +910,10 @@ class RuleRow(QFrame):
         self.close.clicked.connect(lambda: self.removed.emit(self))
         self.note = _hint()
         self.note.setContentsMargins(22, 0, 0, 0)
+        # the note wraps (a grid refusal is a sentence); without an explicit
+        # minimum the wrapped label still asks the layout for its full
+        # unwrapped width, and the page no longer fits its column
+        self.note.setMinimumWidth(1)
         self.note.hide()
 
     def _finish(self) -> None:
@@ -971,7 +1028,14 @@ class VoidsRow(RuleRow):
     def set_frame_data(self, fd: FrameData | None) -> None:
         ok, reason = channel_backend("by voids")
         self.elongation.setEnabled(ok)
-        self.set_note("" if ok else f"elongation greyed: {reason}")
+        notes = [] if ok else [f"elongation greyed: {reason}"]
+        # the union-volume grid this rule would run on (spacing 0.5 Å,
+        # rule()), stated before anything runs; a box the cap refuses is
+        # refused here in the same words
+        grid = grid_points_note(fd, 0.5)
+        if grid:
+            notes.append(grid)
+        self.set_note(" · ".join(notes))
 
     def rule(self) -> Rule:
         elongation = float(self.elongation.value()) \
@@ -1037,6 +1101,8 @@ class ChannelsRow(RuleRow):
         self.probe.currentIndexChanged.connect(lambda _i: self.changed.emit())
         for w in (self.threshold, self.spacing, self.cut):
             w.valueChanged.connect(lambda _v: self.changed.emit())
+        # the note's grid estimate follows the spacing typed
+        self.spacing.valueChanged.connect(lambda _v: self._availability())
         self._fd = None
         self._on_mode(0)
 
@@ -1069,15 +1135,22 @@ class ChannelsRow(RuleRow):
             _grey_item(self.mode, i, "" if ok else reason)
         ok, reason = channel_backend(self.mode.currentText())
         self.tick.setEnabled(ok)
+        notes = []
         if not ok:
             self.tick.setChecked(False)
-            self.set_note(f"greyed: {reason}")
+            notes.append(f"greyed: {reason}")
         elif self._fd is not None and not self._fd.cations and \
                 self.mode.currentText() != "by voids":
-            self.set_note("greyed: the frame holds no cation to probe with")
+            notes.append("greyed: the frame holds no cation to probe with")
             self.tick.setEnabled(False)
-        else:
-            self.set_note("")
+        if self.mode.currentText() != "by modifier density":
+            # the grid the spacing asks for over the frame shown, stated
+            # before anything runs; a spacing the cap refuses shows the
+            # engine's refusal here, in the same words
+            grid = grid_points_note(self._fd, float(self.spacing.value()))
+            if grid:
+                notes.append(grid)
+        self.set_note(" · ".join(notes))
 
     def set_frame_data(self, fd: FrameData | None) -> None:
         self._fd = fd

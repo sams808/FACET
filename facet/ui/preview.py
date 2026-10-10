@@ -1308,9 +1308,14 @@ class PreviewWindow(QMainWindow):
             self._show_model(current)
 
     def _on_model_status(self, text: str) -> None:
+        """A model's status line: bare and permanent when that model is the
+        one on show; prefixed with its name and timed when another entry (a
+        crystal, or another model) is current, so a background model's
+        "frame drawn" line never sits under a crystal view as if it were
+        the crystal's."""
         controller = self.sender()
         current = self._model()
-        if controller is current or current is None:
+        if controller is not None and controller is current:
             self.statusBar().showMessage(text, 0)
         else:
             entry = getattr(controller, "entry", None)
@@ -2551,7 +2556,7 @@ class PreviewWindow(QMainWindow):
             return
         try:
             data = exporters.load_session(path)
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             QMessageBox.warning(self, "Could not read the session", str(exc))
             return
         self.restore_session(data)
@@ -2562,7 +2567,18 @@ class PreviewWindow(QMainWindow):
         Separated so that what the restore does can be driven and checked; the
         dialog is the part that cannot be. The same split as the context menus,
         for the same reason.
+
+        The data is checked field by field before anything is touched
+        (exporters.validate_session): a corrupted session used to fail half
+        way through, after the project was cleared, and a bad camera block
+        left the live camera holding values no later restore recovered from.
+        A refusal is shown, never raised.
         """
+        try:
+            data = exporters.validate_session(data)
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc), 12000)
+            return
         records = [e for e in data.get("entries", []) if e.get("path")]
         crystals = [e["path"] for e in records if e.get("kind") != "model"]
         models = [e for e in records if e.get("kind") == "model"]

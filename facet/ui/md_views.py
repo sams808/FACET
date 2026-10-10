@@ -42,9 +42,11 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QButtonGroup,
     QCheckBox,
     QFileDialog,
     QFrame,
@@ -56,6 +58,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableView,
     QTextBrowser,
     QToolButton,
@@ -68,6 +73,14 @@ from PySide6.QtWidgets import (
 from ..core import exporters, md_export
 from ..core.md_analysis import ANALYSIS_SUMMARIES, ModelResult, Table
 from ..core.md_stats import Distribution, Histogram, Scalar, Series
+from .md_names import (
+    analysis_title,
+    display_name,
+    group_of,
+    group_titles,
+    kind_badge,
+)
+from .md_results_overview import OverviewPage
 from .md_plot import (
     Figure,
     StatPlot,
@@ -81,16 +94,25 @@ from .md_plot import (
 
 __all__ = ["ResultBrowser", "DescriptorView", "RowTable", "family_key",
            "summary_line", "value_text", "start_worker", "KIND_NAMES",
-           "com_drift_annotation",
+           "com_drift_annotation", "KIND_FILTERS",
            "MAX_OVERLAY"]
 
 KIND_NAMES = {Distribution: "categories", Histogram: "histogram",
               Series: "curve", Scalar: "value", Table: "table"}
+# the chips over the tree, in order: each with the kind_badge word it keeps
+KIND_FILTERS = (("all", "All"), ("curve", "Curves"),
+                ("distribution", "Distributions"), ("number", "Numbers"),
+                ("table", "Tables"))
+# a kind_badge word as the tree's short tag
+_BADGE_TAGS = {"curve": "curve", "distribution": "distr",
+               "number": "number", "table": "table"}
 # the most curves or bar series one family figure overlays; the table beside
 # it lists every member
 MAX_OVERLAY = 12
 _ROLE = Qt.UserRole + 1
 _RAW = Qt.UserRole + 2
+_RAW_ID = Qt.UserRole + 3     # a tree row's engine id, drawn muted
+_BADGE = Qt.UserRole + 4      # a tree row's kind_badge word
 
 
 def _kind_name(container) -> str:
@@ -794,6 +816,53 @@ class _ExportWorker(QObject):
 # the browser
 # ---------------------------------------------------------------------------
 
+class _NameDelegate(QStyledItemDelegate):
+    """The tree's name column: the readable label, then the engine id in
+    the muted (placeholder) colour when the two differ and there is room.
+    The id also sits in the row's tooltip, so nothing depends on the
+    width."""
+
+    _GAP = "   "
+
+    def paint(self, painter, option, index) -> None:
+        raw = index.data(_RAW_ID)
+        if not raw:
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        widget = opt.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, widget)
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, widget)
+        fm = opt.fontMetrics
+        selected = bool(opt.state & QStyle.State_Selected)
+        group = (QPalette.Normal if opt.state & QStyle.State_Enabled
+                 else QPalette.Disabled)
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(opt.palette.color(
+            group, QPalette.HighlightedText if selected else QPalette.Text))
+        label = fm.elidedText(text, Qt.ElideRight, rect.width())
+        painter.drawText(rect, Qt.AlignVCenter | Qt.AlignLeft, label)
+        used = fm.horizontalAdvance(label + self._GAP)
+        room = rect.width() - used
+        # the id whole or not at all: a two-letter stub is only noise, and
+        # the tooltip carries it whatever the width
+        if label == text and room >= fm.horizontalAdvance(str(raw)):
+            if selected:
+                muted = opt.palette.color(group, QPalette.HighlightedText)
+                muted.setAlpha(170)
+            else:
+                muted = opt.palette.color(group, QPalette.PlaceholderText)
+            painter.setPen(muted)
+            painter.drawText(rect.adjusted(int(used), 0, 0, 0),
+                             Qt.AlignVCenter | Qt.AlignLeft,
+                             fm.elidedText(str(raw), Qt.ElideRight, room))
+        painter.restore()
+
+
 class ResultBrowser(QWidget):
     """A ModelResult as a tree beside a view of the item chosen.
 
@@ -815,6 +884,8 @@ class ResultBrowser(QWidget):
     # The width of the tree's name column: the longest names two levels
     # down ('connectivity all formers (distance)') in a 9 pt Segoe UI.
     NAME_WIDTH = 240
+    # the short kind tag ('distr', 'number'), with its margins
+    TAG_WIDTH = 56
 
     def __init__(self, parent=None, *, theme=None):
         super().__init__(parent)
@@ -856,24 +927,57 @@ class ResultBrowser(QWidget):
         self.provenance_text.setVisible(False)
 
         self.tree = QTreeWidget()
-        self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["Descriptor", "Kind", "Mean ± std"])
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(["Descriptor", "Kind name", "Kind",
+                                   "Mean ± std"])
         self.tree.setUniformRowHeights(True)
         self.tree.header().setStretchLastSection(True)
         self.tree.setMinimumWidth(300)
         self.tree.setColumnWidth(0, self.NAME_WIDTH)
         self.tree.setColumnWidth(1, 76)
-        # The kind (curve, histogram, table...) is named under the title of
-        # the item shown and in each row's tool tip; as a column it pushed
-        # 'Mean ± std' out of a Model window's tree, which showed one or two
-        # letters of 'Kind' at its edge (the final check, 2026-10-07).
+        self.tree.setColumnWidth(2, self.TAG_WIDTH)
+        # The kind name in full (curve, histogram, table...) is under the
+        # title of the item shown and in each row's tool tip; as a column it
+        # pushed 'Mean ± std' out of a Model window's tree, which showed one
+        # or two letters of 'Kind' at its edge (the final check,
+        # 2026-10-07). Column 2 holds the short tag instead.
         self.tree.setColumnHidden(1, True)
+        self.tree.setItemDelegateForColumn(0, _NameDelegate(self.tree))
+
+        # the kind chips: each keeps the rows of one kind of container
+        self.kind_chips = QWidget()
+        chip_row = QHBoxLayout(self.kind_chips)
+        chip_row.setContentsMargins(0, 0, 0, 0)
+        chip_row.setSpacing(4)
+        self._chip_group = QButtonGroup(self)
+        self._chip_group.setExclusive(True)
+        self._chip_buttons: dict[str, QToolButton] = {}
+        for key, label in KIND_FILTERS:
+            button = QToolButton()
+            button.setText(label)
+            button.setCheckable(True)
+            button.setToolTip(
+                "List every descriptor." if key == "all" else
+                f"List only the descriptors that are {label.lower()[:-1]}"
+                "-shaped containers.")
+            self._chip_group.addButton(button)
+            chip_row.addWidget(button)
+            self._chip_buttons[key] = button
+        chip_row.addStretch(1)
+        self._chip_buttons["all"].setChecked(True)
+        self._chip_group.buttonClicked.connect(self._on_chip)
+        self._kind_filter: str | None = None
+        self._text_filter = ""
+
         self.view = DescriptorView()
         self.page = QTextBrowser()
         self.page.setOpenLinks(False)
+        self.overview = OverviewPage()
+        self.overview.groupRequested.connect(self.select_group)
         self.stack = QStackedWidget()
         self.stack.addWidget(self.page)
         self.stack.addWidget(self.view)
+        self.stack.addWidget(self.overview)
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.tree)
         self.splitter.addWidget(self.stack)
@@ -888,6 +992,7 @@ class ResultBrowser(QWidget):
         layout.addLayout(top)
         layout.addWidget(self.banner)
         layout.addWidget(self.provenance_text)
+        layout.addWidget(self.kind_chips)
         layout.addWidget(self.splitter, 1)
 
         self.export_workbook_action = QAction(
@@ -935,12 +1040,14 @@ class ResultBrowser(QWidget):
         self.result = result
         self.tree.clear()
         self._current = ()
+        self.overview.set_result(result)
         if result is None:
             self.summary.setText("No analysis result.")
             self.banner.setVisible(False)
             self.provenance_text.clear()
             self._show_empty()
             self.stack.setCurrentWidget(self.page)
+            self._set_chip_counts()
             self._update_actions()
             return
         self._elements = _model_elements(result)
@@ -960,10 +1067,10 @@ class ResultBrowser(QWidget):
         self.banner.setVisible(bool(banner))
         self.provenance_text.setPlainText("\n".join(self.run_header()))
         self._fill_tree(result)
+        self._set_chip_counts()
         self._update_actions()
-        first = self._first_leaf()
-        self.tree.setCurrentItem(first if first is not None
-                                 else self.tree.topLevelItem(0))
+        # the overview first: the headline measurements, then the tree
+        self.tree.setCurrentItem(self.tree.topLevelItem(0))
 
     def clear(self) -> None:
         self.set_result(None)
@@ -984,54 +1091,96 @@ class ResultBrowser(QWidget):
                 self._show(item)
 
     def _fill_tree(self, result: ModelResult) -> None:
-        run = QTreeWidgetItem(["Run: provenance and notes", "", ""])
+        overview = QTreeWidgetItem(["Overview", "", "", ""])
+        overview.setData(0, _ROLE, ("overview",))
+        overview.setToolTip(0, "The headline measurements of the run, one "
+                               "card per question.")
+        self.tree.addTopLevelItem(overview)
+        run = QTreeWidgetItem(["Run: provenance and notes", "", "", ""])
         run.setData(0, _ROLE, ("run",))
         self.tree.addTopLevelItem(run)
-        for analysis, output in result.outputs.items():
-            if output.error is not None:
-                node = QTreeWidgetItem([analysis, "not computed", ""])
-                node.setToolTip(0, output.error)
-                node.setData(0, _ROLE, ("analysis", analysis))
-                reason = QTreeWidgetItem([f"reason: {output.error}", "", ""])
-                reason.setToolTip(0, output.error)
-                reason.setData(0, _ROLE, ("analysis", analysis))
-                node.addChild(reason)
-                self.tree.addTopLevelItem(node)
+        by_group: dict[str, list[str]] = {}
+        for analysis in result.outputs:
+            by_group.setdefault(group_of(analysis), []).append(analysis)
+        for group in group_titles():
+            analyses = by_group.get(group)
+            if not analyses:
                 continue
-            node = QTreeWidgetItem([analysis, f"{len(output.tables)} "
-                                    "descriptors", ""])
-            node.setToolTip(0, ANALYSIS_SUMMARIES.get(analysis, analysis))
-            node.setData(0, _ROLE, ("analysis", analysis))
-            self.tree.addTopLevelItem(node)
-            for entry in self._grouped(output.tables):
-                if entry[0] == "family":
-                    _, key, names = entry
-                    kind = type(output.tables[names[0]])
-                    group = QTreeWidgetItem([f"{key}  ({len(names)})",
-                                             KIND_NAMES.get(kind, "rows"),
-                                             ""])
-                    group.setData(0, _ROLE, ("family", analysis, key,
-                                             kind.__name__))
-                    group.setToolTip(0, ", ".join(names))
-                    node.addChild(group)
-                    for name in names:
-                        group.addChild(self._leaf(analysis, name,
-                                                  output.tables[name]))
-                else:
-                    node.addChild(self._leaf(analysis, entry[1],
-                                             output.tables[entry[1]]))
-        self.tree.expandToDepth(0)
+            count = sum(len(result.outputs[a].tables) for a in analyses)
+            head = QTreeWidgetItem([group, "", "",
+                                    f"{count} descriptors"])
+            head.setData(0, _ROLE, ("group", group))
+            head.setToolTip(0, f"{group}: " + ", ".join(
+                analysis_title(a) for a in analyses))
+            self.tree.addTopLevelItem(head)
+            for analysis in analyses:
+                head.addChild(self._analysis_node(
+                    analysis, result.outputs[analysis]))
+            head.setExpanded(True)
         self.tree.setColumnWidth(0, self.NAME_WIDTH)
         self.tree.setColumnWidth(1, 76)
+        self.tree.setColumnWidth(2, self.TAG_WIDTH)
+
+    def _analysis_node(self, analysis: str, output) -> QTreeWidgetItem:
+        title = analysis_title(analysis)
+        if output.error is not None:
+            node = QTreeWidgetItem([title, "not computed", "", ""])
+            node.setToolTip(0, f"{analysis}: {output.error}")
+            node.setData(0, _ROLE, ("analysis", analysis))
+            node.setData(0, _RAW_ID, analysis if title != analysis else "")
+            reason = QTreeWidgetItem([f"reason: {output.error}", "", "", ""])
+            reason.setToolTip(0, output.error)
+            reason.setData(0, _ROLE, ("analysis", analysis))
+            node.addChild(reason)
+            return node
+        node = QTreeWidgetItem([title, f"{len(output.tables)} "
+                                "descriptors", "",
+                                f"{len(output.tables)} descriptors"])
+        node.setToolTip(0, f"{analysis}: "
+                        + ANALYSIS_SUMMARIES.get(analysis, analysis))
+        node.setData(0, _ROLE, ("analysis", analysis))
+        node.setData(0, _RAW_ID, analysis if title != analysis else "")
+        for entry in self._grouped(output.tables):
+            if entry[0] == "family":
+                _, key, names = entry
+                kind = type(output.tables[names[0]])
+                badge = kind_badge(output.tables[names[0]])
+                label = display_name(key)
+                group = QTreeWidgetItem([f"{label}  ({len(names)})",
+                                         KIND_NAMES.get(kind, "rows"),
+                                         _BADGE_TAGS.get(badge, badge),
+                                         ""])
+                group.setData(0, _ROLE, ("family", analysis, key,
+                                         kind.__name__))
+                group.setData(0, _RAW_ID, key if label != key else "")
+                group.setData(0, _BADGE, badge)
+                group.setToolTip(0, f"{key}: " + ", ".join(names))
+                node.addChild(group)
+                for name in names:
+                    group.addChild(self._leaf(analysis, name,
+                                              output.tables[name]))
+            else:
+                node.addChild(self._leaf(analysis, entry[1],
+                                         output.tables[entry[1]]))
+        return node
 
     def _leaf(self, analysis: str, name: str, container) -> QTreeWidgetItem:
         kind = _kind_name(container)
+        badge = kind_badge(container)
         value = value_text(container)
-        item = QTreeWidgetItem([name, kind, value])
+        label = display_name(name)
+        item = QTreeWidgetItem([label, kind,
+                                _BADGE_TAGS.get(badge, badge), value])
         item.setData(0, _ROLE, ("item", analysis, name))
-        item.setToolTip(0, f"{name} ({kind})")
+        item.setData(0, _RAW_ID, name if label != name else "")
+        item.setData(0, _BADGE, badge)
+        if label != name:
+            item.setToolTip(0, f"{label}\n{name} ({kind})")
+        else:
+            item.setToolTip(0, f"{name} ({kind})")
+        item.setTextAlignment(3, Qt.AlignRight | Qt.AlignVCenter)
         if value:
-            item.setToolTip(2, value)
+            item.setToolTip(3, value)
         return item
 
     def _grouped(self, tables: Mapping[str, object]):
@@ -1055,18 +1204,6 @@ class ResultBrowser(QWidget):
                     yield ("family", key, members)
             else:
                 yield ("item", name)
-
-    def _first_leaf(self) -> QTreeWidgetItem | None:
-        for i in range(self.tree.topLevelItemCount()):
-            node = self.tree.topLevelItem(i)
-            stack = [node]
-            while stack:
-                item = stack.pop(0)
-                role = item.data(0, _ROLE)
-                if role and role[0] == "item":
-                    return item
-                stack[0:0] = [item.child(k) for k in range(item.childCount())]
-        return None
 
     # -- what the tree lists ----------------------------------------------------
     def items(self) -> list[tuple[str, str]]:
@@ -1124,7 +1261,13 @@ class ResultBrowser(QWidget):
         if result is None or not role:
             return
         self._current = tuple(role)
-        if role[0] == "run":
+        if role[0] == "overview":
+            self.stack.setCurrentWidget(self.overview)
+            self.itemShown.emit("", "")
+        elif role[0] == "group":
+            self._show_group(role[1])
+            self.itemShown.emit("", "")
+        elif role[0] == "run":
             self._show_run()
             self.itemShown.emit("", "")
         elif role[0] == "analysis":
@@ -1238,6 +1381,154 @@ class ResultBrowser(QWidget):
                              output.provenance.as_lines())) + "</pre>")
         self.page.setHtml("".join(parts))
         self.stack.setCurrentWidget(self.page)
+
+    def _show_group(self, group: str) -> None:
+        parts = [f"<h3>{html.escape(group)}</h3>"]
+        rows = []
+        for analysis, output in (self.result.outputs.items()
+                                 if self.result else ()):
+            if group_of(analysis) != group:
+                continue
+            status = (f"not computed: {output.error}" if output.error
+                      else f"{len(output.tables)} descriptors")
+            rows.append(f"<tr><td>{html.escape(analysis_title(analysis))}"
+                        f"</td><td>{html.escape(analysis)}</td>"
+                        f"<td>{html.escape(status)}</td></tr>")
+        parts.append("<table cellspacing='0' cellpadding='3'>"
+                     "<tr><th align='left'>analysis</th>"
+                     "<th align='left'>name</th>"
+                     "<th align='left'>result</th></tr>"
+                     + "".join(rows) + "</table>")
+        parts.append("<p>The tree lists each analysis's descriptors; the "
+                     "Overview names the headline measurements.</p>")
+        self.page.setHtml("".join(parts))
+        self.stack.setCurrentWidget(self.page)
+
+    def select_group(self, group: str) -> bool:
+        """Put the tree on a question group ('Structure', ...)."""
+        for item in self._walk():
+            role = item.data(0, _ROLE)
+            if role and role[0] == "group" and role[1] == str(group):
+                self.tree.setCurrentItem(item)
+                item.setExpanded(True)
+                self.tree.scrollToItem(
+                    item, QAbstractItemView.PositionAtTop)
+                return True
+        return False
+
+    def show_overview(self) -> bool:
+        """Put the tree back on the Overview item."""
+        for item in self._walk():
+            role = item.data(0, _ROLE)
+            if role and role[0] == "overview":
+                self.tree.setCurrentItem(item)
+                return True
+        return False
+
+    # -- the chips and the filters ------------------------------------------
+    def kind_counts(self) -> dict[str, int]:
+        """How many descriptors each chip keeps: 'all', then kind_badge
+        words."""
+        counts = {key: 0 for key, _ in KIND_FILTERS}
+        if self.result is not None:
+            for _analysis, _name, container in self.result.descriptors():
+                counts["all"] += 1
+                counts[kind_badge(container)] += 1
+        return counts
+
+    def _set_chip_counts(self) -> None:
+        counts = self.kind_counts()
+        for key, label in KIND_FILTERS:
+            button = self._chip_buttons[key]
+            button.setText(f"{label} ({counts[key]})"
+                           if self.result is not None else label)
+            button.setEnabled(self.result is None or key == "all"
+                              or counts[key] > 0)
+        if self.result is None or self._kind_filter not in counts \
+                or counts.get(self._kind_filter, 0) == 0:
+            self._kind_filter = None
+            self._chip_buttons["all"].setChecked(True)
+        self.apply_filters()
+
+    @Slot(object)
+    def _on_chip(self, button) -> None:
+        for key, _ in KIND_FILTERS:
+            if self._chip_buttons[key] is button:
+                self.set_kind_filter(key)
+                return
+
+    def kind_filter(self) -> str:
+        """The chip in force: 'all' or a kind_badge word."""
+        return self._kind_filter or "all"
+
+    def set_kind_filter(self, kind: str | None) -> None:
+        """Keep only one kind of container in the tree ('all' or None:
+        every one)."""
+        key = None if kind in (None, "", "all") else str(kind)
+        self._kind_filter = key
+        button = self._chip_buttons.get(key or "all")
+        if button is not None and not button.isChecked():
+            button.setChecked(True)
+        self.apply_filters()
+
+    def set_text_filter(self, text: str) -> None:
+        """Hide the rows whose label and engine id lack this text; an
+        analysis stays when one of its descriptors matches."""
+        self._text_filter = str(text).strip().lower()
+        self.apply_filters()
+
+    def apply_filters(self) -> None:
+        for i in range(self.tree.topLevelItemCount()):
+            self._filter_item(self.tree.topLevelItem(i), False)
+
+    def visible_descriptors(self) -> list[str]:
+        """The engine ids of the descriptor leaves the filters leave
+        shown, in tree order."""
+        out = []
+        for item in self._walk():
+            role = item.data(0, _ROLE)
+            if not role or role[0] != "item" or item.isHidden():
+                continue
+            parent, shown = item.parent(), True
+            while parent is not None:
+                if parent.isHidden():
+                    shown = False
+                    break
+                parent = parent.parent()
+            if shown:
+                out.append(role[2])
+        return out
+
+    def _filter_item(self, item, inherited: bool) -> bool:
+        text = self._text_filter
+        role = item.data(0, _ROLE) or ()
+        raw = ""
+        if role and role[0] in ("item", "family"):
+            raw = str(role[2])
+        elif role and role[0] == "analysis":
+            raw = str(role[1])
+        own = (not text or text in item.text(0).lower()
+               or text in raw.lower())
+        # the engine name cascades to what the node holds ('glass' lists
+        # every glass descriptor); a readable title does not, so 'Qn' in
+        # 'Coordination, speciation, Qn' surfaces only the Qn rows
+        cascade = inherited or bool(text) and text in raw.lower()
+        shown = False
+        for k in range(item.childCount()):
+            if self._filter_item(item.child(k), cascade):
+                shown = True
+        if item.childCount() == 0:
+            badge = item.data(0, _BADGE)
+            kind_ok = (self._kind_filter is None or badge is None
+                       or badge == self._kind_filter)
+            shown = (own or inherited) and kind_ok
+        else:
+            if not shown:
+                shown = own and self._kind_filter is None
+            if text and shown:
+                item.setExpanded(True)
+        item.setHidden(not shown)
+        return shown
 
     def _show_run(self) -> None:
         result = self.result
@@ -1452,8 +1743,9 @@ class ResultBrowser(QWidget):
                        self.export_figure_action, self.export_rows_action):
             texts += [action.text(), action.toolTip()]
         for item in self._walk():
-            for column in range(3):
+            for column in range(4):
                 texts += [item.text(column), item.toolTip(column)]
+        texts += self.overview.visible_texts()
         table = self.view.table
         texts += table.columns()
         figure = self.view.figure

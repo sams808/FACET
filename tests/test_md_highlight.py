@@ -588,3 +588,101 @@ def test_no_verdict_word_appears_on_the_page_and_it_fits_the_column(qapp,
             assert row.width() <= 470 - 16
     finally:
         dispose(area)
+
+
+# ---------------------------------------------------------------------------
+# cancellation and the grid cap on the page
+# ---------------------------------------------------------------------------
+
+def test_frame_data_forwards_the_cancel_hook(quartz):
+    import time
+
+    from facet.core import md_channels
+
+    clock = time.perf_counter()
+    with pytest.raises(md_channels.AnalysisCancelled):
+        quartz.landscape("Si", 0.4, 5.0, cancelled=lambda: True)
+    assert time.perf_counter() - clock < 1.0
+    assert ("Si", 0.4, 5.0) not in quartz._landscapes
+    with pytest.raises(md_channels.AnalysisCancelled):
+        quartz.void_regions(0.0, 0.45, cancelled=lambda: True)
+    assert (0.0, 0.45) not in quartz._void_regions
+
+
+def test_the_rows_state_the_grid_before_anything_runs(qapp, quartz,
+                                                      monkeypatch):
+    from facet.core import md_channels
+    from facet.ui.md_highlight import HighlightPage, grid_points_note
+
+    page = HighlightPage()
+    try:
+        page.set_frame_data(quartz)
+        row = page.channels
+        row.mode.setCurrentText("by charge")
+        row.spacing.setValue(0.5)
+        shape, n_points, _ = md_channels.grid_guard(quartz.frame.box_ang, 0.5)
+        note = row.note.text()
+        assert f"{shape[0]} × {shape[1]} × {shape[2]}" in note
+        assert "0.5" in note
+        # the voids row states its own 0.5 Å union grid
+        assert grid_points_note(quartz, 0.5) in page.voids.note.text()
+        # a grid the cap refuses shows the engine's refusal, before any run
+        monkeypatch.setattr(md_channels, "MAX_GRID_POINTS", 10)
+        row.spacing.setValue(0.4)
+        note = row.note.text()
+        assert "more than the 10" in note and "would fit" in note
+        assert grid_points_note(quartz, 0.4) == note
+    finally:
+        dispose(page)
+
+
+def test_a_live_highlight_job_is_cancelled_at_interpreter_exit():
+    """The crash this pins: a highlight worker computing a large landscape,
+    the window closed with the job running, the interpreter tearing down a
+    live QThread (STATUS_STACK_BUFFER_OVERRUN). A child process starts a
+    highlight-style Job on a deliberately slow landscape (one grid point a
+    chunk), prints that it is still running, and ends: the keeper's atexit
+    wait cancels the job, the engine's per-chunk poll raises, and the
+    process exits 0 well inside the deadline."""
+    import os
+    import subprocess
+    import sys
+    import time
+
+    code = """
+import time
+import numpy as np
+from PySide6.QtWidgets import QApplication
+from facet.core import bulk, bv, md_model
+from facet.core import md_channels
+from facet.core.md_model import frame_from_arrays
+from facet.ui import md_jobs
+from facet.ui.md_highlight import FrameData
+
+md_channels.PAIRS_PER_CHUNK = 1   # one grid point a chunk: slow, polled per chunk
+app = QApplication([])
+rng = np.random.default_rng(3)
+frame = frame_from_arrays(["Na"] * 10 + ["O"] * 30,
+                          cart_ang=rng.uniform(0.0, 12.0, (40, 3)),
+                          box_ang=np.eye(3) * 12.0)
+ox_atom = md_model.model_oxidation(frame.species).per_atom(frame.elements)
+table, _ = bulk.analyse_frame(frame, ox_atom, bv.DEFAULT, v_bond_vu=0.075,
+                              v_list_vu=0.02)
+fd = FrameData.from_frame(frame, table, v_bond=0.075, ox_atom=ox_atom)
+job = md_jobs.Job(lambda progress, cancelled: fd.landscape("Na", 0.1, 5.0),
+                  name="highlight")
+job.start()
+time.sleep(1.5)
+print("RUNNING" if job.is_running() else "ENDED", flush=True)
+# the script ends with the worker thread alive: the keeper cancels and
+# joins it at interpreter exit
+"""
+    clock = time.perf_counter()
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=str(HERE.parent),
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        capture_output=True, text=True, timeout=120)
+    elapsed = time.perf_counter() - clock
+    assert result.returncode == 0, (result.returncode, result.stderr[-2000:])
+    assert "RUNNING" in result.stdout, result.stdout
+    assert elapsed < 60, elapsed

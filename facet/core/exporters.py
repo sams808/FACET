@@ -564,5 +564,183 @@ def _plain(value):
     return value
 
 
+_SESSION_PREFIX = "the session file could not be read: "
+
+
+def _session_error(reason: str) -> ValueError:
+    return ValueError(_SESSION_PREFIX + reason)
+
+
+def _is_real(value) -> bool:
+    """A finite number that is not a bool (True is not a threshold)."""
+    import math
+
+    return isinstance(value, (int, float)) and not isinstance(value, bool) \
+        and math.isfinite(float(value))
+
+
+def _reals(value, n: int | None = None) -> bool:
+    if not isinstance(value, (list, tuple)) or not value:
+        return False
+    if n is not None and len(value) != n:
+        return False
+    return all(_is_real(v) for v in value)
+
+
+def _check_mapping(value, name: str, *, optional: bool = True) -> None:
+    if value is None and optional:
+        return
+    if not isinstance(value, dict):
+        raise _session_error(f"'{name}' holds {type(value).__name__!s} "
+                             f"{value!r:.60}, not a mapping")
+
+
+def _check_entry(entry, i: int) -> None:
+    """One entry record, typed as restore_session consumes it: a crystal's
+    path, overrides and disorder, or a model's path(s), read options and
+    request."""
+    if not isinstance(entry, dict):
+        raise _session_error(f"entry {i} is {type(entry).__name__!s} "
+                             f"{entry!r:.60}, not a mapping")
+    kind = entry.get("kind", "crystal")
+    if not isinstance(kind, str):
+        raise _session_error(f"entry {i}: 'kind' is not text")
+    visible = entry.get("visible")
+    if visible is not None and not isinstance(visible, bool):
+        raise _session_error(f"entry {i}: 'visible' is "
+                             f"{type(visible).__name__!s}, not true or false")
+    path = entry.get("path")
+    if kind == "model":
+        paths = path if isinstance(path, list) else [path]
+        if not paths or not all(isinstance(p, str) and p for p in paths):
+            raise _session_error(
+                f"entry {i}: a model's 'path' is a file path or a list of "
+                f"file paths, not {path!r:.80}")
+        for name in ("read_options", "request"):
+            _check_mapping(entry.get(name), f"entry {i}: {name}")
+        return
+    if path is not None and (not isinstance(path, str) or not path):
+        raise _session_error(f"entry {i}: 'path' is "
+                             f"{type(path).__name__!s} {path!r:.60}, not a "
+                             "file path")
+    site = entry.get("selected_site")
+    if site is not None and (isinstance(site, bool)
+                             or not isinstance(site, int)):
+        raise _session_error(f"entry {i}: 'selected_site' is "
+                             f"{type(site).__name__!s}, not a site index")
+    for name in ("overrides", "disorder"):
+        _check_mapping(entry.get(name), f"entry {i}: {name}")
+
+
+def _check_camera(camera) -> None:
+    if not isinstance(camera, dict):
+        raise _session_error(f"'camera' holds {type(camera).__name__!s}, "
+                             "not a mapping")
+    if not _reals(camera.get("target"), 3):
+        raise _session_error("'camera.target' is not three numbers")
+    if not _reals(camera.get("orientation"), 4):
+        raise _session_error("'camera.orientation' is not a quaternion of "
+                             "four numbers")
+    for name in ("distance", "fov"):
+        if not _is_real(camera.get(name)):
+            raise _session_error(f"'camera.{name}' is not a number")
+    if not isinstance(camera.get("orthographic"), bool):
+        raise _session_error("'camera.orthographic' is not true or false")
+
+
+def _check_presentation(snapshot) -> None:
+    if not isinstance(snapshot, dict):
+        raise _session_error(f"'presentation' holds "
+                             f"{type(snapshot).__name__!s}, not a mapping")
+    _check_mapping(snapshot.get("overrides"), "presentation: overrides")
+    planes = snapshot.get("planes", [])
+    if not isinstance(planes, list):
+        raise _session_error("'presentation.planes' is not a list")
+    for i, raw in enumerate(planes):
+        if not isinstance(raw, dict):
+            raise _session_error(f"'presentation.planes[{i}]' is not a "
+                                 "mapping")
+        for name in ("h", "k", "l", "offset", "alpha"):
+            if not _is_real(raw.get(name)):
+                raise _session_error(f"'presentation.planes[{i}].{name}' is "
+                                     "not a number")
+        if not _reals(raw.get("color"), 3):
+            raise _session_error(f"'presentation.planes[{i}].color' is not "
+                                 "three numbers")
+        if not isinstance(raw.get("visible"), bool):
+            raise _session_error(f"'presentation.planes[{i}].visible' is "
+                                 "not true or false")
+    slab = snapshot.get("slab")
+    if slab is not None:
+        if not isinstance(slab, dict):
+            raise _session_error("'presentation.slab' is not a mapping")
+        for name in ("h", "k", "l", "centre", "thickness"):
+            if name in slab and not _is_real(slab[name]):
+                raise _session_error(f"'presentation.slab.{name}' is not a "
+                                     "number")
+        if "enabled" in slab and not isinstance(slab["enabled"], bool):
+            raise _session_error("'presentation.slab.enabled' is not true "
+                                 "or false")
+    if "v_bond" in snapshot and not _is_real(snapshot["v_bond"]):
+        raise _session_error("'presentation.v_bond' is not a number")
+
+
+def validate_session(data) -> dict:
+    """``data`` checked, field by field, exactly where restoring a session
+    consumes each one, so a corrupted or edited file is refused in words
+    naming the field instead of surfacing as a raw exception half way
+    through the restore (half a restore is the other reason: the check runs
+    before anything is changed).
+
+    Returns ``data`` itself; raises ValueError('the session file could not
+    be read: <which field, and what it holds>').
+    """
+    if not isinstance(data, dict):
+        raise _session_error(f"the top level is {type(data).__name__!s}, "
+                             "not a mapping")
+    entries = data.get("entries", [])
+    if not isinstance(entries, list):
+        raise _session_error(f"'entries' holds {type(entries).__name__!s} "
+                             f"{entries!r:.60}, not a list of entries")
+    for i, entry in enumerate(entries):
+        _check_entry(entry, i)
+    for name in ("v_bond", "v_list", "overlay_spacing"):
+        if name in data and not _is_real(data[name]):
+            raise _session_error(f"'{name}' holds {data[name]!r:.60}, not a "
+                                 "number")
+    if "overlay" in data and not isinstance(data["overlay"], bool):
+        raise _session_error(f"'overlay' holds {data['overlay']!r:.60}, not "
+                             "true or false")
+    active = data.get("active")
+    if active is not None and (isinstance(active, bool)
+                               or not isinstance(active, int)):
+        raise _session_error(f"'active' holds {active!r:.60}, not a row "
+                             "index")
+    for name in ("theme", "labels"):
+        _check_mapping(data.get(name), name)
+    if data.get("camera") is not None:
+        _check_camera(data["camera"])
+    if data.get("presentation") is not None:
+        _check_presentation(data["presentation"])
+    return data
+
+
 def load_session(path: str | Path) -> dict:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    """The session mapping of ``path``, checked field by field
+    (:func:`validate_session`): a truncated file, a file that is not JSON
+    and a field of another type than the restore consumes are each refused
+    with a ValueError that says so, never surfaced as a raw decode error. A file that cannot be
+    opened raises its OSError."""
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise _session_error(f"{path.name} is not UTF-8 text "
+                             f"({error})") from None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise _session_error(f"{path.name} does not parse as JSON ({error}); "
+                             "the file may be truncated or not a session "
+                             "at all") from None
+    return validate_session(data)
