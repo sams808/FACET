@@ -1,165 +1,40 @@
-"""About, and the manual.
+<!doctype html><html lang='en'><head><meta charset='utf-8'><title>FACET user manual</title><style>
+@page { size: A4; margin: 20mm 18mm 22mm 18mm; }
+* { box-sizing: border-box; }
+body { font-family: "Segoe UI", "DejaVu Sans", Arial, sans-serif;
+       font-size: 10pt; line-height: 1.52; color: #15181c; margin: 0; }
+h1 { font-size: 15pt; font-weight: 600; margin: 0 0 10px 0;
+     padding-bottom: 5px; border-bottom: 1.4px solid #2a78d6;
+     page-break-before: always; page-break-after: avoid; }
+h2 { font-size: 11pt; font-weight: 600; margin: 15px 0 5px 0;
+     page-break-after: avoid; }
+p { margin: 0 0 8px 0; }
+ol, ul { margin: 0 0 9px 0; padding-left: 18px; }
+li { margin-bottom: 6px; }
+table { border-collapse: collapse; width: 100%; margin: 6px 0 11px 0;
+        font-size: 9pt; page-break-inside: avoid; }
+td { border-bottom: 0.5px solid #e1e4e8; padding: 4px 6px;
+     vertical-align: top; }
+code { font-family: "Consolas", monospace; font-size: 9pt; background: #f2f4f6;
+       padding: 0 3px; }
+i { color: #1d4e89; font-style: normal; font-weight: 600; }
+b { font-weight: 600; }
 
-Two dialogs and the text they show. Both are plain HTML in a ``QTextBrowser``,
-which is the same shape LARMOR and PRISM use, so someone who has met one of
-those knows where to look here.
+.cover { page-break-after: always; padding-top: 52mm; text-align: center; }
+.cover h1 { border: none; page-break-before: avoid; font-size: 30pt;
+            margin: 0 0 4px 0; padding: 0; letter-spacing: -0.5px; }
+.cover .tag { font-size: 12pt; color: #3c4147; margin-bottom: 30px; }
+.cover .what { font-size: 11pt; margin: 0 auto 34px auto; max-width: 118mm;
+               color: #15181c; text-align: left; line-height: 1.6; }
+.cover .meta { font-size: 9pt; color: #6b7177; }
+.cover img { width: 86px; margin-bottom: 16px; }
 
-The manual is written into this module rather than read from a file next to the
-executable. That is deliberate: a frozen application's working directory is
-wherever the user launched it from, a file beside the ``.exe`` can be deleted by
-a well-meaning person tidying up a shared folder, and a manual that sometimes
-fails to open is worse than a shorter one that always does. Being a Python
-module also means the version number, the tagline and the default thresholds in
-the text come from the code rather than from a copy of it that can drift.
-
-The voice is the application's: it says what a number is and where it came from,
-and it leaves the judgement to the reader.
-"""
-from __future__ import annotations
-
-import math
-
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (
-    QDialog,
-    QHBoxLayout,
-    QLabel,
-    QListWidget,
-    QPushButton,
-    QSplitter,
-    QTextBrowser,
-    QVBoxLayout,
-    QWidget,
-)
-
-from ..core import bv
-from ..version import NAME, TAGLINE, __version__
-from . import chrome
-
-
-def _offset(v: float) -> float:
-    """How far beyond R0 a threshold of ``v`` reaches: -b ln v."""
-    return -bv.DEFAULT.b * math.log(v)
-
-
-def _examples_rows() -> str:
-    """The bundled-structure table, built from the catalogue itself.
-
-    Written out by hand it would describe whichever set of files was bundled
-    on the day it was written, which is exactly the kind of documentation that
-    goes quietly wrong.
-    """
-    from ..core import examples
-
-    rows = []
-    for e in examples.CATALOGUE:
-        rows.append(
-            f"<tr><td width='24%'><b>{e.title}</b><br>"
-            f"<span style='font-size:11px'>{e.formula} &middot; COD {e.cod}</span>"
-            f"</td><td>{e.detail}</td></tr>")
-    return "\n".join(rows)
-
-
-# ---------------------------------------------------------------------------
-# about
-# ---------------------------------------------------------------------------
-
-def about_html(renderer: str = "", theme=None) -> str:
-    """The About text. ``renderer`` is the tier actually in use, if known."""
-    c = chrome.ui_colors(theme)
-    d_bond = _offset(bv.V_BOND_DEFAULT)
-    return f"""
-<h2 style="margin-bottom:2px">{NAME}
-  <span style="font-size:14px;color:{c.muted};font-weight:normal">
-  v{__version__}</span></h2>
-<p style="color:{c.muted};margin-top:0"><i>{TAGLINE}.</i></p>
-
-<p>Written by <b>Sami Soudani</b>, in the <b>McCloy</b> group at
-<b>Washington State University</b>.</p>
-<p><a href="https://github.com/sams808/FACET">github.com/sams808/FACET</a>
-&nbsp;·&nbsp; MIT&nbsp;Licence</p>
-
-<h3 style="margin-bottom:2px">What it is for</h3>
-<p style="margin-top:2px">A published coordination number is a function of the
-distance cutoff that produced it, and that cutoff is rarely stated. FACET
-reports the number together with the threshold it came from, and sets the
-threshold in bond valence rather than in distance:</p>
-<p align="center"><i>v</i> = exp((<i>R</i><sub>0</sub> &minus; <i>d</i>) /
-<i>b</i>)&nbsp;,&nbsp;&nbsp; <i>b</i> = {bv.DEFAULT.b} &Aring;</p>
-<p style="margin-top:2px">One valence threshold therefore becomes a different
-distance for every element pair, through that pair's own
-<i>R</i><sub>0</sub>. The shipped defaults are
-<b>{bv.V_BOND_DEFAULT:g}&nbsp;v.u.</b> for a bond
-(<i>d</i> = <i>R</i><sub>0</sub> + {d_bond:.3f}&nbsp;&Aring;) and
-<b>{bv.V_LIST_DEFAULT:g}&nbsp;v.u.</b> for the contact table.</p>
-
-<h3 style="margin-bottom:2px">This session</h3>
-<table cellpadding="2" style="margin-top:2px">
-  <tr><td style="color:{c.muted}">Renderer</td>
-      <td>{renderer or 'not initialised'}</td></tr>
-  <tr><td style="color:{c.muted}">Bond-valence parameters</td>
-      <td>{bv.DEFAULT.name}</td></tr>
-  <tr><td style="color:{c.muted}">Parameter source</td>
-      <td>{bv.DEFAULT.source}</td></tr>
-</table>
-<p style="color:{c.muted};font-size:11px">Every file FACET writes carries these
-same lines, plus the two thresholds in use, so a table can be traced back to the
-settings that produced it.</p>
-
-<h3 style="margin-bottom:2px">Built on</h3>
-<ul style="margin-top:2px">
-  <li><b>gemmi</b> — crystallographic file handling and symmetry
-      (Wojdyr, <i>J. Open Source Softw.</i> <b>7</b>, 4200, 2022)</li>
-  <li><b>spglib</b> — space-group determination
-      (Togo &amp; Tanaka, arXiv:1808.01590)</li>
-  <li><b>NumPy</b> — Harris et al., <i>Nature</i> <b>585</b>, 357 (2020)</li>
-  <li><b>SciPy</b> — Virtanen et al., <i>Nature Methods</i> <b>17</b>, 261
-      (2020)</li>
-  <li><b>PySide6 / Qt for Python</b> (The Qt Company) — the interface and the
-      OpenGL renderer</li>
-  <li><b>pymatgen</b> — optional, for the alternative near-neighbour rules
-      (Ong et al., <i>Comput. Mater. Sci.</i> <b>68</b>, 314, 2013)</li>
-</ul>
-
-<h3 style="margin-bottom:2px">Bond-valence parameters</h3>
-<p style="margin-top:2px">The built-in set is small and is stated as such.
-FACET reads the published compilations from a file you supply — the IUCr
-<code>bvparm</code> distribution, a softBV-style table, or a FACET parameter
-file — under <i>File&nbsp;&rsaquo;&nbsp;Load bond-valence parameters</i>. Those
-compilations are not bundled, because each arrives with its own terms of use.
-Cite whichever set your numbers came from; the name is in every export.</p>
-
-<h3 style="margin-bottom:2px">Inspired by</h3>
-<ul style="margin-top:2px">
-  <li><b>VESTA</b> — Momma &amp; Izumi, <i>J. Appl. Crystallogr.</i>
-      <b>44</b>, 1272 (2011)</li>
-  <li><b>CrystalMaker</b> — CrystalMaker Software Ltd</li>
-  <li><b>Brown's bond-valence model</b> — I. D. Brown,
-      <i>The Chemical Bond in Inorganic Chemistry</i>, IUCr/OUP (2002)</li>
-</ul>
-
-<p style="font-size:8pt;color:{c.muted}">&copy; 2026 NOME Group, Washington
-State University. FACET's own source is MIT licensed. The built application
-bundles Qt under the LGPL-3.0 — see <i>Help &rsaquo; Licences</i> for what that
-allows and requires when passing a build on.</p>
-"""
-
-
-# ---------------------------------------------------------------------------
-# the manual
-# ---------------------------------------------------------------------------
-# Each entry is (key, title, body). The key is what other code addresses a
-# section by, so it is part of the interface and does not change with the title.
-
-def _sections(theme=None) -> list[tuple[str, str, str]]:
-    c = chrome.ui_colors(theme)
-    mut = c.muted
-    note = f"style=\"color:{mut};font-size:11px\""
-    d_bond, d_list = _offset(bv.V_BOND_DEFAULT), _offset(bv.V_LIST_DEFAULT)
-
-    return [
-        ("start", "Getting started", f"""
+.toc { page-break-after: always; }
+.toc h1 { page-break-before: avoid; }
+.toc div { margin-bottom: 4px; font-size: 10pt; }
+.toc .g { margin: 13px 0 5px 0; font-size: 8.4pt; font-weight: 600;
+          letter-spacing: 0.8px; text-transform: uppercase; color: #2a78d6; }
+</style></head><body><div class='cover'><img src='data:image/png;base64,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'><h1>FACET</h1><div class='tag'>Coordination analysis, cut by bond valence</div><div class='what'>A coordination number is not measured. It is produced by choosing a cutoff, and where a structure gives no gap for that cutoff to fall in, the number reported says as much about the person reporting it as about the crystal.<br><br>FACET cuts by bond valence rather than by distance, and reports not one coordination number but the range of threshold each one survives &mdash; so that a number which is a property of the structure can be told apart from one that is a property of the choice.</div><div class='meta'>User manual &middot; version 0.3.1<br>06 October 2026</div></div><div class='toc'><h1>Contents</h1><div class='g'>Start here</div><div>1. &nbsp;Getting started</div><div class='g'>Tutorials</div><div>2. &nbsp;Tutorial 1 · A number you can trust</div><div>3. &nbsp;Tutorial 2 · And one you cannot</div><div>4. &nbsp;Tutorial 3 · One compound, two answers</div><div>5. &nbsp;Tutorial 4 · A number not safe to quote</div><div>6. &nbsp;Tutorial 5 · One ion, two hosts</div><div>7. &nbsp;Tutorial 6 · Making a figure</div><div class='g'>Reference</div><div>8. &nbsp;The bundled structures</div><div>9. &nbsp;Why valence, not distance</div><div>10. &nbsp;The workspace</div><div>11. &nbsp;Reading the Site tab</div><div>12. &nbsp;The bond-valence vector</div><div>13. &nbsp;Tools</div><div>14. &nbsp;Diffraction and PDF</div><div>15. &nbsp;EXAFS shells and FEFF</div><div>16. &nbsp;Planes, slabs and volumes</div><div>17. &nbsp;Disorder and overrides</div><div>18. &nbsp;Themes and figures</div><div>19. &nbsp;Keyboard and mouse</div><div class='g'>Limits and licences</div><div>20. &nbsp;What FACET does not do</div><div>21. &nbsp;Licences and notices</div></div>
 <h1>Getting started</h1>
 <p>FACET opens a crystal structure, works out what is bonded to what, and shows
 how that answer depends on where the line between bonded and not-bonded is
@@ -179,7 +54,7 @@ drawn.</p>
   contact table and the drawn bonds all follow, with no recalculation of the
   neighbour search.</li>
 </ol>
-<p {note}>Nothing is loaded from the internet, and nothing is written anywhere
+<p style="color:#797a7d;font-size:11px">Nothing is loaded from the internet, and nothing is written anywhere
 until you export it.</p>
 
 <h2>Worked examples</h2>
@@ -188,11 +63,9 @@ The six tutorials that follow use nothing else, so they can be worked through
 on a new installation with no files to find and no network. Each one states the
 numbers you should see, so you can tell whether you are reading the application
 correctly.</p>
-"""),
 
-        ("tut-quartz", "Tutorial 1 · A number you can trust", f"""
 <h1>Tutorial 1 &middot; A coordination number you can trust</h1>
-<p {note}>Quartz, SiO<sub>2</sub>. Five minutes. Teaches the workspace, the
+<p style="color:#797a7d;font-size:11px">Quartz, SiO<sub>2</sub>. Five minutes. Teaches the workspace, the
 Site tab and the cutoff explorer.</p>
 
 <ol>
@@ -221,14 +94,12 @@ structure. Nobody arguing about quartz is arguing about whether silicon is
 four-coordinate, and the staircase shows why: there is no choice of threshold,
 within reason, that would give any other answer.</p>
 
-<p {note}>The sum of 4.18 rather than exactly 4.00 is the normal spread of
+<p style="color:#797a7d;font-size:11px">The sum of 4.18 rather than exactly 4.00 is the normal spread of
 tabulated <i>R</i><sub>0</sub> values, not a fault in the structure. The Site
 tab shows the propagated uncertainty beside it.</p>
-"""),
 
-        ("tut-eulytite", "Tutorial 2 · And one you cannot", f"""
 <h1>Tutorial 2 &middot; And one you cannot</h1>
-<p {note}>Eulytite, Bi<sub>4</sub>(SiO<sub>4</sub>)<sub>3</sub>. Ten minutes.
+<p style="color:#797a7d;font-size:11px">Eulytite, Bi<sub>4</sub>(SiO<sub>4</sub>)<sub>3</sub>. Ten minutes.
 Teaches the contact list, the plateau, and the bond-valence vector. Tutorial 1
 first.</p>
 
@@ -263,11 +134,9 @@ staircase has one long tread; the bismuth's has several short ones. FACET will
 not choose between them for you, and that refusal is the point: reporting
 "six-coordinate" without saying at what threshold leaves out the only part of
 the statement that was a decision.</p>
-"""),
 
-        ("tut-polymorphs", "Tutorial 3 · One compound, two answers", f"""
 <h1>Tutorial 3 &middot; One compound, two answers</h1>
-<p {note}>Senarmontite and valentinite, both Sb<sub>2</sub>O<sub>3</sub>. Ten
+<p style="color:#797a7d;font-size:11px">Senarmontite and valentinite, both Sb<sub>2</sub>O<sub>3</sub>. Ten
 minutes. Teaches loading several structures and exporting a table.</p>
 
 <ol>
@@ -295,11 +164,9 @@ either way; what differs is how many neighbours it spreads it over.</p>
 <p>This is the comparison to keep in mind when reading a coordination number
 out of a paper: it is a statement about one refinement under one rule, and the
 rule is usually not stated.</p>
-"""),
 
-        ("tut-cryolite", "Tutorial 4 · A number not safe to quote", f"""
 <h1>Tutorial 4 &middot; A number not safe to quote</h1>
-<p {note}>Cryolite, Na<sub>3</sub>AlF<sub>6</sub>. Ten minutes. Teaches
+<p style="color:#797a7d;font-size:11px">Cryolite, Na<sub>3</sub>AlF<sub>6</sub>. Ten minutes. Teaches
 non-oxide work, the Stability table and the anion view.</p>
 
 <p>Nothing in the method is specific to oxygen. This matters, because the 3.0
@@ -327,14 +194,12 @@ seven-coordinate to four-coordinate. There is no plateau to stand on, so there
 is no coordination number to quote &mdash; only a coordination number <i>at a
 stated threshold</i>, which is a different and much weaker claim.</p>
 
-<p>Al and Na1 in the same file have wide plateaus. The width is a property of
-each site, not of the structure as a whole, and the Stability table is where to
-look before quoting any of them.</p>
-"""),
+<p>Al and Na1 in the same file are perfectly well behaved. A structure is not
+uniformly trustworthy or untrustworthy on this point; individual sites are, and
+the Stability table is where to look before quoting any of them.</p>
 
-        ("tut-hosts", "Tutorial 5 · One ion, two hosts", f"""
 <h1>Tutorial 5 &middot; One ion, two hosts</h1>
-<p {note}>Eulytite and BiPO<sub>4</sub>. Ten minutes. Teaches comparison across
+<p style="color:#797a7d;font-size:11px">Eulytite and BiPO<sub>4</sub>. Ten minutes. Teaches comparison across
 files and the <i>a priori</i> valences. Tutorial 2 first.</p>
 
 <p>How much of what you measured belongs to the ion, and how much to the
@@ -365,9 +230,7 @@ even, more distant shell.</p>
 
 <p>So "the coordination number of Bi(III)" is not a property of bismuth. It is
 a property of bismuth in a named compound, under a stated rule.</p>
-"""),
 
-        ("tut-figure", "Tutorial 6 · Making a figure", """
 <h1>Tutorial 6 &middot; Making a figure for a paper or a talk</h1>
 <p>Ten minutes. Teaches themes, orientation and vector export.</p>
 
@@ -398,27 +261,28 @@ workstation, which is the reason that renderer exists.</p>
 the sites and contacts as CSV or XLSX, the cutoff table, and a threshold scan
 &mdash; the last being the data behind the staircase, if you would rather plot
 it yourself.</p>
-"""),
 
-        ("examples", "The bundled structures", f"""
 <h1>The bundled structures</h1>
 <p>Six structures ship inside the application, under <i>File &rsaquo;
 Examples</i>. They are there so the tutorials can be followed on a new
 installation with nothing downloaded, and they are chosen to disagree with one
 another.</p>
 <table cellpadding="4" width="100%">
-{_examples_rows()}
+<tr><td width='24%'><b>Quartz</b><br><span style='font-size:11px'>SiO2 &middot; COD 9013321</span></td><td>Silicon sits in a tetrahedron of four oxygens at 1.605 to 1.611 angstrom, and the next contact is far enough away that the answer four survives a threshold moved over more than a hundredfold range. This is what a plateau looks like when a structure has nothing to hide, and it is the comparison every other example here is read against.</td></tr>
+<tr><td width='24%'><b>Eulytite</b><br><span style='font-size:11px'>Bi4(SiO4)3 &middot; COD 9012894</span></td><td>The silicon is as clean as quartz. The bismuth in the same crystal has three contacts near 2.16 angstrom and three near 2.61, with no gap between the two groups that a cutoff could be placed in without choosing it. Both sites are in the same file and the same refinement, so the difference is not a question of data quality.</td></tr>
+<tr><td width='24%'><b>Senarmontite</b><br><span style='font-size:11px'>Sb2O3 &middot; COD 9009747</span></td><td>Antimony here is six-coordinate, three short bonds at 1.978 angstrom and three long at 2.902. Open it beside valentinite, which is the same compound, and compare the coordination numbers the two give at the same threshold.</td></tr>
+<tr><td width='24%'><b>Valentinite</b><br><span style='font-size:11px'>Sb2O3 &middot; COD 9007587</span></td><td>The same Sb2O3, in a different arrangement. The antimony is five-coordinate and its plateau is wider than senarmontite's. Two polymorphs of one compound need not report the same coordination number, and neither answer is wrong.</td></tr>
+<tr><td width='24%'><b>Cryolite</b><br><span style='font-size:11px'>Na3AlF6 &middot; COD 9004097</span></td><td>Nothing in the method is specific to oxygen, and this is where that matters: a 3.0 angstrom cutoff chosen for an oxide has no standing in a fluoride. Two of the three sites behave; the Na2 site has a plateau around a tenth of a decade wide, which means its coordination number is a property of the threshold rather than of the structure. FACET says so rather than picking one.</td></tr>
+<tr><td width='24%'><b>Bismuth phosphate</b><br><span style='font-size:11px'>BiPO4 &middot; COD 9008088</span></td><td>The Bi(III) of eulytite again, with phosphorus competing for the same oxygens instead of silicon. The coordination number rises, the bonds lengthen, and the bond-valence vector shortens considerably. Useful for asking what belongs to the ion and what belongs to the compound.</td></tr>
 </table>
 <p>All six come from the Crystallography Open Database, whose contents are in
 the public domain, and are redistributed unchanged. The original determination
 for each is credited in <code>ATTRIBUTION.md</code> beside the files; cite the
 paper rather than the database. Nothing stops you passing FACET on with them
 included.</p>
-<p {note}><i>Open all of them</i> at the foot of the menu loads the whole set
+<p style="color:#797a7d;font-size:11px"><i>Open all of them</i> at the foot of the menu loads the whole set
 at once, after which the <b>Structures</b> dock switches between them.</p>
-"""),
 
-        ("why", "Why valence, not distance", f"""
 <h1>Why valence, not distance</h1>
 <p>A coordination number is not measured; it is produced by a rule. The commonest
 rule is a distance cutoff — "everything within 3.0 &Aring;" — and the number it
@@ -428,15 +292,15 @@ error.</p>
 <p>FACET therefore cuts on <b>partial bond valence</b> instead:</p>
 <p align="center"><i>v</i> = exp((<i>R</i><sub>0</sub> &minus; <i>d</i>) /
 <i>b</i>)</p>
-<p>with <i>b</i> = {bv.DEFAULT.b} &Aring; and <i>R</i><sub>0</sub> a tabulated
+<p>with <i>b</i> = 0.37 &Aring; and <i>R</i><sub>0</sub> a tabulated
 constant for the element pair and oxidation states. Inverting it,</p>
 <p align="center"><i>d</i> = <i>R</i><sub>0</sub> &minus; <i>b</i>&thinsp;ln
 <i>v</i></p>
 <p>so one valence threshold gives a <i>different</i> distance for every pair. At
-the shipped {bv.V_BOND_DEFAULT:g}&nbsp;v.u. a contact counts as a bond out to
-<i>R</i><sub>0</sub>&nbsp;+&nbsp;{d_bond:.3f}&nbsp;&Aring;; at the
-{bv.V_LIST_DEFAULT:g}&nbsp;v.u. tabulation threshold it is listed out to
-<i>R</i><sub>0</sub>&nbsp;+&nbsp;{d_list:.3f}&nbsp;&Aring;. A short Si&ndash;O
+the shipped 0.075&nbsp;v.u. a contact counts as a bond out to
+<i>R</i><sub>0</sub>&nbsp;+&nbsp;0.958&nbsp;&Aring;; at the
+0.02&nbsp;v.u. tabulation threshold it is listed out to
+<i>R</i><sub>0</sub>&nbsp;+&nbsp;1.447&nbsp;&Aring;. A short Si&ndash;O
 bond and a long Bi&ndash;I bond are then being judged by the same physical
 criterion rather than by the same number of &aring;ngstr&ouml;ms. The
 <b>Cutoffs</b> tab under <b>Tools</b> prints the distance each pair gets, so
@@ -448,12 +312,10 @@ coordination number as the right one. What it reports instead is the
 that survives a wide range of threshold and one that changes if the threshold
 moves in the fourth decimal place are different situations, and the width is the
 statement of which you have.</p>
-<p {note}>The uncertainty on <i>R</i><sub>0</sub> is systematic: it scales a
+<p style="color:#797a7d;font-size:11px">The uncertainty on <i>R</i><sub>0</sub> is systematic: it scales a
 whole bond-valence sum rather than averaging out. FACET propagates it and prints
 it beside the sum.</p>
-"""),
 
-        ("window", "The workspace", f"""
 <h1>The workspace</h1>
 <h2>Left</h2>
 <p><b>Structures</b> — every file loaded in this session. Tick to show, use the
@@ -473,7 +335,7 @@ shell list and resolution report. <b>Planes</b> cuts lattice planes and slabs.
 bond-valence sum through space. <b>Disorder</b> handles partial occupancy and
 alternative configurations. <b>Theme</b> is colour, sizing and palettes.</p>
 
-<p {note}>Most controls state their own name inside themselves rather than
+<p style="color:#797a7d;font-size:11px">Most controls state their own name inside themselves rather than
 beside them -- a spin box reading "r to 20.0 &Aring;" is the r limit. Hovering
 any of them explains what it does, and the settings that are set once and left
 sit behind a disclosure arrow.</p>
@@ -481,12 +343,10 @@ sit behind a disclosure arrow.</p>
 <p>The <b>cutoff explorer</b>. Each site is a staircase: coordination number
 against threshold, with the flat treads being the plateaux. Drag the vertical
 line to move the bond threshold; everything above follows it.</p>
-<p {note}>Both splitters can be dragged, and the docks can be undocked or
+<p style="color:#797a7d;font-size:11px">Both splitters can be dragged, and the docks can be undocked or
 closed. The window remembers nothing between runs, so a layout you liked has to
 be set up again — that is a limitation, not a preference.</p>
-"""),
 
-        ("site", "Reading the Site tab", f"""
 <h1>Reading the Site tab</h1>
 <p>Everything on this tab is a measurement of the selected site at the current
 threshold.</p>
@@ -524,9 +384,7 @@ distance, its partial valence, a filled marker if it is above the bond threshold
 and an <i>est.</i> flag if its <i>R</i><sub>0</sub> was estimated rather than
 fitted. The footer states the <i>R</i><sub>0</sub>, <i>b</i> and source
 actually used.</p>
-"""),
 
-        ("lonepair", "The bond-valence vector", f"""
 <h1>The bond-valence vector, and the lone pair</h1>
 <p><i>View &rsaquo; Show bond-valence vector</i> draws a
 lobe on each cation pointing away from its bonded ligands.</p>
@@ -551,12 +409,10 @@ elsewhere while looking like a measurement of your file.</p>
 <p>The cone overlay is the other half of the same picture: a real cone of the
 measured void half-angle about the void axis. Where several equally wide cones
 exist, one axis is returned and the degeneracy is stated in the note.</p>
-<p {note}>Both follow the bond threshold, so a lobe that changes markedly as you
+<p style="color:#797a7d;font-size:11px">Both follow the bond threshold, so a lobe that changes markedly as you
 drag the explorer is telling you that the vector sum depends on contacts near
 the cut.</p>
-"""),
 
-        ("utilities", "Tools", f"""
 <h1>Tools</h1>
 <p>Whole-structure tables, each recomputed for the active structure.</p>
 <ul>
@@ -588,7 +444,7 @@ totals count the same bonds from opposite ends, so their agreement is a check on
 the arithmetic rather than a restatement of it. The charge balance line reports
 the residual.</li>
 </ul>
-<p {note}>A tab is computed when you show it, not before. Recomputing all ten on
+<p style="color:#797a7d;font-size:11px">A tab is computed when you show it, not before. Recomputing all ten on
 every move of the threshold took nearly four seconds on a structure of a few
 hundred atoms, and nine of them were behind another tab at the time.</p>
 
@@ -614,15 +470,13 @@ of the trace, which is the quantity comparable with a quoted
 principal axes. That last part is what no single number carries — a site can
 have an entirely ordinary <i>U</i><sub>eq</sub> and still be four times longer
 than it is wide.</p>
-<p {note}>A displacement tensor is a covariance matrix and has to be positive
+<p style="color:#797a7d;font-size:11px">A displacement tensor is a covariance matrix and has to be positive
 definite. One that is not describes a hyperboloid, which is not a shape an atom
 can have, and the site was refined where the data did not constrain it. Such a
 site is listed with its eigenvalues rather than with an r.m.s. it does not have.
 The test is made on the file's own components, so it does not depend on the
 conversion: changing basis cannot change the sign of an eigenvalue.</p>
-"""),
 
-        ("diffraction", "Diffraction and PDF", f"""
 <h1>Diffraction and the pair distribution function</h1>
 <h2>Powder pattern</h2>
 <p>The <b>Diffraction</b> tab computes |<i>F</i>|&sup2; from the structure for
@@ -660,13 +514,11 @@ for isotropic <i>U</i>. That is the <i>uncorrelated</i> width. Near neighbours
 move together, which makes their peaks narrower than this, and the correlation
 terms (&delta;<sub>1</sub>, &delta;<sub>2</sub>) are user inputs defaulting to
 zero — FACET cannot measure them from one structure.</p>
-<p {note}>This is the PDF of the average crystal. A fractionally occupied site
+<p style="color:#797a7d;font-size:11px">This is the PDF of the average crystal. A fractionally occupied site
 contributes fractional pair correlations, and a real disordered material's
 measured PDF differs from it by design — that difference is usually the reason a
 PDF was measured.</p>
-"""),
 
-        ("exafs", "EXAFS shells and FEFF", f"""
 <h1>EXAFS shells and FEFF</h1>
 <p>The <b>EXAFS</b> tab turns the structure into the things an EXAFS fit needs,
 and reads back what a real scattering calculation produced.</p>
@@ -705,9 +557,7 @@ amplitudes and phases with FACET's degeneracies and distances — and it is
 labelled with where each half came from. XANES needs full multiple scattering or
 a DFT calculation; FACET writes the input for one and does not pretend to
 substitute for it.</p>
-"""),
 
-        ("planes", "Planes, slabs and volumes", f"""
 <h1>Planes, slabs and volumes</h1>
 <h2>Planes</h2>
 <p>Enter (<i>hkl</i>) or pick from the presets to draw the lattice plane and
@@ -725,12 +575,10 @@ choice would have on a grid through the cell, and draws either a section through
 it — with contours and a colour map — or an isosurface in the 3D view. The
 section is where a migration path or an interstitial site shows itself as a
 region of near-correct valence for the probe.</p>
-<p {note}>Grid work is bounded: a request large enough to take minutes is
+<p style="color:#797a7d;font-size:11px">Grid work is bounded: a request large enough to take minutes is
 refused with the number it would have needed, rather than freezing the
 window.</p>
-"""),
 
-        ("disorder", "Disorder and overrides", """
 <h1>Disorder and overrides</h1>
 <h2>Disorder</h2>
 <p>Where a CIF declares assemblies and groups, the <b>Disorder</b> tab lists
@@ -747,9 +595,7 @@ is dropped when a file is reloaded rather than applied to whatever landed on
 that index.</p>
 <p>Everything on both tabs is undoable: <i>Edit &rsaquo; Undo</i>, or
 Ctrl+Z.</p>
-"""),
 
-        ("appearance", "Themes and figures", """
 <h1>Themes and figures</h1>
 <p><i>View &rsaquo; Theme</i> switches the whole application — viewport, menus,
 panels and tables. The presets are a white VESTA-like default, a light theme for
@@ -841,11 +687,7 @@ publication theme switches off.</p>
 <p>Anaglyph, greyscale anaglyph, side-by-side and cross-eyed pairs are in the
 Theme tab. The separation is an angle rather than a distance, so the depth
 survives zooming.</p>
-"""),
 
-        (MD_SECTION, "MD models", _md_section_html(note)),
-
-        ("shortcuts", "Keyboard and mouse", """
 <h1>Keyboard and mouse</h1>
 <table cellpadding="4" width="100%">
 <tr><td width="40%"><b>Left-drag</b></td><td>Rotate</td></tr>
@@ -872,12 +714,8 @@ survives zooming.</p>
 </table>
 <p>A drag that moves more than a few pixels is a rotation, not a click, so
 turning the structure and releasing over an atom does not select it.</p>
-<p>Files can be dropped onto the window, one or many. An MD model or
-trajectory among them opens in a Model window of its own (see <i>MD
-models</i>).</p>
-"""),
+<p>Files can be dropped onto the window, one or many.</p>
 
-        ("limits", "What FACET does not do", f"""
 <h1>What FACET does not do</h1>
 <p>Stated plainly, because a tool that is quiet about its limits gets used
 beyond them.</p>
@@ -903,12 +741,6 @@ the estimator differs from a fitted value by 0.05 Å on average and by as much a
 0.21 Å, which is a factor of 0.57 to 1.48 on every bond valence.</li>
 <li><b>It does not correct measured data.</b> No absorption, no background
 subtraction, no <i>Q</i>-space corrections.</li>
-<li><b>It does not run molecular dynamics.</b> It reads the models and
-trajectories a simulation wrote and measures them; it integrates no equation
-of motion, fits no potential and edits no model. Nor does it simulate a
-quadrupolar NMR spectrum: its NMR analysis gives isotropic shifts from a
-published structure-shift correlation whose coefficients and reference are
-supplied by the user, none shipping with FACET.</li>
 </ul>
 <h2>Where the numbers were checked</h2>
 <p>The repository carries <code>VERIFICATION.md</code>, which records how each
@@ -918,12 +750,10 @@ input file's own statement of itself. Five faults invisible from inside the
 program were found that way, including a symmetry expansion that silently lost
 three quarters of one structure's oxygen while every internal check still
 agreed.</p>
-<p {note}>If a number here disagrees with one from elsewhere, the threshold and
+<p style="color:#797a7d;font-size:11px">If a number here disagrees with one from elsewhere, the threshold and
 the parameter set are the first two things to compare — both are printed in
 every export.</p>
-"""),
 
-        ("licences", "Licences and notices", f"""
 <h1>Licences and notices</h1>
 <p>FACET's own source code is under the <b>MIT Licence</b>, which places no
 restriction on passing it on.</p>
@@ -954,422 +784,7 @@ a note on how to do the replacement.</p>
 Gagn&eacute; &amp; Hawthorne's tables, softBV — are <b>not</b> bundled, because
 each carries its own terms. FACET reads them from a file you supply and records
 which set produced a given number. Cite the set you used.</p>
-<p {note}>The full text, with the pre-distribution checklist, is
+<p style="color:#797a7d;font-size:11px">The full text, with the pre-distribution checklist, is
 <code>THIRD_PARTY_NOTICES.md</code> in the repository and beside the
 executable.</p>
-"""),
-    ]
-
-
-def manual_html(theme=None) -> str:
-    """The whole manual as one document, for printing or searching."""
-    return "".join(body for _key, _title, body in _sections(theme))
-
-
-# ---------------------------------------------------------------------------
-# the MD models section
-# ---------------------------------------------------------------------------
-# The key the Model window's Help menu and the crystal window's Help > MD
-# models open the manual at: ManualDialog(parent, section=MD_SECTION).
-MD_SECTION = "md"
-
-
-def _esc(text: str) -> str:
-    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;"))
-
-
-def _md_formats_rows() -> str:
-    """One table row per MD format FACET reads, from the reader's own
-    registry (``preview.md_filter_entries``), so a format added there is
-    listed here without an edit."""
-    try:
-        from .preview import md_filter_entries
-
-        entries = md_filter_entries()
-    except Exception as error:        # a build without the MD reader
-        return (f"<tr><td colspan=2>The MD reader could not be loaded "
-                f"({_esc(error)}).</td></tr>")
-    return "".join(
-        f"<tr><td>{_esc(label)}</td><td><code>{_esc(' '.join(patterns))}"
-        "</code></td></tr>" for label, patterns, _name in entries)
-
-
-def _md_analyses_rows() -> str:
-    """One row per analysis of ``md_analysis``: what it measures (its own
-    summary) and the inputs it needs that have no default, as
-    ``missing_inputs`` names them for a request that gives none, so the
-    table states what the engine refuses rather than a copy of it."""
-    try:
-        from ..core import md_analysis as ma
-    except Exception as error:        # a build without the MD engine
-        return (f"<tr><td colspan=3>The MD analyses could not be loaded "
-                f"({_esc(error)}).</td></tr>")
-    try:
-        # the setup's own labels and wording, so the manual names each input
-        # as the Model window labels it
-        from .md_dialogs import OPTIONAL_OUTPUTS, field_label, user_text
-    except Exception:                 # a build without the Model window
-        OPTIONAL_OUTPUTS = {}
-
-        def field_label(name):
-            return name
-
-        def user_text(text):
-            return text
-
-    timed = set(getattr(ma, "_TIMED", ma.TRAJECTORY_ANALYSES))
-    rows = []
-    for name in ma.ANALYSES:
-        try:
-            request = ma.AnalysisRequest(analyses=(name,))
-            needs = [m for m in ma.missing_inputs(request)
-                     if name in m.analysis.split("/")]
-        except Exception as error:    # stated, not hidden
-            needs = []
-            inputs = f"(not listed: {_esc(error)})"
-        else:
-            inputs = "<br>".join(
-                (f"{_esc(field_label(m.name))} (<code>{_esc(m.name)}</code>)"
-                 if m.name not in ("formers", "analyses")
-                 else f"<code>{_esc(m.name)}</code>")
-                + f": {_esc(user_text(m.why))}" for m in needs)
-        if name in timed:
-            inputs += ("<br>" if inputs else "") + (
-                "a time axis (the file's frame times, or the MD timestep or "
-                "frame interval given) and at least two frames")
-        if name == "kinetic-temperature":
-            inputs += "<br>velocities in the file"
-        if name == "vacf":
-            inputs += ("<br>velocities in the file, unless they are taken "
-                       "from the positions (<code>dynamics.velocities</code> "
-                       "'finite difference')")
-        optional = [f"{_esc(what)}, given "
-                    + " and ".join(f"{_esc(field_label(f))} "
-                                   f"(<code>{_esc(f)}</code>)" for f in fields)
-                    for what, fields in OPTIONAL_OUTPUTS.get(name, ())]
-        if optional:
-            inputs += ("<br>" if inputs else "") + "<i>Optional:</i> " \
-                + "; ".join(optional)
-        rows.append(f"<tr><td><b>{_esc(name)}</b></td>"
-                    f"<td>{_esc(ma.ANALYSIS_SUMMARIES[name])}</td>"
-                    f"<td>{inputs or 'none beyond the model'}</td></tr>")
-    return "".join(rows)
-
-
-def _md_section_html(note: str) -> str:
-    """The manual's MD models section: what opens, how, what a run needs,
-    every analysis, the threshold, export, the command line, and what is
-    not done. Numbers come from the code (the thresholds, the mass
-    tolerance, the ddof of the spread)."""
-    try:
-        from ..core import md_readers, md_stats
-
-        mass_tol = f"{md_readers.MASS_TOL_AMU:g}"
-        ddof = f"{md_stats.STD_DDOF:d}"
-    except Exception:                 # a build without the MD engine
-        mass_tol, ddof = "the reader's tolerance in", "1"
-    try:
-        from ..core import md_analysis as ma
-
-        former_readers = ", ".join(ma.FORMER_READERS)
-        no_formers = ma.NO_FORMERS
-    except Exception:
-        former_readers, no_formers = "the network analyses", "none"
-    try:
-        from .md_workspace import ATOMS_ONLY_ABOVE
-
-        atoms_only = f"{ATOMS_ONLY_ABOVE:d}"
-    except Exception:                 # the Model window not in this build
-        atoms_only = "a few thousand"
-    return f"""
-<h1>MD models</h1>
-<p>FACET reads the models and trajectories that molecular-dynamics programs
-write and measures them: coordination by bond valence and by distance, the
-network (Q<sup><i>n</i></sup>, speciation, rings, connectivity), scattering,
-local order, spectroscopy and dynamics. Each descriptor is measured on every
-frame chosen and reported as the mean over those frames with its spread,
-alongside the provenance that produced it. FACET runs no simulation.</p>
-
-<h2>What opens as an MD model</h2>
-<p>A file is recognised by its content, whatever its name: a LAMMPS dump saved
-as <code>.txt</code> opens as a dump, and a CIF opens as a crystal whatever it
-is called. The names below are the ones the file dialog lists.</p>
-<table cellpadding="3" width="100%">
-<tr><td width="34%"><b>Format</b></td><td><b>File names</b></td></tr>
-{_md_formats_rows()}
-</table>
-<p {note}>A plain XYZ trajectory with no <code>Lattice=</code> on its comment
-line (LAMMPS's <code>dump xyz</code>, CP2K's <code>pos.xyz</code>) states no
-periodic box. It opens all the same, and the box is then taken from another
-file of the same run (its LAMMPS data file, CP2K's <code>.cell</code> file)
-or typed in; no box is invented.</p>
-
-<h2>Opening one</h2>
-<ul>
-<li><b>Drop it</b> on the crystal window. It opens in a <b>Model window</b> of
-its own, never in the crystal window's 3D view or its tabs. CIFs dropped with
-it load in the crystal window as before.</li>
-<li><i>File &rsaquo; Open MD model&hellip;</i> lists every MD format above.
-<i>File &rsaquo; Open&hellip;</i> takes MD files too, under <i>All
-files</i>.</li>
-<li><i>File &rsaquo; Open MD series as one model&hellip;</i> reads several
-files of one run (<code>dump.0.lammpstrj</code>,
-<code>dump.1000.lammpstrj</code>, &hellip;) as one trajectory, in the natural
-order of their names: digits compare as numbers, so dump.20 comes before
-dump.100.</li>
-<li>Files dropped together are one model only when their format writes one
-snapshot per file (LAMMPS <code>dump cfg</code>) and they share a folder and
-a name up to its digits. Any other files open one window each, so two runs
-named <code>glass_300K</code> and <code>glass_600K</code> are never averaged
-into one.</li>
-<li>From the command line, <code>py -3.11 -m facet glass.lammpstrj</code>
-opens FACET with that model in a Model window.</li>
-</ul>
-
-<h2>Type maps: which element each atom is</h2>
-<p>LAMMPS numbers its atom types, and a number is not an element. An element
-is taken only from what a file states: an element column, type labels, or a
-mass that matches one element's standard atomic weight to within {mass_tol}
-amu (a LAMMPS data file's <code>Masses</code> section names the types of a
-dump of the same run). A whole-number mass names no element, since force
-fields often round masses to integers. Nothing is guessed: a type that no
-source names stays unnamed until an element is given for it. The Model
-window then shows the reader's message in full and, for each type, the
-reader's evidence (its label, element column or mass, and its atoms in the
-first frame), and asks for the element; the masses can also come from a
-LAMMPS data file of the same run. A topology (DCD, XTC, AMBER NetCDF) and a
-box (a plain XYZ) are asked for the same way, with no element filled in for
-the user.</p>
-
-<h2>Oxidation states</h2>
-<p>They are inputs of the model, never resolved from the geometry: each
-element takes its common state unless another is given, and an element with
-no common state needs one. They decide which atoms are cations and which
-anions in the bond-valence split, and which parameters apply.</p>
-
-<h2>Network formers</h2>
-<p>FACET assumes no network former. The picker lists the cations present in
-the model with none ticked, and the analyses that read formers
-({_esc(former_readers)}) stay disabled, with the reason shown beside them,
-until formers are ticked. Stating that the model has none
-(<i>No former to name</i>, <code>{_esc(no_formers)}</code>) runs the glass
-analysis only, without the former-dependent descriptors (speciation,
-Q<sup><i>n</i></sup>, connectivity); the network analyses (rings,
-coordination sequences, polyhedral sharing, components) still need named
-formers, or their graph elements, centres and T elements given explicitly,
-and say so beside their boxes. No timestep, temperature, charge, NMR
-coefficient or radius is assumed either.</p>
-
-<h2>Frames</h2>
-<p>Frames are chosen as first, last and stride. Each descriptor is measured
-frame by frame and reported as the mean over the frames used with the
-sample standard deviation across them (ddof&nbsp;=&nbsp;{ddof}): the spread
-between frames, not a standard error, because the frames of one trajectory
-are correlated. A frame that cannot be read is left out and named with its
-reason, and the provenance of every result lists the frames it used.</p>
-
-<h2>The analyses</h2>
-<p>The per-frame analyses share one neighbour search per pass over the
-frames; a second pass runs only when a cutoff comes from the frame-averaged
-<i>g</i>(<i>r</i>), and the provenance states the searches each frame
-received. The dynamics read the unwrapped positions of the chosen frames
-once more. A run that lacks an input is refused before any frame is read,
-with every missing input named at once; the inputs in the right-hand column
-have no default, and the Model window labels each one as written there,
-with its request name. Method choices have defaults, each stated in the
-provenance: most set a resolution (bin widths, grid steps, the first-minimum
-rule), and some change the numbers themselves. Removing the centre-of-mass
-drift, off by default, changes every MSD and every diffusion coefficient
-fitted from it; the Model window shows that choice beside the dynamics
-inputs, and an MSD figure states the centre of mass's own MSD when the drift
-is left in.</p>
-<table cellpadding="3" width="100%">
-<tr><td width="18%"><b>Analysis</b></td><td width="37%"><b>What it
-measures</b></td><td><b>Inputs it needs</b></td></tr>
-{_md_analyses_rows()}
-</table>
-<p {note}>Checked against the model when the run starts: an element an option
-names that the model does not hold, formers none of which are present, a
-scattering range beyond half the box, a frame selection that selects
-nothing.</p>
-
-<h2>The bond threshold</h2>
-<p>The coordination numbers by bond valence count the contacts above
-<i>v</i><sub>bond</sub> ({bv.V_BOND_DEFAULT:g} v.u. unless another is set),
-and contacts are listed down to <i>v</i><sub>list</sub>
-({bv.V_LIST_DEFAULT:g} v.u.), as in the crystal window. The threshold panel
-shows one frame, never an average: a slider on a logarithmic scale from
-<i>v</i><sub>list</sub> to the frame's largest valence, and at the threshold
-it sets, the coordination number of each element with the distributions of
-its bond-valence sum and &phi;. Each move re-reads the frame's valence table
-with no new neighbour search. The staircase beside it, the mean coordination
-number of each element against <i>v</i><sub>bond</sub>, sets the threshold
-where it is clicked. The frame-averaged tables of a run keep the
-<i>v</i><sub>bond</sub> the run used, which their provenance states, and the
-panel names both thresholds whenever they differ; carrying another threshold
-into every table is a new run. The distance-cut numbers, from the first
-minima of the partial <i>g</i>(<i>r</i>), do not depend on
-<i>v</i><sub>bond</sub>.</p>
-
-<h2>A frame in 3D</h2>
-<p>The <b>3D view</b> tab draws the frame chosen by its number from that
-frame's own valence table, so the drawn bonds are the contacts the
-coordination numbers count, each as thick as its valence, with the ones
-below <i>v</i><sub>bond</sub> thin and faded. On small frames the bond set
-is identical to the one the crystal window draws for the same atoms; it is
-built without that window's neighbour search, which takes seconds on a few
-thousand atoms. Without OpenGL (the QPainter renderer), a frame of more than
-{atoms_only} atoms is drawn as atoms only, with a note saying so; the OpenGL
-renderers draw its bonds.</p>
-
-<h2>Export</h2>
-<p>Results go out as CSV files, one per descriptor with an index, or as one
-XLSX workbook (which needs the openpyxl package). Every file starts with the
-provenance of its numbers: the model file, the frames used and those left
-out, the type map and its source, the oxidation states, the bond-valence
-parameter set, <i>v</i><sub>bond</sub> and <i>v</i><sub>list</sub>, the
-cutoffs and where they came from, the method parameters and the FACET
-version. Numbers are written in full. Figures export as SVG or PDF, which
-are vector, and as PNG at 600 dpi.</p>
-
-<h2>From the command line</h2>
-<p>The same engine runs without a window, on a workstation or a cluster
-node:</p>
-<pre>py -3.11 -m facet.md describe dump.lammpstrj --type-map 1=Si,2=O,3=Na
-py -3.11 -m facet.md analyses
-py -3.11 -m facet.md template --out request.toml
-py -3.11 -m facet.md analyse dump.lammpstrj --type-map 1=Si,2=O,3=Na \\
-    --formers Si --frames 0:100:5 --out results.xlsx</pre>
-<p><code>describe</code> says what the reader finds, <code>analyses</code>
-lists the analyses and their inputs, <code>template</code> writes a request
-file holding every option, and <code>analyse</code> runs them and writes the
-results with their provenance. Without <code>--only</code>, every analysis
-whose inputs are given runs and the others are listed with what they
-lack.</p>
-
-<h2>What is not done</h2>
-<ul>
-<li>No molecular dynamics is run, and no model is edited or written back.</li>
-<li>No quadrupolar NMR spectrum is simulated. The NMR analysis gives
-isotropic shifts and their spectrum from a published structure-shift
-correlation, whose coefficients and reference are supplied by the user; none
-ships with FACET.</li>
-<li>No element, timestep, temperature, charge, network former or NMR
-coefficient is assumed.</li>
-<li>No result is labelled as a match or a mismatch with experiment: a
-comparison with measured data reports the two side by side with their
-difference.</li>
-</ul>
-"""
-
-
-# ---------------------------------------------------------------------------
-# dialogs
-# ---------------------------------------------------------------------------
-
-class HelpDialog(QDialog):
-    """One HTML document in a browser, with a Close button.
-
-    The same shape as PRISM's dialog of the same name, so that the two
-    applications behave alike for someone moving between them.
-    """
-
-    def __init__(self, parent=None, *, html: str = "",
-                 title: str = "Help", width: int = 720, height: int = 620):
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.resize(width, height)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        self.browser = QTextBrowser()
-        self.browser.setOpenExternalLinks(True)
-        self.browser.setHtml(html)
-        layout.addWidget(self.browser, 1)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        close = QPushButton("Close")
-        close.clicked.connect(self.accept)
-        row.addWidget(close)
-        layout.addLayout(row)
-
-
-class AboutDialog(HelpDialog):
-    """About, with the application mark above the text."""
-
-    def __init__(self, parent=None, *, renderer: str = "", theme=None):
-        super().__init__(parent, html=about_html(renderer, theme),
-                         title=f"About {NAME}", width=620, height=640)
-        from .branding import logo_pixmap
-
-        mark = QLabel()
-        mark.setPixmap(logo_pixmap(64, ground=False))
-        mark.setAlignment(Qt.AlignCenter)
-        self.layout().insertWidget(0, mark)
-
-
-class ManualDialog(QDialog):
-    """The manual: sections on the left, the chosen one on the right.
-
-    A single scrolling document would be simpler, but the manual is long enough
-    that finding the paragraph about thresholds in it becomes the hard part.
-    """
-
-    def __init__(self, parent=None, *, section: str = "", theme=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"{NAME} manual")
-        self.resize(940, 700)
-        self._sections = _sections(theme)
-
-        self.contents = QListWidget()
-        self.contents.setMinimumWidth(190)
-        for _key, title, _body in self._sections:
-            self.contents.addItem(title)
-        self.contents.currentRowChanged.connect(self._show_row)
-
-        self.browser = QTextBrowser()
-        self.browser.setOpenExternalLinks(True)
-        body = QFont(self.browser.font())
-        body.setPointSizeF(body.pointSizeF() + 0.5)
-        self.browser.setFont(body)
-
-        split = QSplitter(Qt.Horizontal)
-        split.addWidget(self.contents)
-        right = QWidget()
-        col = QVBoxLayout(right)
-        col.setContentsMargins(0, 0, 0, 0)
-        col.addWidget(self.browser, 1)
-        split.addWidget(right)
-        split.setStretchFactor(1, 1)
-        split.setSizes([210, 730])
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.addWidget(split, 1)
-        row = QHBoxLayout()
-        self.whole = QPushButton("Show the whole manual")
-        self.whole.clicked.connect(self._show_everything)
-        row.addWidget(self.whole)
-        row.addStretch(1)
-        close = QPushButton("Close")
-        close.clicked.connect(self.accept)
-        row.addWidget(close)
-        layout.addLayout(row)
-
-        self.show_section(section)
-
-    def _show_row(self, row: int) -> None:
-        if 0 <= row < len(self._sections):
-            self.browser.setHtml(self._sections[row][2])
-            self.browser.verticalScrollBar().setValue(0)
-
-    def _show_everything(self) -> None:
-        self.contents.setCurrentRow(-1)
-        self.browser.setHtml("".join(b for _k, _t, b in self._sections))
-        self.browser.verticalScrollBar().setValue(0)
-
-    def show_section(self, key: str = "") -> None:
-        """Open the section named ``key``, or the first one."""
-        keys = [k for k, _t, _b in self._sections]
-        row = keys.index(key) if key in keys else 0
-        self.contents.setCurrentRow(row)
+</body></html>

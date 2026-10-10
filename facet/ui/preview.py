@@ -489,6 +489,7 @@ class PreviewWindow(QMainWindow):
         m = self.menuBar().addMenu("&File")
         m.addAction(openf)
         m.addAction(openfolder)
+        self._build_examples_menu(m)
         m.addSeparator()
         m.addAction(save)
         m.addAction(vector)
@@ -808,6 +809,39 @@ class PreviewWindow(QMainWindow):
             event.acceptProposedAction()
 
     # -- loading -----------------------------------------------------------
+    def _build_examples_menu(self, parent) -> None:
+        """File > Examples: the structures that ship with the application.
+
+        Built from whatever is actually present rather than from the
+        catalogue, so a build that failed to bundle the files shows nothing
+        instead of a list of entries that fail when clicked.
+        """
+        from ..core import examples
+
+        present = examples.available()
+        if not present:
+            return
+        menu = parent.addMenu("E&xamples")
+        menu.setToolTip("Structures bundled with FACET, used by the manual's "
+                        "worked examples.")
+        for example in present:
+            action = QAction(f"{example.title}  ({example.formula})", self)
+            action.setToolTip(example.shows)
+            action.triggered.connect(
+                lambda _checked=False, e=example: self._open_example(e))
+            menu.addAction(action)
+        menu.addSeparator()
+        every = QAction("Open &all of them", self)
+        every.setToolTip("Load the whole set; the Structures dock switches "
+                         "between them.")
+        every.triggered.connect(
+            lambda: self.load_many([str(e.path) for e in examples.available()]))
+        menu.addAction(every)
+
+    def _open_example(self, example) -> None:
+        self.load_many([str(example.path)])
+        self.statusBar().showMessage(f"{example.title} — {example.shows}", 12000)
+
     def _choose_file(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Open structures", "", readers.FILE_FILTER)

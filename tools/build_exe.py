@@ -180,6 +180,17 @@ def build_app(clean: bool = True) -> Path:
         "--specpath", str(BUILD),
         "--paths", str(ROOT),
     ]
+    # The bundled example structures. They are addressed at runtime as
+    # facet/data/examples under sys._MEIPASS, so the destination path has to
+    # mirror the source layout exactly; see facet.core.examples.folder().
+    examples = ROOT / "facet" / "data" / "examples"
+    if examples.is_dir():
+        cmd += ["--add-data",
+                f"{examples}{os.pathsep}facet/data/examples"]
+        log(f"bundling {len(list(examples.glob('*.cif')))} example structures")
+    else:
+        log("WARNING: no example structures found to bundle")
+
     for module in EXCLUDES:
         cmd += ["--exclude-module", module]
     for module in HIDDEN:
