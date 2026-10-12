@@ -1599,6 +1599,10 @@ class ModelController(QObject):
             fd._spheres = old._spheres
             fd._landscapes = old._landscapes
             fd._void_regions = old._void_regions
+            # the regions and the channel surface depend on the landscape
+            # and Δ, never on v_bond: a v_bond move reads them from here
+            fd._regions = old._regions
+            fd._channel_meshes = old._channel_meshes
         self.frame_data = fd
         self._frame_data_key = key
         return fd
@@ -1625,7 +1629,12 @@ class ModelController(QObject):
             self.statusMessage.emit(self.status_line())
             return
         if self._highlight_job is not None and self._highlight_job.pending:
+            # supersede, never queue behind stale settings: the in-flight
+            # apply is cancelled (the landscape sum polls the cancel once per
+            # chunk, md_channels._poll) and the newest state starts from
+            # _on_redraw_ended once its thread ends
             self._pending_redraw = True
+            self._highlight_job.cancel()
             return
         v_bond = self._strip_v_bond()
         v_bond = fv.v_bond_vu if v_bond is None else v_bond
@@ -1670,6 +1679,16 @@ class ModelController(QObject):
         if active:
             self.statusMessage.emit(
                 f"Applying {len(active)} highlight rule(s) to frame {fv.k} …")
+        if self.highlight is not None:
+            # while a landscape is computed the count line says what runs
+            # and for about how long, and marks the stale result as previous
+            from .md_highlight import landscape_status_note
+
+            previous = self.highlight.result.note if self.highlight.result \
+                else ""
+            computing = landscape_status_note(fd, active, previous)
+            if computing:
+                self.highlight.summary.setText(computing)
         job.start()
 
     @Slot(object)
@@ -1679,6 +1698,11 @@ class ModelController(QObject):
         job = self.sender()
         if getattr(job, "generation", self._model_generation) != \
                 self._model_generation:
+            return
+        if self._pending_redraw:
+            # superseded: a newer request waits in _on_redraw_ended, so this
+            # job's scene is stale; uploading it would cost a second for a
+            # picture replaced at once
             return
         scene, outcome, seconds = payload
         self.view.set_scene(scene, reframe=self._reframe_next)
@@ -1691,6 +1715,11 @@ class ModelController(QObject):
     @Slot(object)
     def _on_redraw_failed(self, failure) -> None:
         if self._closing:
+            return
+        if self._pending_redraw and \
+                getattr(failure, "kind", "") == "cancelled":
+            # a superseded job stopping is not a failure to report: the
+            # newest state starts from _on_redraw_ended
             return
         fv = self.frame_view
         if fv is not None and fv.scene is not None:

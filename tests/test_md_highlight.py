@@ -636,6 +636,126 @@ def test_the_rows_state_the_grid_before_anything_runs(qapp, quartz,
         dispose(page)
 
 
+def test_the_channel_surface_follows_the_meshing_policy(quartz, monkeypatch):
+    """One OverlayMesh however many regions there are; the volume floor
+    keeps the small regions out of the picture (the count line says so) and
+    never out of the numbers; the triangle budget subsamples the grid."""
+    from facet.core import md_channels
+    from facet.ui import md_highlight
+    from facet.ui.md_highlight import Rule, apply_rules
+
+    fd = quartz
+    base = Rule("channels", channel_by="by charge", threshold=1.1, probe="Na",
+                grid_spacing_ang=0.5, r_cut_ang=4.0)
+    landscape = fd.landscape("Na", 0.5, 4.0)
+    regions = md_channels.accessible_regions(landscape, 1.1)
+    assert regions.n_regions > 1, "the policy needs several regions"
+
+    # everything drawn: one mesh, never one part per region
+    scene = _scene(fd)
+    rule = Rule(**{**base.__dict__, "mesh_min_volume_ang3": 0.0})
+    full = apply_rules(scene, fd, [rule], dim_rest=True)
+    assert full.n_regions == regions.n_regions
+    channels = [m for m in scene.overlay_meshes if m.label == "channels"]
+    assert len(channels) == 1
+    full_triangles = channels[0].n_triangles
+    assert full_triangles > 0
+    assert f"all {regions.n_regions} region(s) drawn" in full.note
+
+    # a floor above every region: the largest is still drawn, the note
+    # names what was left out of the picture, the numbers stay full-grid
+    scene = _scene(fd)
+    rule = Rule(**{**base.__dict__, "mesh_min_volume_ang3": 1e6})
+    floored = apply_rules(scene, fd, [rule], dim_rest=True)
+    assert floored.n_regions == regions.n_regions
+    assert floored.n_in_regions == full.n_in_regions
+    channels = [m for m in scene.overlay_meshes if m.label == "channels"]
+    assert len(channels) == 1
+    assert 0 < channels[0].n_triangles < full_triangles
+    assert "of at least 1e+06 Å³ drawn" in floored.note
+    assert "left out of the picture, not the numbers" in floored.note
+
+    # a budget the full surface exceeds: the grid is subsampled and said so
+    monkeypatch.setattr(md_highlight, "CHANNEL_MESH_TRIANGLE_BUDGET", 1)
+    scene = _scene(fd)
+    rule = Rule(**{**base.__dict__, "mesh_min_volume_ang3": 0.0})
+    tight = apply_rules(scene, fd, [rule], dim_rest=True)
+    assert tight.n_regions == regions.n_regions
+    channels = [m for m in scene.overlay_meshes if m.label == "channels"]
+    assert channels[0].n_triangles < full_triangles
+    assert "triangle budget" in tight.note
+
+
+def test_the_regions_and_the_surface_survive_a_v_bond_move(quartz,
+                                                           monkeypatch):
+    """What a v_bond slider drag costs: the landscape, the regions and the
+    channel surface are computed once and carried to the FrameData of the
+    next v_bond (as md_workspace._frame_data_at carries them)."""
+    from facet.core import bulk, bv, md_channels, md_model, readers, volume
+    from facet.ui.md_highlight import FrameData, Rule, apply_rules
+
+    frame, _ = md_model.supercell_frame(readers.read(QUARTZ), (3, 3, 3))
+    fd = _frame_data(frame)
+    calls = {"landscape": 0, "regions": 0, "isosurface": 0}
+    real_landscape = md_channels.bv_landscape
+    real_regions = md_channels.accessible_regions
+    real_iso = volume.isosurface
+
+    def counting(name, real):
+        def wrapped(*args, **kwargs):
+            calls[name] += 1
+            return real(*args, **kwargs)
+        return wrapped
+
+    monkeypatch.setattr(md_channels, "bv_landscape",
+                        counting("landscape", real_landscape))
+    monkeypatch.setattr(md_channels, "accessible_regions",
+                        counting("regions", real_regions))
+    monkeypatch.setattr(volume, "isosurface", counting("isosurface", real_iso))
+    rule = Rule("channels", channel_by="by charge", threshold=0.5, probe="Na",
+                grid_spacing_ang=1.5, r_cut_ang=4.0)
+    first = apply_rules(_scene(fd), fd, [rule], dim_rest=True)
+    assert not first.problems, first.problems
+    assert calls == {"landscape": 1, "regions": 1, "isosurface": 1}
+
+    # the same frame at another v_bond, with the caches carried over
+    ox = md_model.model_oxidation(fd.frame.species)
+    ox_atom = ox.per_atom(fd.frame.elements)
+    table, _ = bulk.analyse_frame(fd.frame, ox_atom, bv.DEFAULT,
+                                  v_bond_vu=0.09, v_list_vu=V_LIST)
+    fd2 = FrameData.from_frame(fd.frame, table, v_bond=0.09,
+                               formers={"Si"}, ox_atom=ox_atom)
+    fd2._spheres = fd._spheres
+    fd2._landscapes = fd._landscapes
+    fd2._void_regions = fd._void_regions
+    fd2._regions = fd._regions
+    fd2._channel_meshes = fd._channel_meshes
+    second = apply_rules(_scene(fd2), fd2, [rule], dim_rest=True)
+    assert not second.problems, second.problems
+    assert calls == {"landscape": 1, "regions": 1, "isosurface": 1}
+    assert second.n_regions == first.n_regions
+
+
+def test_the_count_line_states_a_landscape_being_computed(quartz):
+    from facet.core import md_channels
+    from facet.ui.md_highlight import Rule, landscape_status_note
+
+    fd = quartz
+    rule = Rule("channels", enabled=True, channel_by="by charge",
+                threshold=0.5, probe="K", grid_spacing_ang=0.5, r_cut_ang=4.0)
+    note = landscape_status_note(fd, [rule], previous="old count line")
+    _shape, n_points, _ = md_channels.grid_guard(fd.frame.box_ang, 0.5)
+    assert "computing the K landscape:" in note
+    assert "grid points, about" in note and "on this machine" in note
+    assert note.endswith("previous: old count line")
+    # a landscape already cached asks for no computing line
+    fd.landscape("Na", 1.5, 4.0)
+    cached = Rule("channels", enabled=True, channel_by="by charge",
+                  threshold=0.5, probe="Na", grid_spacing_ang=1.5,
+                  r_cut_ang=4.0)
+    assert landscape_status_note(fd, [cached], previous="x") == ""
+
+
 def test_a_live_highlight_job_is_cancelled_at_interpreter_exit():
     """The crash this pins: a highlight worker computing a large landscape,
     the window closed with the job running, the interpreter tearing down a

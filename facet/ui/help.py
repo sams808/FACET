@@ -1394,6 +1394,11 @@ a grid of the stated spacing, from the anions within <i>r</i><sub>cut</sub>),
 the regions where the mismatch to the probe's valence is at most &Delta;,
 and the isosurface at &Delta; drawn in the view; the count line states the
 regions, the fraction of the box they fill and which box axes they span.
+Only the regions of at least the rule's &ldquo;draw &ge;&rdquo; volume are
+drawn as a surface (the largest always is, and the surface grid is
+subsampled when the mesh would exceed the triangle budget) &mdash; a drawing
+choice the count line states; the region count, fraction and spans always
+come from the full grid.
 Measured, not inferred: a connected region is a statement about the sum, not
 about a path an ion takes.</li>
 <li><b>by modifier density</b>: the anions with <i>k</i> or more atoms of the

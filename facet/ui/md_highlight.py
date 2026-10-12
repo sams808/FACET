@@ -20,7 +20,9 @@ no renderer change. Three kinds of rule:
 * *Channels [by charge | by modifier density | by voids] …*: the regions
   :mod:`facet.core.md_channels` measures on this frame, each atom coloured
   by its region under "channel membership" and the atoms outside every
-  region dimmed; by charge the mismatch isosurface at Δ is drawn as well.
+  region dimmed; by charge the mismatch isosurface at Δ is drawn as well,
+  under the meshing policy stated beside its constants below (what is
+  drawn, never what is counted).
 
 Every threshold is what the field shows: nothing physical is assumed, and
 the count line states the frame, v_bond and what was drawn with which
@@ -31,7 +33,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -58,8 +60,8 @@ from .md_dialogs import _hint
 
 __all__ = [
     "FrameData", "Rule", "HighlightResult", "HighlightPage", "apply_rules",
-    "channel_backend", "grid_points_note", "sphere_mesh", "icosphere",
-    "radius_for_volume",
+    "channel_backend", "grid_points_note", "landscape_status_note",
+    "sphere_mesh", "icosphere", "radius_for_volume",
     "DESCRIPTORS", "COLOUR_MODES", "CHANNEL_MODES", "VOID_COLOUR",
     "CHANNEL_COLOUR",
 ]
@@ -84,6 +86,31 @@ DIM_KEEP = 0.20
 DIM_ATOM_RADIUS = 0.40
 DIM_BOND_RADIUS = 0.35
 NEUTRAL = (0.60, 0.62, 0.66)       # theme.ramp's colour for NaN
+
+# The meshing policy of a by-charge channel surface: METHOD CHOICES about
+# what is drawn, never about what is measured -- the region count, volume
+# fraction and percolation always come from the full grid. Only the regions
+# of at least CHANNEL_MESH_MIN_VOLUME_ANG3 (the "draw >=" field of the rule
+# overrides it per rule; the largest region is always drawn) are meshed, and
+# the isosurface grid is subsampled (volume.isosurface's step) by the
+# smallest step whose predicted triangle count fits the budget. Why: on the
+# 15 486-atom C-N glass the full 0.5 Å mismatch surface was 1 277 322
+# triangles and took 74 s of marching tetrahedra, and every render that
+# re-sorts transparency walked all of them. The triangle estimate is
+# straddling cubes x CHANNEL_MESH_TRIANGLES_PER_CUBE (marching tetrahedra
+# on that frame gave 6.17 triangles per straddling cube at step 1, 5.29 at
+# step 2 and 4.44 at step 3; the step-1 value is the measured upper bound,
+# so the budget holds at whatever step is chosen).
+CHANNEL_MESH_MIN_VOLUME_ANG3 = 8.0
+CHANNEL_MESH_TRIANGLE_BUDGET = 150_000
+CHANNEL_MESH_TRIANGLES_PER_CUBE = 6.2
+CHANNEL_MESH_MAX_STEP = 4
+
+# What the landscape engine measured through cKDTree.sparse_distance_matrix
+# and the exponential: "about 7-8 million (grid point, anion image) pairs a
+# second" (facet.core.md_channels module docstring). Used only for the
+# "about N s" of the count line while a landscape is being computed.
+LANDSCAPE_PAIRS_PER_S = 7.5e6
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +221,8 @@ class FrameData:
     _spheres: object = field(default=None, repr=False)
     _landscapes: dict = field(default_factory=dict, repr=False)
     _void_regions: dict = field(default_factory=dict, repr=False)
+    _regions: dict = field(default_factory=dict, repr=False)
+    _channel_meshes: dict = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_frame(cls, frame, table, *, k: int = 0,
@@ -324,6 +353,29 @@ class FrameData:
                 cancelled=_cancel_hook(cancelled))
         return self._landscapes[key]
 
+    def regions(self, probe: str, grid_spacing_ang: float, r_cut_ang: float,
+                delta_vu: float, cancelled=None):
+        """The accessible regions of :meth:`landscape` at ``delta_vu``
+        (:func:`facet.core.md_channels.accessible_regions`), kept per
+        (probe, spacing, r_cut, Delta) -- the landscape and its regions do
+        not depend on v_bond, so a v_bond move reads them from here."""
+        from ..core import md_channels
+
+        key = (str(probe), float(grid_spacing_ang), float(r_cut_ang),
+               float(delta_vu))
+        if key not in self._regions:
+            landscape = self.landscape(probe, grid_spacing_ang, r_cut_ang,
+                                       cancelled)
+            try:
+                self._regions[key] = md_channels.accessible_regions(
+                    landscape, float(delta_vu),
+                    cancelled=_cancel_hook(cancelled))
+            except TypeError:
+                # an older md_channels without the hook: runs through
+                self._regions[key] = md_channels.accessible_regions(
+                    landscape, float(delta_vu))
+        return self._regions[key]
+
     def void_regions(self, probe_radius_ang: float, grid_spacing_ang: float,
                      cancelled=None):
         """The void regions of this frame
@@ -395,6 +447,51 @@ def grid_points_note(fd, grid_spacing_ang: float) -> str:
             f"{_thousands(n_points)} points at {grid_spacing_ang:g} Å")
 
 
+def landscape_status_note(fd, rules, previous: str = "") -> str:
+    """What the count line says while a by-charge landscape is being
+    computed: the grid's point count and about how long on this machine
+    (:data:`LANDSCAPE_PAIRS_PER_S`, the engine docstring's measured rate),
+    with the stale result marked as previous. Empty when every enabled
+    by-charge rule's landscape is already cached on ``fd``."""
+    if fd is None:
+        return ""
+    try:
+        from ..core import md_channels
+    except ImportError:
+        return ""
+    for rule in rules:
+        if not (rule.enabled and rule.kind == "channels"
+                and rule.channel_by == "by charge"):
+            continue
+        probe = rule.probe or (fd.modifiers[0] if fd.modifiers else "")
+        if not probe or rule.grid_spacing_ang <= 0 or rule.r_cut_ang <= 0:
+            continue
+        key = (str(probe), float(rule.grid_spacing_ang),
+               float(rule.r_cut_ang))
+        if key in fd._landscapes:
+            continue
+        try:
+            _shape, n_points, refusal = md_channels.grid_guard(
+                fd.frame.box_ang, float(rule.grid_spacing_ang))
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if refusal:
+            continue
+        anions = int((np.asarray(fd.ox_atom) < 0).sum())
+        volume = float(fd.frame.volume_ang3)
+        per_point = max(1.0, anions / max(volume, 1e-9)
+                        * 4.0 / 3.0 * math.pi * float(rule.r_cut_ang) ** 3)
+        seconds = n_points * per_point / LANDSCAPE_PAIRS_PER_S
+        about = f"{seconds:.0f} s" if seconds >= 1.5 else "a second"
+        note = (f"computing the {probe} landscape: "
+                f"{_thousands(n_points)} grid points, about {about} on "
+                "this machine…")
+        if previous:
+            note += f" · previous: {previous}"
+        return note
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # the rules
 # ---------------------------------------------------------------------------
@@ -429,6 +526,10 @@ class Rule:
     probe: str = ""
     grid_spacing_ang: float = 0.0
     r_cut_ang: float = 0.0
+    # by charge only: the volume floor of the DRAWN surface (None takes
+    # CHANNEL_MESH_MIN_VOLUME_ANG3); a method choice about the picture, the
+    # numbers always come from the full grid
+    mesh_min_volume_ang3: float | None = None
 
 
 @dataclass(frozen=True)
@@ -472,11 +573,114 @@ def channel_backend(mode: str) -> tuple[bool, str]:
     return True, ""
 
 
-def _channels_by_charge(fd: FrameData, rule: Rule):
-    """(region of each atom, n_regions, mesh, note) by the bond-valence
-    landscape of the probe and its accessible regions at Δ."""
+def _straddling_cubes(values: np.ndarray, level: float, step: int) -> int:
+    """How many grid cubes of ``values[::step]`` the level crosses
+    (periodic), which is what the marching tetrahedra will walk."""
+    v = values[::step, ::step, ::step]
+    if min(v.shape) < 2:
+        return 0
+    inside = v <= level
+    any_in = inside.copy()
+    all_in = inside.copy()
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                if (dx, dy, dz) == (0, 0, 0):
+                    continue
+                corner = np.roll(inside, (-dx, -dy, -dz), axis=(0, 1, 2))
+                any_in |= corner
+                all_in &= corner
+    return int((any_in & ~all_in).sum())
+
+
+def _choose_step(values: np.ndarray, level: float) -> tuple[int, int]:
+    """The smallest isosurface step whose predicted triangle count fits
+    :data:`CHANNEL_MESH_TRIANGLE_BUDGET`, and that prediction."""
+    per_cube = CHANNEL_MESH_TRIANGLES_PER_CUBE
+    estimate = 0
+    for step in range(1, CHANNEL_MESH_MAX_STEP + 1):
+        estimate = int(_straddling_cubes(values, level, step) * per_cube)
+        if estimate <= CHANNEL_MESH_TRIANGLE_BUDGET:
+            return step, estimate
+        if min(n // (step + 1) for n in values.shape) < 2:
+            break
+    return min(step, CHANNEL_MESH_MAX_STEP), estimate
+
+
+def _channel_mesh_arrays(fd: FrameData, rule: Rule, regions,
+                         floor_ang3: float):
+    """(vertices, flat normals, policy note) of the by-charge surface:
+    the mismatch isosurface at Δ restricted to the regions drawn under the
+    meshing policy (volume floor, triangle budget; module constants above).
+    Kept per (probe, spacing, r_cut, Δ, floor, budget), so a v_bond move or
+    a second apply reads the triangles instead of marching the grid again."""
     from ..core import md_channels, volume
 
+    key = (str(rule.probe), float(rule.grid_spacing_ang),
+           float(rule.r_cut_ang), float(rule.threshold), float(floor_ang3),
+           int(CHANNEL_MESH_TRIANGLE_BUDGET))
+    hit = fd._channel_meshes.get(key)
+    if hit is not None:
+        return hit
+    level = float(rule.threshold)
+    volumes = np.asarray(regions.volume_ang3, np.float64)
+    # regions are numbered largest first, so those at or above the floor
+    # are a leading run; the largest is always drawn
+    n_drawn = max(1, int((volumes >= floor_ang3).sum())) \
+        if regions.n_regions else 0
+    label = np.asarray(regions.label_grid)
+    landscape = fd.landscape(rule.probe, rule.grid_spacing_ang,
+                             rule.r_cut_ang)
+    grid = md_channels.landscape_grid(landscape, "mismatch")
+    # raise the accessible points outside the drawn regions above the level,
+    # so their surface is not meshed; the numbers never read this field
+    drawn = (label >= 0) & (label < n_drawn)
+    grid.values[~drawn & (grid.values <= level)] = level + abs(level) + 1.0
+    hook = _cancel_hook(None)
+    if hook is not None and hook():
+        from ..core.md_channels import AnalysisCancelled
+
+        raise AnalysisCancelled("cancelled before the channel surface was "
+                                "meshed")
+    step, _ = _choose_step(grid.values, level)
+    vertices, faces, normals = volume.isosurface(grid, level, step=step)
+    vertices = np.asarray(vertices, np.float32)
+    faces = np.asarray(faces, int)
+    if len(faces) and len(vertices):
+        flat = faces.reshape(-1)
+        tri_vertices = vertices[flat]
+        normals = np.asarray(normals, np.float32)
+        tri_normals = (normals[flat] if len(normals) == len(vertices)
+                       else np.zeros((len(flat), 3), np.float32))
+    else:
+        tri_vertices = np.zeros((0, 3), np.float32)
+        tri_normals = np.zeros((0, 3), np.float32)
+    drawn_volume = float(volumes[:n_drawn].sum()) if n_drawn else 0.0
+    open_volume = float(volumes.sum())
+    if regions.n_regions == 0:
+        policy = ""
+    elif n_drawn == regions.n_regions:
+        policy = f"all {regions.n_regions} region(s) drawn"
+    else:
+        share = 100.0 * drawn_volume / open_volume if open_volume else 0.0
+        policy = (f"the {n_drawn} of at least {floor_ang3:g} Å³ drawn "
+                  f"({share:.0f} % of the open volume); smaller ones left "
+                  "out of the picture, not the numbers")
+    if step > 1 and policy:
+        policy += (f"; surface meshed at grid step {step} to fit the "
+                   f"{_thousands(CHANNEL_MESH_TRIANGLE_BUDGET)}-triangle "
+                   "budget")
+    out = (tri_vertices, tri_normals, policy)
+    fd._channel_meshes[key] = out
+    return out
+
+
+def _channels_by_charge(fd: FrameData, rule: Rule):
+    """(region of each atom, n_regions, mesh, note) by the bond-valence
+    landscape of the probe and its accessible regions at Δ. The NUMBERS
+    (region count, volume fraction, percolation, membership) come from the
+    full grid; only the drawn surface follows the meshing policy
+    (:data:`CHANNEL_MESH_MIN_VOLUME_ANG3` and the constants beside it)."""
     probe = rule.probe or (fd.modifiers[0] if fd.modifiers else "")
     if not probe:
         raise ChannelUnavailable("by charge needs a probe ion: the frame "
@@ -484,17 +688,17 @@ def _channels_by_charge(fd: FrameData, rule: Rule):
     if rule.grid_spacing_ang <= 0 or rule.r_cut_ang <= 0:
         raise ChannelUnavailable("by charge needs a grid spacing and an "
                                  "r_cut above 0 (both are shown in the rule)")
+    rule = replace(rule, probe=probe)
+    regions = fd.regions(probe, rule.grid_spacing_ang, rule.r_cut_ang,
+                         rule.threshold)
+    floor = CHANNEL_MESH_MIN_VOLUME_ANG3 \
+        if rule.mesh_min_volume_ang3 is None \
+        else max(float(rule.mesh_min_volume_ang3), 0.0)
+    tri_vertices, tri_normals, policy = _channel_mesh_arrays(
+        fd, rule, regions, floor)
+    mesh = OverlayMesh(tri_vertices, tri_normals, tuple(CHANNEL_COLOUR),
+                       float(CHANNEL_ALPHA), label="channels")
     landscape = fd.landscape(probe, rule.grid_spacing_ang, rule.r_cut_ang)
-    try:
-        regions = md_channels.accessible_regions(
-            landscape, rule.threshold, cancelled=_cancel_hook(None))
-    except TypeError:
-        # an older md_channels without the hook: the labelling runs through
-        regions = md_channels.accessible_regions(landscape, rule.threshold)
-    grid = md_channels.landscape_grid(landscape, "mismatch")
-    vertices, faces, normals = volume.isosurface(grid, float(rule.threshold))
-    mesh = _triangle_mesh(vertices, faces, normals, CHANNEL_COLOUR,
-                          CHANNEL_ALPHA, "channels")
     fraction = float(regions.accessible_fraction)
     spans = "".join(axis for axis, on in zip("abc", regions.percolates)
                     if bool(on))
@@ -502,7 +706,8 @@ def _channels_by_charge(fd: FrameData, rule: Rule):
             f"≤ {rule.threshold:g} v.u. on a {rule.grid_spacing_ang:g} Å "
             f"grid (r_cut {rule.r_cut_ang:g} Å): {regions.n_regions} "
             f"region(s), {100 * fraction:.1f} % of the box"
-            + (f", spanning {spans}" if spans else ", none spanning the box"))
+            + (f", spanning {spans}" if spans else ", none spanning the box")
+            + (f"; {policy}" if policy else ""))
     return np.asarray(regions.region_of_atom), int(regions.n_regions), mesh, \
         note
 
@@ -1086,6 +1291,14 @@ class ChannelsRow(RuleRow):
                             "adds nothing to the sum; by modifier density: "
                             "the M–anion cutoff; by voids: the probe "
                             "radius.")
+        self.floor_label = QLabel("draw regions ≥")
+        self.floor = _spin(CHANNEL_MESH_MIN_VOLUME_ANG3, 0.0, 100000.0,
+                           1.0, 1, " Å³")
+        self.floor.setToolTip(
+            "by charge: only the regions of at least this volume are drawn "
+            "as a surface (the largest always is); the region count, the "
+            "volume fraction and the percolation always come from the full "
+            "grid. A drawing choice that keeps the mesh small.")
         second.addWidget(self.probe_label)
         second.addWidget(self.probe)
         second.addWidget(QLabel("grid"))
@@ -1094,12 +1307,19 @@ class ChannelsRow(RuleRow):
         second.addWidget(self.cut)
         second.addStretch(1)
         self.column.insertLayout(1, second)
+        third = QHBoxLayout()
+        third.setContentsMargins(22, 0, 0, 0)
+        third.setSpacing(6)
+        third.addWidget(self.floor_label)
+        third.addWidget(self.floor)
+        third.addStretch(1)
+        self.column.insertLayout(2, third)
         self.setToolTip("The regions md_channels measures on the frame "
                         "shown; the atoms outside them are dimmed and, "
                         "under 'channel membership', coloured by region.")
         self.mode.currentIndexChanged.connect(self._on_mode)
         self.probe.currentIndexChanged.connect(lambda _i: self.changed.emit())
-        for w in (self.threshold, self.spacing, self.cut):
+        for w in (self.threshold, self.spacing, self.cut, self.floor):
             w.valueChanged.connect(lambda _v: self.changed.emit())
         # the note's grid estimate follows the spacing typed
         self.spacing.valueChanged.connect(lambda _v: self._availability())
@@ -1126,6 +1346,8 @@ class ChannelsRow(RuleRow):
         self.probe_label.setVisible(uses_probe)
         self.probe.setVisible(uses_probe)
         self.spacing.setVisible(mode != "by modifier density")
+        self.floor_label.setVisible(mode == "by charge")
+        self.floor.setVisible(mode == "by charge")
         self._availability()
         self.changed.emit()
 
@@ -1172,7 +1394,10 @@ class ChannelsRow(RuleRow):
                     probe=self.probe.currentText(),
                     grid_spacing_ang=float(self.spacing.value()),
                     r_cut_ang=float(self.cut.value()),
-                    min_volume_ang3=0.0)
+                    min_volume_ang3=0.0,
+                    mesh_min_volume_ang3=(float(self.floor.value())
+                                          if self.mode.currentText()
+                                          == "by charge" else None))
 
 
 _ROW_CLASSES = {"show-only": ShowOnlyRow, "voids": VoidsRow,

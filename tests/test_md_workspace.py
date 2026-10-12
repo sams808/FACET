@@ -704,6 +704,71 @@ def test_the_highlight_rules_are_applied_on_a_worker(qapp, window,
                for line in controller.notes_lines())
 
 
+def test_a_new_redraw_supersedes_the_job_in_flight(qapp, window, quartz_model,
+                                                   monkeypatch):
+    """A redraw asked for while one is pending cancels the in-flight job
+    (never queues behind stale settings) and the final scene reflects the
+    newest settings only."""
+    import threading
+
+    from facet.core import md_channels
+    from facet.ui import md_highlight, md_jobs
+
+    controller = _quartz(qapp, window, quartz_model)
+    assert _drawn(qapp, controller)
+    page = controller.highlight
+    row = page.only
+    row.element.setCurrentText("O")
+    row.descriptor.setCurrentText("CN")
+    row.sense.setCurrentText("≥")
+    row.value.setValue(1)
+    assert _drawn(qapp, controller)
+
+    real_apply = md_highlight.apply_rules
+    started = threading.Event()
+    applied = []                 # the enabled rules of each finished apply
+
+    def slow_apply(scene, fd, rules, **kwargs):
+        active = [r for r in rules if r.enabled]
+        started.set()
+        if active and active[0].kind == "show-only" and active[0].value == 1:
+            # the first settings: hold, polling the job's cancel as the
+            # landscape chunk loop does, and stop as the engine stops
+            hook = md_jobs.current_cancelled()
+            end = time.perf_counter() + 20.0
+            while time.perf_counter() < end:
+                if hook is not None and hook():
+                    raise md_channels.AnalysisCancelled(
+                        "cancelled in the held apply")
+                time.sleep(0.01)
+            raise AssertionError("the first job was never cancelled")
+        out = real_apply(scene, fd, rules, **kwargs)
+        applied.append(active)
+        return out
+
+    monkeypatch.setattr(md_highlight, "apply_rules", slow_apply)
+    row.tick.setChecked(True)                    # settings A (value 1)
+    assert _wait(qapp, started.is_set, 30)
+    first = controller._highlight_job
+    assert first is not None and first.pending
+    row.value.setValue(3)                        # settings B, mid-flight
+    assert _wait(qapp, lambda: first.cancel_requested, 30), \
+        "the in-flight job was not cancelled"
+    assert _drawn(qapp, controller, 60)
+    assert controller._highlight_job is not first
+    # no finished apply ran the stale settings; the last ran the newest
+    assert applied, "the second apply never ran"
+    assert all(not (a and a[0].kind == "show-only" and a[0].value == 1)
+               for a in applied)
+    last = applied[-1]
+    assert last and last[0].kind == "show-only" and last[0].value == 3
+    fd = controller.frame_data
+    keep = (fd.cn >= 3) & (fd.elements == "O")
+    assert page.result is not None
+    assert page.result.n_matching == int(keep.sum())
+    assert "not applied" not in page.summary.text()
+
+
 # ---------------------------------------------------------------------------
 # export, the request as a file, the session
 # ---------------------------------------------------------------------------
