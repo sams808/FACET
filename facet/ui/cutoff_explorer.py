@@ -69,6 +69,10 @@ class CutoffExplorer(QWidget):
         self.v_bond = bv.V_BOND_DEFAULT
         self.reference_distance: float | None = 3.00   # the usual Bi-O convention
         self.show_distance_axis = True
+        # The threshold the structure was first analysed with: a pin, so that
+        # once the cut has been dragged the reader can still see where the
+        # numbers first shown for this file came from.
+        self.pin_v: float | None = None
 
         self._dragging = False
         self._hover_v: float | None = None
@@ -83,6 +87,11 @@ class CutoffExplorer(QWidget):
         self.result = result
         if result is not None:
             self.v_bond = result.v_bond
+        self.update()
+
+    def set_pin(self, v: float | None) -> None:
+        """Mark the threshold the file was first analysed with."""
+        self.pin_v = None if v is None else float(v)
         self.update()
 
     def set_threshold(self, v: float, emit: bool = False) -> None:
@@ -161,9 +170,9 @@ class CutoffExplorer(QWidget):
         marker off the end of the plot.
         """
         lo, hi = self._data_range()
-        v = float(self.v_bond)
-        if v > 0:
-            lo, hi = min(lo, v / 1.05), max(hi, v * 1.05)
+        for v in (float(self.v_bond), self.pin_v):
+            if v is not None and v > 0:
+                lo, hi = min(lo, v / 1.05), max(hi, v * 1.05)
         return lo, hi
 
     def _v_to_x(self, v: float) -> float:
@@ -403,7 +412,17 @@ class CutoffExplorer(QWidget):
         if r.cn_gap and 0 < r.cn_gap < len(vals):
             v = math.sqrt(vals[r.cn_gap - 1] * vals[r.cn_gap])
             marks.append((v, "max gap", QColor("#7f9e79")))
+        # the pin: where the threshold stood when the file was opened, so the
+        # numbers first shown for it can be found again after a drag
+        if self.pin_v is not None and self.pin_v > 0:
+            marks.append((self.pin_v, self._pin_label(), self._pin_colour()))
         return sorted(marks, key=lambda m: m[0])
+
+    def _pin_label(self) -> str:
+        return f"opened at {self.pin_v:.4f}"
+
+    def _pin_colour(self) -> QColor:
+        return self._c("#c58fd6", "#7b3f99")
 
     def _place_references(self, fm: QFontMetricsF) -> list:
         """Lay the mark labels out, staggering the ones that collide.
@@ -449,9 +468,23 @@ class CutoffExplorer(QWidget):
 
         for v, label, col, left, w, row in self._place_references(fm):
             x = self._v_to_x(v)
-            p.setPen(QPen(col, 1.2, Qt.DashLine))
-            p.drawLine(QPointF(x, self._plot.top()),
-                       QPointF(x, self._plot.bottom()))
+            is_pin = self.pin_v is not None and v == self.pin_v \
+                and label == self._pin_label()
+            if is_pin:
+                # a pin: a thin solid shaft with a round head above the plot,
+                # drawn differently from the dashed rules so it reads as a
+                # placed marker rather than a convention
+                p.setPen(QPen(col, 1.4, Qt.SolidLine))
+                p.drawLine(QPointF(x, self._plot.top() - 2),
+                           QPointF(x, self._plot.bottom()))
+                p.setBrush(QBrush(col))
+                p.setPen(Qt.NoPen)
+                p.drawEllipse(QPointF(x, self._plot.top() - 7), 4.0, 4.0)
+                p.setBrush(Qt.NoBrush)
+            else:
+                p.setPen(QPen(col, 1.2, Qt.DashLine))
+                p.drawLine(QPointF(x, self._plot.top()),
+                           QPointF(x, self._plot.bottom()))
             p.setPen(col)
             y = self._rail.bottom() + 2 + row * (fm.height() - 1)
             p.drawText(QRectF(left, y, w, fm.height()), Qt.AlignCenter, label)

@@ -24,7 +24,7 @@ depends on the question being asked.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, replace
 
 import numpy as np
 
@@ -389,6 +389,45 @@ def _fill_geometry(r: SiteResult) -> None:
 
     all_d = np.array([c.distance for c in r.contacts])
     r.cn_gap, r.gap_ratio = polyhedra.gap_split(all_d)
+
+
+# Everything on a SiteResult that the bond threshold decides. The identity of
+# the site, its contacts, its plateaus and its notes do not depend on where
+# the cut is put; these do, and are recomputed when it moves.
+_THRESHOLD_FIELDS = (
+    "cn_valence", "cn_ecoN", "d_ecoN", "cn_gap", "gap_ratio", "cn_occupancy",
+    "bvs", "bvv", "phi", "bvv_vector", "valence_discrepancy", "f3",
+    "bvs_systematic", "bvs_random", "bvs_uncertainty",
+    "shape", "void_angle", "void_axis",
+)
+
+
+def reclassify(result: SiteResult, v_bond: float) -> SiteResult:
+    """The same site at another bond threshold, from its cached contacts.
+
+    No neighbour search: the contacts down to the listing threshold are
+    already on the result, and the bond threshold only decides which of them
+    count as bonds. Everything that depends on that choice -- the coordination
+    number, the bond-valence sum over the bonded set, phi, the polyhedron
+    shape, the uncertainty -- is computed again; everything that does not --
+    the contacts, the plateaus, the sum to the listing cut, the notes -- is
+    shared with the original.
+
+    The result at the original threshold is returned unchanged, so a consumer
+    that compares identities can tell the two apart.
+    """
+    if abs(float(v_bond) - float(result.v_bond)) < 1e-12:
+        return result
+    fields = SiteResult.__dataclass_fields__
+    fresh = {}
+    for name in _THRESHOLD_FIELDS:
+        f = fields[name]
+        fresh[name] = (f.default_factory() if f.default_factory is not MISSING
+                       else f.default)
+    moved = replace(result, v_bond=float(v_bond), **fresh)
+    _fill_valence_quantities(moved)
+    _fill_geometry(moved)
+    return moved
 
 
 def plateaus(r: SiteResult) -> list[Plateau]:

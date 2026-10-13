@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -55,6 +55,7 @@ from ..gl.view import StructureView
 from ..version import NAME, __version__
 from . import chrome
 from .cutoff_explorer import CutoffExplorer
+from .shell_plot import ShellPlot
 from .structure_list import StructureList
 from .theme_panel import ThemePanel
 from .diffraction_panel import DiffractionPanel
@@ -166,6 +167,18 @@ class PreviewWindow(QMainWindow):
         self.explorer = CutoffExplorer()
         self.explorer.set_theme(self.theme)
         self.explorer.thresholdChanged.connect(self._on_threshold)
+        # The shells of the selected site beside the staircase: CN and the
+        # running bond-valence sum against distance or valence. It shares the
+        # threshold with the explorer, so a drag on either moves both.
+        self.shells = ShellPlot()
+        self.shells.set_theme(self.theme)
+        self.shells.thresholdChanged.connect(self._on_threshold)
+        # Atom colours that encode a per-site number are rebuilt after a drag
+        # settles rather than on every step: one rebuild, not one per pixel.
+        self._recolour_timer = QTimer(self)
+        self._recolour_timer.setSingleShot(True)
+        self._recolour_timer.setInterval(120)
+        self._recolour_timer.timeout.connect(self._rebuild)
 
         self.analysis = QTextBrowser()
         self.analysis.setOpenExternalLinks(False)
@@ -400,8 +413,16 @@ class PreviewWindow(QMainWindow):
         split.setSizes([980, 500])
         self.split = split
 
+        # The crystal's bottom strip: the staircase and, beside it, the shells
+        # of the selected site. A splitter, so either can be given the room.
+        self.bottom_strip = QSplitter(Qt.Horizontal)
+        self.bottom_strip.addWidget(self.explorer)
+        self.bottom_strip.addWidget(self.shells)
+        self.bottom_strip.setStretchFactor(0, 3)
+        self.bottom_strip.setStretchFactor(1, 2)
+        self.bottom_strip.setSizes([900, 580])
         self.bottom_stack = _PageStack()
-        self.bottom_stack.addWidget(self.explorer)
+        self.bottom_stack.addWidget(self.bottom_strip)
         vertical = QSplitter(Qt.Vertical)
         vertical.addWidget(split)
         vertical.addWidget(self.bottom_stack)
@@ -1709,8 +1730,14 @@ class PreviewWindow(QMainWindow):
         self.view.set_label_context(
             active.structure if active else None,
             self.project.results_for(active) if active else None)
-        self.explorer.set_result(self._current_result())
+        current = self._current_result()
+        pin = active.first_v_bond if active is not None else None
+        self.explorer.set_result(current)
+        self.explorer.set_pin(pin)
         self.explorer.set_threshold(self.project.v_bond)
+        self.shells.set_result(current)
+        self.shells.set_pin(pin)
+        self.shells.set_threshold(self.project.v_bond)
         self._update_analysis()
         self.utilities.update_for(
             active.structure if active else None,
@@ -1898,6 +1925,7 @@ class PreviewWindow(QMainWindow):
             # cutoff staircase and a camera framed on it.
             self.view.set_scene(None, reframe=False)
             self.explorer.set_result(None)
+            self.shells.set_result(None)
             self._update_analysis()
             self.site_list.clear()
             self._set_enabled(False)
@@ -1921,18 +1949,47 @@ class PreviewWindow(QMainWindow):
         self._rebuild()
 
     def _on_threshold(self, v: float) -> None:
-        """Restyle, do not re-analyse."""
+        """Reclassify, do not re-search.
+
+        The contacts were found once, down to the listing threshold; moving
+        the bond threshold re-sums them (``coordination.reclassify``, through
+        the project's result cache) and every consumer reads the numbers at
+        the threshold now in force: the drawn bonds, the atom labels, the site
+        list, the analysis panel, the tables, both bottom plots. Before this,
+        only the analysis panel followed the cursor and the labels on the
+        atoms kept the sum from the first analysis.
+        """
         self.project.set_bond_threshold(float(v))
         self.view.set_threshold(self.project.v_bond)
+        entry = self.project.current
+        active = self._crystal()
+        results = self.project.results_for(entry) if entry else None
+        # labels on the atoms (CN, bond-valence sum, phi) read the results
+        self.view.set_label_context(
+            active.structure if active else None,
+            results if active else None)
+        self._fill_site_list()
+        current = self._current_result()
+        self.explorer.set_result(current)
+        self.explorer.set_threshold(self.project.v_bond)
+        self.shells.set_result(current)
+        self.shells.set_threshold(self.project.v_bond)
         self._update_analysis()
         if self._compare_ws is not None:
             self._compare_ws.set_v_bond(self.project.v_bond)
-        entry = self.project.current
         self.utilities.update_for(
             entry.structure if entry else None,
-            self.project.results_for(entry) if entry else None,
-            self._current_result(), self.project.v_bond,
+            results,
+            current, self.project.v_bond,
             params=self.project.params, v_list=self.project.v_list)
+        # atom colours that encode a per-site number follow too, once the
+        # drag settles
+        mode = getattr(self.theme, "color_mode", None)
+        per_site = (theme_mod.ColorMode.BVS, theme_mod.ColorMode.COORDINATION,
+                    theme_mod.ColorMode.PHI,
+                    theme_mod.ColorMode.VALENCE_DISCREPANCY)
+        if mode in per_site:
+            self._recolour_timer.start()
 
     def _theme_the_panels(self, theme) -> None:
         """Give the theme to everything in this window that draws with it.
@@ -1947,6 +2004,7 @@ class PreviewWindow(QMainWindow):
         """
         self.theme = theme
         self.explorer.set_theme(theme)
+        self.shells.set_theme(theme)
         self.diffraction.apply_theme(theme)
         self.volume_panel.apply_theme(theme)
         self.pdf_panel.apply_theme(theme)
@@ -2084,6 +2142,7 @@ class PreviewWindow(QMainWindow):
         if "v_bond" in snapshot:
             self.project.set_bond_threshold(float(snapshot["v_bond"]))
             self.explorer.set_threshold(self.project.v_bond)
+            self.shells.set_threshold(self.project.v_bond)
 
         self.overrides_panel.set_context(
             entry.structure if entry else None,

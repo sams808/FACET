@@ -68,8 +68,15 @@ class TestProject:
         entry = two_structures.entries[0]
         first = two_structures.results_for(entry)
         two_structures.set_bond_threshold(0.2)
-        assert two_structures.results_for(entry) is first
+        moved = two_structures.results_for(entry)
+        # reclassified, not re-searched: the same contacts and plateaus, read
+        # at the new threshold
+        assert moved is not first
+        for a, b in zip(first, moved):
+            assert b.contacts is a.contacts and b.plateaus is a.plateaus
+            assert b.v_bond == 0.2 and b.cn_valence == a.cn_at(0.2)
         two_structures.set_bond_threshold(bv.V_BOND_DEFAULT)
+        assert two_structures.results_for(entry)[0] is first[0]
 
     def test_moving_the_tabulation_threshold_does_re_analyse(self, two_structures):
         entry = two_structures.entries[0]

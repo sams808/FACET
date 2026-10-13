@@ -55,6 +55,15 @@ class Entry:
     _network: tuple | None = field(default=None, repr=False)
     _network_key: tuple | None = field(default=None, repr=False)
     _results_key: tuple | None = field(default=None, repr=False)
+    # The analysis reclassified at the threshold last asked for, and that
+    # threshold. A second, cheap layer over `_results`: moving the cut re-sums
+    # the cached contacts, it never searches for them again.
+    _at_results: list | None = field(default=None, repr=False)
+    _at_v_bond: float | None = field(default=None, repr=False)
+    # The threshold this structure was first analysed with -- the one in force
+    # when the file was opened. Kept so the explorer can mark where the
+    # numbers first shown for this file came from once the cut has moved.
+    first_v_bond: float | None = field(default=None, repr=False)
     _configuration: Structure | None = field(default=None, repr=False)
     _configuration_key: tuple | None = field(default=None, repr=False)
 
@@ -123,7 +132,17 @@ class Entry:
                 self.structure, params, v_bond=v_bond, v_list=v_list,
                 cations_only=not anions)
             self._results_key = key
-        return self._results
+            self._at_results, self._at_v_bond = None, None
+            if self.first_v_bond is None:
+                self.first_v_bond = float(v_bond)
+        # The threshold classifies what was found: every consumer -- labels,
+        # the site list, the tables, the report -- reads the numbers at the
+        # threshold in force, not at the one the search happened to run under.
+        if self._at_results is None or self._at_v_bond != float(v_bond):
+            self._at_results = [coordination.reclassify(r, v_bond)
+                                for r in self._results]
+            self._at_v_bond = float(v_bond)
+        return self._at_results
 
     def network(self, params: bv.ParameterSet, v_bond: float,
                 v_list: float):
@@ -157,6 +176,8 @@ class Entry:
     def invalidate(self) -> None:
         self._results = None
         self._results_key = None
+        self._at_results = None
+        self._at_v_bond = None
         self._network = None
         self._network_key = None
         self._configuration = None

@@ -107,6 +107,8 @@ says what is missing; what remains planned is listed as such.
 | **Bond search by partial bond valence** | – | – | **done** |
 | **CN as a function of threshold (the staircase)** | – | – | **done** |
 | **Plateau analysis — is this CN a result or a choice?** | – | – | **done** |
+| **The threshold drives every consumer** | – | – | **done** | moving the cut re-sums the cached contacts (`coordination.reclassify`): labels, site list, tables, report and both bottom plots read the numbers at the threshold in force; a pin marks the threshold the file was opened at |
+| **Shell plot: CN and the running bond-valence sum, shell by shell** | – | – | **done** | the selected site's contacts against distance or valence; what each neighbour adds, what the next one outside the cut would add |
 | **Sub-threshold contacts drawn, not hidden** | – | – | **done** |
 | **Bond thickness proportional to bond valence** | – | – | **done** |
 | Several CN definitions side by side | – | – | **done** | ten native rules plus eight pymatgen strategies, with the spread |

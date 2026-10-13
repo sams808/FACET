@@ -478,9 +478,26 @@ beside them -- a spin box reading "r to 20.0 &Aring;" is the r limit. Hovering
 any of them explains what it does, and the settings that are set once and left
 sit behind a disclosure arrow.</p>
 <h2>Bottom</h2>
-<p>The <b>cutoff explorer</b>. Each site is a staircase: coordination number
-against threshold, with the flat treads being the plateaux. Drag the vertical
-line to move the bond threshold; everything above follows it.</p>
+<p>The <b>cutoff explorer</b>, on the left. Each site is a staircase:
+coordination number against threshold, with the flat treads being the
+plateaux. Drag the vertical line to move the bond threshold; everything above
+follows it &mdash; the drawn bonds, the labels on the atoms, the site list, the
+Site tab, the tables under Tools and the report. The contacts were found once,
+down to the tabulation threshold; moving the cut only decides which of them
+count as bonds, so a drag re-sums them and searches for nothing.</p>
+<p>A round-headed <b>pin</b> marks the threshold the file was opened at, so
+after a drag the numbers first shown for it can be found again. The pin is
+where the structure was first analysed, not a recommendation.</p>
+<p>The <b>shell plot</b>, on the right, shows the same contacts of the selected
+site one shell at a time: the coordination number counted so far on the left
+axis, as a staircase, and the running bond-valence sum over those same
+contacts on the right axis, with the size of the site's charge drawn across
+it for scale. Read it to see what each successive neighbour adds to the sum,
+and where the next contact outside the cut would take it; the line under the
+plot states that. The corner button switches the horizontal axis between
+distance and bond valence; the two orders differ when a site has more than one
+kind of anion. The threshold line and the pin are the same ones as in the
+explorer, and dragging either plot moves both.</p>
 <p {note}>Both splitters can be dragged, and the docks can be undocked or
 closed. The window remembers nothing between runs, so a layout you liked has to
 be set up again — that is a limitation, not a preference.</p>
