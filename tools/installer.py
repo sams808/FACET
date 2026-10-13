@@ -262,18 +262,76 @@ l.Save
             except OSError:
                 pass
 
+    @staticmethod
+    def _shortcut_target(link: Path) -> Path | None:
+        """Where an existing .lnk points, read through the scripting host.
+
+        None when there is no link or it cannot be read. cscript rather than
+        wscript, because only the console host echoes to standard output.
+        """
+        if not link.exists():
+            return None
+        import subprocess
+        import tempfile
+
+        script = f'''Set s = CreateObject("WScript.Shell")
+WScript.Echo s.CreateShortcut("{link}").TargetPath
+'''
+        with tempfile.NamedTemporaryFile("w", suffix=".vbs", delete=False,
+                                         encoding="utf-8") as handle:
+            handle.write(script)
+            path = handle.name
+        try:
+            result = subprocess.run(
+                ["cscript.exe", "//nologo", path], check=False, timeout=30,
+                capture_output=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError):
+            return None
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        text = result.stdout.decode(errors="replace").strip()
+        return Path(text) if text else None
+
+    def _owns_shortcut(self, link: Path, exe: Path) -> bool:
+        """Whether ``link`` is a shortcut to this installation's executable."""
+        target = self._shortcut_target(link)
+        return (target is not None
+                and os.path.normcase(str(target)) == os.path.normcase(str(exe)))
+
     def _write_uninstaller(self, exe: Path) -> None:
+        """The uninstaller removes the registry entry, the folder, and only
+        those shortcuts that belong to this installation.
+
+        It used to delete ``Desktop\\FACET.lnk`` unconditionally. A shortcut of
+        that name that points somewhere else -- a developer's link to a
+        checkout, say -- is not this installer's to remove. A shortcut from an
+        earlier install of the same copy is, whether or not the box was ticked
+        this time, because it would otherwise be left pointing at nothing.
+        """
         script = self.target / "uninstall.bat"
         start_menu = self._start_menu_dir() / f"{APP_NAME}.lnk"
         desktop = Path.home() / "Desktop" / f"{APP_NAME}.lnk"
+        removals = []
+        for link, made in ((start_menu, self.start_menu),
+                           (desktop, self.desktop)):
+            if made or self._owns_shortcut(link, exe):
+                removals.append(f'del "{link}" >nul 2>&1\n')
+        # The last line removes the folder the script itself lives in. cmd
+        # reads a batch file line by line as it runs, so once that folder is
+        # gone the next read fails and prints "The system cannot find the path
+        # specified" at the end of an otherwise successful uninstall. The
+        # ``(goto) 2>nul`` idiom makes cmd leave the batch context before the
+        # rest of the line runs, so nothing is read after the removal.
         script.write_text(f"""@echo off
 echo Removing {APP_NAME}...
 reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP_NAME}" /f >nul 2>&1
-del "{start_menu}" >nul 2>&1
-del "{desktop}" >nul 2>&1
-cd /d "%TEMP%"
-rmdir /s /q "{self.target}"
+{"".join(removals)}cd /d "%TEMP%"
 echo Done.
+(goto) 2>nul & rmdir /s /q "{self.target}"
 """, encoding="utf-8")
 
     def _register(self) -> None:

@@ -1,11 +1,12 @@
 """The installer must replace the copy already on the machine.
 
 A collaborator who runs a new installer expects to end up with one FACET, not
-two. Three things have to hold for that: the version written to the registry
+two. Four things have to hold for that: the version written to the registry
 has to be the version actually being installed, the installer has to default to
 wherever the previous copy lives rather than to its own idea of where FACET
-belongs, and it has to refuse rather than half-succeed when the application it
-is replacing is running.
+belongs, it has to refuse rather than half-succeed when the application it is
+replacing is running, and the uninstaller it leaves behind must remove only
+what the installation put there.
 
 The registry test creates the real HKCU key, because that is the one the
 installer reads, and skips itself entirely if a genuine installation is already
@@ -161,3 +162,60 @@ def test_a_locked_exe_is_reported_as_running(tmp_path):
 
     # and once the handle is gone it is installable again
     assert installer.running_exe(tmp_path) is None
+
+
+# -- the uninstaller removes only what belongs to the installation ----------
+
+def _worker(target: Path, desktop: bool, start_menu: bool):
+    return installer.InstallWorker(target, desktop=desktop,
+                                   start_menu=start_menu, associate=False)
+
+
+def _fake_app(tmp_path: Path) -> Path:
+    exe = tmp_path / "FACET" / "FACET.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"app")
+    return exe
+
+
+def test_a_missing_shortcut_has_no_target(tmp_path):
+    assert installer.InstallWorker._shortcut_target(tmp_path / "none.lnk") is None
+
+
+def test_a_shortcut_written_here_is_read_back(tmp_path):
+    exe = _fake_app(tmp_path)
+    worker = _worker(exe.parent, desktop=False, start_menu=False)
+    link = tmp_path / "FACET.lnk"
+    worker._shortcut(link, exe)
+    assert link.exists()
+    assert installer.InstallWorker._shortcut_target(link) == exe
+    assert worker._owns_shortcut(link, exe)
+    assert not worker._owns_shortcut(link, tmp_path / "elsewhere" / "FACET.exe")
+
+
+def test_the_uninstaller_leaves_shortcuts_it_did_not_make(tmp_path):
+    """A FACET.lnk on the desktop that points at a checkout is not the
+    installer's to delete."""
+    exe = _fake_app(tmp_path)
+    desktop_link = Path.home() / "Desktop" / "FACET.lnk"
+    worker = _worker(exe.parent, desktop=False, start_menu=False)
+    worker._write_uninstaller(exe)
+    text = (exe.parent / "uninstall.bat").read_text(encoding="utf-8")
+    assert "reg delete" in text
+    assert f'rmdir /s /q "{exe.parent}"' in text
+    assert "Start Menu" not in text
+    if not worker._owns_shortcut(desktop_link, exe):
+        assert str(desktop_link) not in text
+
+
+def test_the_uninstaller_removes_the_shortcuts_it_made(tmp_path):
+    exe = _fake_app(tmp_path)
+    worker = _worker(exe.parent, desktop=True, start_menu=True)
+    worker._write_uninstaller(exe)
+    text = (exe.parent / "uninstall.bat").read_text(encoding="utf-8")
+    desktop_link = Path.home() / "Desktop" / "FACET.lnk"
+    start_link = installer.InstallWorker._start_menu_dir() / "FACET.lnk"
+    assert f'del "{desktop_link}"' in text
+    assert f'del "{start_link}"' in text
+    # the order never changes: shortcuts go before the folder they point into
+    assert text.index("del ") < text.index("rmdir")

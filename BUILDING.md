@@ -17,9 +17,9 @@ Binaries belong in a GitHub **Release**, which allows 2 GB per file.
 
 | | Size | For |
 |---|---|---|
-| `dist/FACET/` | 264 MB | local use. Run `FACET.exe` from inside it. |
-| `dist/FACET-Setup-<version>.exe` | 154 MB | what a collaborator receives. |
-| `dist/FACET-<version>.zip` | 107 MB | for anyone who would rather not run an installer. |
+| `dist/FACET/` | 254 MB | local use. Run `FACET.exe` from inside it. |
+| `dist/FACET-Setup-<version>.exe` | 156 MB | what a collaborator receives. |
+| `dist/FACET-<version>.zip` | 109 MB | for anyone who would rather not run an installer. |
 
 ## What the installer does
 
@@ -33,7 +33,34 @@ machines.
 * registers an uninstaller in Add/Remove Programs
 * offers to start FACET when it finishes
 
-Uninstalling removes the folder, the shortcuts and the registry entry.
+Uninstalling removes the folder, the registry entry, and the shortcuts the
+installation made or that point at its executable. A `FACET.lnk` that points
+somewhere else, such as a developer's link to a checkout, is left alone.
+
+### Checked on 2026-10-13
+
+The installer was driven through its own window, as a recipient uses it, on a
+machine where FACET 0.3.1 had been installed by that version's installer (which
+registered itself as 0.1.0, the constant its file carried at the time):
+
+* **Upgrade.** The 0.5.1 installer opened as *Upgrade FACET*, named the copy it
+  would replace, and installed into the same folder. Afterwards every one of
+  the payload's 416 files was present with the CRC recorded in the archive,
+  nothing else was in the folder but `uninstall.bat`, and the registry entry
+  read 0.5.1.
+* **Refusal.** Run again while the installed FACET was open, it stopped before
+  touching anything -- *FACET is running from … Close it and run this installer
+  again* -- and the folder was unchanged afterwards.
+* **Uninstall.** `uninstall.bat` removed the folder and the registry entry,
+  left alone a desktop `FACET.lnk` that pointed at a checkout, and ended on
+  *Done.* with no error line.
+* **Fresh install.** With no entry registered, the same installer opened as
+  *Install FACET*, proposed `%LOCALAPPDATA%\Programs\FACET`, and the installed
+  folder matched the payload the same way.
+
+Not covered: a second user account on the same machine, a machine without
+the Visual C++ runtime, and the SmartScreen prompt, which a locally built
+file never triggers.
 
 ## The SmartScreen warning
 
