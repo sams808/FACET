@@ -47,7 +47,7 @@ from .md_names import (
 from .md_plot import style_for
 
 __all__ = ["OverviewPage", "Headline", "analysis_headlines", "run_header",
-           "FractionBar"]
+           "FractionBar", "Measure", "analysis_measures"]
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +364,332 @@ def analysis_headlines(analysis: str, output) -> list[Headline]:
         lines = [Headline(f"{len(output.tables)} descriptors; the tree "
                           "lists every one")]
     return lines
+
+
+# ---------------------------------------------------------------------------
+# the same headline measurements, keyed, for aligning several runs
+# ---------------------------------------------------------------------------
+
+_NAN = float("nan")
+
+
+@dataclass
+class Measure:
+    """One headline measurement with a stable key, so that several runs can
+    be aligned row by row (the Compare workspace's side-by-side overview).
+
+    ``key`` is the same text in every run that measured the same thing
+    ('CN Si (BV)'); ``label`` is the row's readable name and ``unit`` its
+    unit ('1' when dimensionless, 'fraction' for a bar row). ``value`` and
+    ``std`` are NaN for a measurement that is text only (a modal category)
+    and for a bar row; ``text`` is the cell as the Overview card would word
+    it; ``bar`` holds (label, fraction) pairs for a distribution row;
+    ``percent`` says the value is a fraction a cell shows as %.
+    """
+
+    key: str
+    label: str
+    unit: str = "1"
+    value: float = _NAN
+    std: float = _NAN
+    text: str = ""
+    bar: tuple[tuple[str, float], ...] = field(default_factory=tuple)
+    percent: bool = False
+
+
+def _number(key: str, label: str, scalar: Scalar, digits: int = 3,
+            *, percent: bool = False) -> Measure:
+    text = _pct(scalar.mean) if percent else _pm(scalar, digits)
+    return Measure(key, label, scalar.unit or "1", float(scalar.mean),
+                   float(scalar.std), text, percent=percent)
+
+
+def _glass_measures(tables) -> list[Measure]:
+    out: list[Measure] = []
+    composition = tables.get("composition")
+    for row in getattr(composition, "rows", ()) or ():
+        element, share = row.get("element"), row.get("atomic %")
+        if element is None or share is None:
+            continue
+        atoms = row.get("atoms")
+        out.append(Measure(
+            f"composition {element}", f"Composition: {element}", "atomic %",
+            float(share), _NAN,
+            f"{float(share):.3g} atomic %"
+            + (f" ({int(atoms)} atoms)" if atoms is not None else "")))
+    elements = []
+    for name in tables:
+        match = re.fullmatch(r"mean CN ([A-Z][a-z]?) \((BV|distance)\)", name)
+        if match and match[1] not in elements:
+            elements.append(match[1])
+    for element in elements:
+        for cut, words in (("BV", "bond-valence cut"),
+                           ("distance", "distance cut")):
+            scalar = _scalar(tables, f"mean CN {element} ({cut})")
+            if scalar is not None:
+                out.append(_number(f"CN {element} ({cut})",
+                                   f"Coordination of {element} — {words}",
+                                   scalar))
+    for name, container in tables.items():
+        match = re.fullmatch(r"Qn ([A-Z][a-z]?) \(BV\)", name)
+        if match and isinstance(container, Distribution):
+            bars = _fractions(container, lambda k: f"Q{k}")
+            if bars:
+                out.append(Measure(
+                    f"Qn {match[1]}", f"Qⁿ of {match[1]} — bond-valence cut",
+                    "fraction", text=" · ".join(f"{k} {_pct(f)}"
+                                                for k, f in bars),
+                    bar=tuple(bars)))
+    for name, container in tables.items():
+        match = re.fullmatch(r"([A-Z][a-z]?) speciation \(BV\)", name)
+        if match and isinstance(container, Distribution):
+            bars = _fractions(container, str)
+            if bars:
+                out.append(Measure(
+                    f"speciation {match[1]}",
+                    f"{match[1]} speciation — bond-valence cut", "fraction",
+                    text=" · ".join(f"{k} {_pct(f)}" for k, f in bars),
+                    bar=tuple(bars)))
+    density = _scalar(tables, "density")
+    if density is not None:
+        out.append(_number("density", "Mass density", density, 4))
+    return out
+
+
+def _rings_measures(tables) -> list[Measure]:
+    out: list[Measure] = []
+    modal_by: dict[str, object] = {}
+    for name, container in tables.items():
+        match = re.fullmatch(r"ring sizes \(nodes\), (\w+)", name)
+        if match and isinstance(container, Distribution) \
+                and np.isfinite(container.mean).any():
+            k = int(np.nanargmax(container.mean))
+            modal = container.keys[k]
+            modal_by[match[1]] = modal
+            value = float(modal) if isinstance(modal, (int, float,
+                                                       np.integer,
+                                                       np.floating)) \
+                else _NAN
+            out.append(Measure(
+                f"modal ring size {match[1]}",
+                f"Most common ring size — {criterion_text(match[1])}",
+                "nodes", value, _NAN,
+                f"{modal} nodes ({_pct(container.mean[k])} of the rings)"))
+    for name, container in tables.items():
+        match = re.fullmatch(r"R_C\(n\), (\w+) rings", name)
+        if match and isinstance(container, Series):
+            modal = modal_by.get(match[1])
+            if modal is not None and modal in container.axis:
+                at = float(container.mean[list(container.axis).index(modal)])
+                out.append(Measure(
+                    f"R_C modal {match[1]}",
+                    "Rings per node at the most common size — "
+                    f"{criterion_text(match[1])}", "1", at, _NAN,
+                    f"R_C({modal}) = {_g(at)}"))
+    return out
+
+
+def _components_measures(tables) -> list[Measure]:
+    out: list[Measure] = []
+    pieces = _scalar(tables, "number of components")
+    if pieces is not None:
+        out.append(_number("components", "Connected pieces of the former "
+                           "network (frame mean)", pieces))
+    largest = _scalar(tables, "largest piece, fraction of nodes")
+    if largest is not None:
+        out.append(_number("largest piece", "Largest piece, fraction of "
+                           "the nodes", largest, percent=True))
+    dim = tables.get("nodes by component dimensionality")
+    if isinstance(dim, Distribution) and np.isfinite(dim.mean).any():
+        k = int(np.nanargmax(dim.mean))
+        out.append(Measure(
+            "modal dimensionality", "Most populated piece dimensionality",
+            "1", float(dim.keys[k]) if isinstance(
+                dim.keys[k], (int, float, np.integer, np.floating))
+            else _NAN, _NAN,
+            f"{dim.keys[k]} ({_pct(dim.mean[k])} of the nodes)"))
+    return out
+
+
+def _channels_measures(tables) -> list[Measure]:
+    out: list[Measure] = []
+    for name, container in tables.items():
+        match = re.fullmatch(r"percolation threshold of (\S+), any axis",
+                             name)
+        if match and isinstance(container, Scalar) \
+                and math.isfinite(container.mean):
+            ion = ion_text(match[1])
+            out.append(_number(f"percolation {match[1]} any",
+                               f"Percolation threshold of {ion}, any axis",
+                               container))
+            for axis in ("a", "b", "c"):
+                s = _scalar(tables,
+                            f"percolation threshold of {match[1]} along "
+                            f"{axis}")
+                if s is not None:
+                    out.append(_number(
+                        f"percolation {match[1]} {axis}",
+                        f"Percolation threshold of {ion} along {axis}", s))
+    for name, container in tables.items():
+        match = re.fullmatch(
+            r"accessible volume fraction of (\S+) at Delta (.+)", name)
+        if match and isinstance(container, Scalar) \
+                and math.isfinite(container.mean):
+            out.append(_number(
+                f"open volume {match[1]} {match[2]}",
+                f"Volume open to {ion_text(match[1])} at Δ = {match[2]}",
+                container, percent=True))
+    for name, container in tables.items():
+        if name.startswith("lowest mismatch") and isinstance(container,
+                                                             Scalar) \
+                and math.isfinite(container.mean):
+            out.append(_number("lowest mismatch", "Lowest mismatch on the "
+                               "grid", container))
+            break
+    return out
+
+
+def _modifier_measures(tables) -> list[Measure]:
+    out: list[Measure] = []
+    for name, container in tables.items():
+        match = re.fullmatch(r"modifier-rich anion fraction \(k_rich (\d+)\)",
+                             name)
+        if match and isinstance(container, Scalar) \
+                and math.isfinite(container.mean):
+            out.append(_number(
+                f"modifier-rich {match[1]}",
+                f"Modifier-rich anions (≥ {match[1]} modifiers), fraction",
+                container, percent=True))
+    clustered = _scalar(tables, "fraction of modifier atoms in a cluster")
+    if clustered is not None:
+        out.append(_number("clustered modifiers", "Modifier atoms sitting "
+                           "in a cluster, fraction", clustered,
+                           percent=True))
+        spans = [axis for axis in ("a", "b", "c")
+                 if (s := _scalar(tables, f"modifier clusters span {axis} "
+                                          "(1 yes, 0 no)")) is not None
+                 and s.mean >= 1]
+        out.append(Measure("cluster spans", "Axes the modifier clusters "
+                           "span", "axes", text=", ".join(spans) or "none"))
+    return out
+
+
+def _voids_measures(tables) -> list[Measure]:
+    out: list[Measure] = []
+    fraction = _scalar(tables, "void fraction (union of the void spheres)")
+    if fraction is not None:
+        out.append(_number("void fraction", "Void volume, fraction of the "
+                           "box", fraction, percent=True))
+    regions = _scalar(tables, "number of void regions")
+    if regions is not None:
+        out.append(_number("void regions", "Void regions (frame mean)",
+                           regions))
+    largest = _scalar(tables, "largest void region, union volume")
+    if largest is not None:
+        out.append(_number("largest void", "Largest void region, union "
+                           "volume", largest))
+    spanning = _scalar(tables, "void regions spanning an axis")
+    if spanning is not None:
+        out.append(_number("spanning voids", "Void regions spanning an "
+                           "axis", spanning))
+    return out
+
+
+def _msd_measures(tables) -> list[Measure]:
+    out: list[Measure] = []
+    for name, container in tables.items():
+        match = re.fullmatch(r"D ([A-Z][a-z]?)", name)
+        if match and isinstance(container, Scalar) \
+                and math.isfinite(container.mean):
+            out.append(_number(f"D {match[1]}", f"Diffusion coefficient D of "
+                               f"{match[1]} (MSD fit window)", container))
+    if out:
+        return out
+    for name, container in tables.items():
+        match = re.fullmatch(r"MSD ([A-Z][a-z]?)", name)
+        if match and isinstance(container, Series) and container.axis.size:
+            value = float(container.mean[-1])
+            out.append(Measure(
+                f"MSD last {match[1]}",
+                f"MSD of {match[1]} at the last lag", container.value_unit
+                or "1", value, _NAN,
+                f"{_g(value)} {container.value_unit} at "
+                f"{_g(container.axis[-1])} {container.axis_unit} (no fit "
+                "window: no D)"))
+    return out
+
+
+def _scattering_measures(tables) -> list[Measure]:
+    out: list[Measure] = []
+    for name, container in tables.items():
+        match = re.fullmatch(r"FSDP position (.+)", name)
+        if match and isinstance(container, Scalar) \
+                and math.isfinite(container.mean):
+            out.append(_number(f"FSDP position {match[1]}",
+                               f"First sharp diffraction peak, Q — "
+                               f"{match[1]}", container))
+            width = _scalar(tables, f"FSDP FWHM {match[1]}")
+            if width is not None:
+                out.append(_number(f"FSDP FWHM {match[1]}",
+                                   f"First sharp diffraction peak, FWHM — "
+                                   f"{match[1]}", width))
+    density = _scalar(tables, "number density")
+    if density is not None:
+        out.append(_number("number density", "Number density", density))
+    return out
+
+
+def _comparison_measures(tables) -> list[Measure]:
+    out: list[Measure] = []
+    for name, container in tables.items():
+        if not name.endswith("(R_chi)"):
+            continue
+        for row in getattr(container, "rows", ()):
+            r = row.get("R_chi")
+            if r is None:
+                continue
+            quantity = row.get("quantity", name)
+            out.append(Measure(f"R_chi {quantity}", f"R_χ of {quantity}",
+                               "1", float(r), _NAN, _g(r)))
+    return out
+
+
+_MEASURES = {
+    "glass": _glass_measures,
+    "rings": _rings_measures,
+    "components": _components_measures,
+    "channels": _channels_measures,
+    "modifier-density": _modifier_measures,
+    "void-regions": _voids_measures,
+    "msd": _msd_measures,
+    "scattering": _scattering_measures,
+    "scattering-comparison": _comparison_measures,
+}
+
+
+def _generic_measures(tables) -> list[Measure]:
+    out = []
+    for name, container in tables.items():
+        if isinstance(container, Scalar) and math.isfinite(container.mean):
+            out.append(_number(name, display_name(name), container))
+        if len(out) == 3:
+            break
+    return out
+
+
+def analysis_measures(analysis: str, output) -> list[Measure]:
+    """The headline measurements of one analysis as keyed rows (the same
+    numbers :func:`analysis_headlines` words as sentences). An analysis
+    that produced nothing gives one text row with the engine's reason; one
+    whose builder finds nothing gives its first three numbers."""
+    if output.error is not None:
+        return [Measure("not computed", "Not computed", "",
+                        text=str(output.error))]
+    builder = _MEASURES.get(analysis)
+    rows = builder(output.tables) if builder is not None else []
+    if not rows:
+        rows = _generic_measures(output.tables)
+    return rows
 
 
 def run_header(result) -> str:

@@ -533,33 +533,67 @@ actually used.</p>
 
         ("compare", "Comparing structures", f"""
 <h1>Comparing structures</h1>
-<p><i>View &rsaquo; Compare structures&hellip;</i> opens the Compare
-workspace in the right column, and it stays there while the Structures dock
+<p><i>View &rsaquo; Compare structures&hellip;</i> (or adding to the basket)
+puts the Compare workspace in the main window: the comparison itself takes
+the centre, with its own toolbar &mdash; <i>Overview</i>, <i>Figure</i>,
+<i>Table</i>, <i>3D</i>, then <i>Save figure&hellip;</i>, <i>Save
+rows&hellip;</i> and <i>Export comparison&hellip;</i> &mdash; and the right
+column keeps the ticked models, the site basket, the descriptor tree and
+the parameter-difference statement. It stays on while the Structures dock
 switches rows, until <i>Back to the structure</i>.</p>
-<p><b>Site to site.</b> The comparison basket holds references added from a
+<p><b>Models.</b> Tick two or more models with finished runs. Each model
+carries a swatch (colour and marker), and keeps it in every list, header,
+legend and figure of the comparison, so a colour never stands alone.</p>
+<p><b>Overview.</b> The headline measurements of each run &mdash; the
+sentences of the Results overview, as numbers &mdash; aligned row by row:
+composition, coordination of each element on both cuts, Q<sup>n</sup> and
+speciation as fraction bars, density, rings, connectivity, channel
+thresholds, diffusion coefficients. One column per model, then a
+difference column, the model named minus the first ticked model (A):
+B&nbsp;&minus;&nbsp;A with the relative change where A is not zero, in
+points for a percentage. A row one model lacks shows &lsquo;&mdash;&rsquo;
+on that side.</p>
+<p><b>Figure.</b> The descriptor chosen in the tree, at full width, its
+rows under it: curves overlaid, distributions as grouped bars, histograms
+as overlaid steps, a number as one point per model with its spread. The
+<i>Difference</i> check draws each model minus the first instead &mdash; a
+curve point by point on the common axis, a distribution key by key (a key
+absent from a model counts 0 there), a histogram bin by bin &mdash; and
+says, in words, when the axes differ and nothing is drawn. The caption
+states the normalisation the runs used.</p>
+<p><b>Table.</b> Every descriptor of the ticked runs as one table:
+descriptor, unit, one column per model (mean &plusmn; standard deviation
+over the frames of its run), the difference. The tree narrows it to a
+question, an analysis or one descriptor; the filter box narrows it by
+name. <i>Export comparison&hellip;</i> writes the overview and the table
+as CSV or an XLSX workbook, with a provenance header naming every model,
+its file, frames, v<sub>bond</sub> and formers.</p>
+<p><b>3D.</b> The frames the ticked models have on show, laid along x in
+one scene with a gap you set (the Structures dock's spacing when it is
+set), each block the model's own drawing of its frame. A crystal in the
+basket joins the row when the window has it drawn; otherwise it is
+compared as numbers and the note says so. While comparing, the Elements
+dock lists each element with its atoms and mean CN in every model, and a
+click emphasises that element across the row.</p>
+<p><b>Site to site.</b> The basket holds references added from a
 right-click: a row of the Sites list or an atom in the 3D view (a crystal
 site), or a row of a model's Elements dock (that element of that MD model).
-The table lists each reference's CN, bond-valence sum, &phi;, plateau width
-and mean bond length. A crystal row is computed from the site's contact
-list at the project's current bond threshold, so it follows the cutoff
-explorer; a model row is the mean &plusmn; standard deviation over that
-element's atoms on the frame shown, at that model's own v<sub>bond</sub>,
-and names the frame. One figure overlays every row's staircase (CN against
-v<sub>bond</sub> on the log axis) with the current threshold marked; when a
-crystal site and a model element share an element, a second figure bins the
-model's per-atom values (CN, BVS or &phi;) with the crystal site's value as
-a labelled vertical line &mdash; the reference crystal against the glass.
-The basket lives on the window and is not saved in sessions.</p>
-<p><b>Same calculations across models.</b> Tick two or more models with
-finished runs; the descriptors present in at least two of them are listed
-by question. Choosing one shows the models side by side: curves overlaid,
-distributions as grouped bars, scalars as a table with a dot figure. A
-header states, in plain words, where the runs' parameters differ
-(v<sub>bond</sub>, the formers, the frames analysed); it states the
-difference and leaves the reading to the reader.</p>
-<p {note}>Model frames are not drawn in the 3D overlay (&ldquo;Show all at
-once&rdquo; draws the ticked crystals); a model takes part in the
-comparison as numbers.</p>
+A crystal row is computed from the site's contact list at the project's
+current bond threshold, so it follows the cutoff explorer; a model row is
+the mean &plusmn; standard deviation over that element's atoms on the frame
+shown, at that model's own v<sub>bond</sub>, and names the frame. The
+tree's <i>Site to site</i> rows draw, on the Figure page, every basket
+row's staircase (CN against v<sub>bond</sub> on the log axis) with the
+current threshold marked, and &mdash; when a crystal site and a model
+element share an element &mdash; the model's per-atom values (CN, BVS or
+&phi;) binned with the crystal site's value as a labelled vertical line,
+the reference crystal against the glass. The basket's full numbers (CN,
+bond-valence sum, &phi;, plateau width, mean bond length) are the rows
+under the staircase figure. The basket lives on the window and is not
+saved in sessions.</p>
+<p {note}>Where the runs' parameters differ (v<sub>bond</sub>, the
+formers, the frames analysed) the column says so in plain words; it states
+the difference and leaves the reading to the reader.</p>
 """),
 
         ("lonepair", "The bond-valence vector", f"""

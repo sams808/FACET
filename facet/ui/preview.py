@@ -149,9 +149,11 @@ class PreviewWindow(QMainWindow):
         self.show_void_cones = False
         self.vector_scale = 0.6
         self._manual_dialog = None
-        # The Compare workspace: one page on the window (never per entry),
-        # built on first use. Its basket is not saved in sessions.
-        self._compare_page = None
+        # The Compare workspace: one on the window (never per entry), built
+        # on first use; its four widgets take the column, the Sites dock,
+        # the toolbar and the centre while it is on. Its basket is not
+        # saved in sessions.
+        self._compare_ws = None
         self.compare_on = False
 
         self.view = _WorkspaceView()
@@ -752,11 +754,13 @@ class PreviewWindow(QMainWindow):
         compare = QAction("Co&mpare structures…", self)
         compare.setShortcut("M")
         compare.setToolTip(
-            "The Compare workspace: a basket of crystal sites and model "
-            "elements listed side by side, their staircases overlaid, and "
-            "the same calculations of several models together. Add to the "
-            "basket from a right-click on a site, an atom or a model's "
-            "Elements row.")
+            "The Compare workspace, in the centre: ticked models side by "
+            "side (their headline measurements aligned with a difference "
+            "column, any descriptor overlaid or subtracted, every "
+            "descriptor as one table, their frames in one 3D row), and a "
+            "basket of crystal sites and model elements with their "
+            "staircases overlaid. Add to the basket from a right-click on "
+            "a site, an atom or a model's Elements row.")
         compare.triggered.connect(self._show_compare)
         v.addAction(compare)
         self.compare_action = compare
@@ -1302,6 +1306,11 @@ class PreviewWindow(QMainWindow):
             controller.elements.compareRequested.connect(
                 lambda element, e=entry:
                 self._add_model_to_compare(e, element))
+            # the comparison follows a model's frame and its runs
+            controller.frameShown.connect(
+                lambda _k, e=entry: self._compare_frame_changed(e))
+            controller.finished.connect(
+                lambda _outcome: self._compare_results_changed())
             for widget, stack in zip(controller.widgets, self._stacks()):
                 stack.addWidget(widget)
             opened.append(controller)
@@ -1406,52 +1415,71 @@ class PreviewWindow(QMainWindow):
 
     # -- the Compare workspace ----------------------------------------------
     def _compare(self):
-        """The window's one ComparePage, built on first use (it pulls the
-        MD plotting stack in, which the crystal side never needs)."""
-        if self._compare_page is None:
-            from .md_compare import ComparePage
+        """The window's one CompareWorkspace, built on first use (it pulls
+        the MD plotting stack in, which the crystal side never needs). Its
+        four widgets go into the column, Sites, toolbar and centre
+        stacks, the way a model's do."""
+        if self._compare_ws is None:
+            from .md_compare import CompareWorkspace
 
-            page = ComparePage(self.project, theme=self.theme)
-            page.closeRequested.connect(self._leave_compare)
-            page.overlayToggled.connect(self._compare_overlay)
-            page.statusMessage.connect(
+            ws = CompareWorkspace(self.project, window=self,
+                                  theme=self.theme)
+            ws.closeRequested.connect(self._leave_compare)
+            ws.statusMessage.connect(
                 lambda text: self.statusBar().showMessage(text, 9000))
-            self.column_stack.addWidget(page)
-            self._compare_page = page
-        return self._compare_page
+            for widget, stack in zip(ws.widgets, self._stacks()):
+                stack.addWidget(widget)
+            self._compare_ws = ws
+        return self._compare_ws
 
     def _show_compare(self) -> None:
-        """Open or raise the Compare workspace in the right column. It
-        stays open across a change of the selected row until Back."""
-        page = self._compare()
-        page.set_model_candidates(self.project.models)
-        page.set_overlay_state(self.project.overlay)
-        page.set_v_bond(self.project.v_bond)
+        """Open or raise the Compare workspace: its column, Elements page,
+        toolbar and centre canvas. It stays on across a change of the
+        selected row until Back."""
+        ws = self._compare()
+        ws.set_model_candidates(self.project.models)
+        ws.set_v_bond(self.project.v_bond)
         self.compare_on = True
-        self.column_stack.setCurrentWidget(page)
+        self._place_compare()
+
+    def _place_compare(self) -> None:
+        ws = self._compare_ws
+        for widget, stack in zip(ws.widgets, self._stacks()):
+            if stack.indexOf(widget) < 0:
+                stack.addWidget(widget)
+            stack.setCurrentWidget(widget)
+        self.sites_dock.setWindowTitle("Elements, compared")
+        sizes = self.split.sizes()
+        if len(sizes) == 2 and sum(sizes) > 0 and sizes[1] < self.MODEL_COLUMN:
+            total = sum(sizes)
+            self.split.setSizes([max(total - self.MODEL_COLUMN, 320),
+                                 self.MODEL_COLUMN])
 
     def _keep_compare_shown(self) -> None:
-        """Called after a row switch set the column stack: the comparison,
-        when open, keeps the right column whatever row is selected."""
-        if self.compare_on and self._compare_page is not None:
-            self._compare_page.set_model_candidates(self.project.models)
-            self.column_stack.setCurrentWidget(self._compare_page)
+        """Called after a row switch set the stacks: the comparison, when
+        on, keeps its column and centre whatever row is selected."""
+        if self.compare_on and self._compare_ws is not None:
+            self._compare_ws.set_model_candidates(self.project.models)
+            self._place_compare()
 
     def _leave_compare(self) -> None:
-        """Back to the selected entry's own column; the basket is kept."""
+        """Back to the selected entry's own column and centre; the basket
+        and the ticks are kept."""
         self.compare_on = False
         entry = self.project.current
-        controller = self._model()
         if entry is not None and entry.kind == "model" \
-                and controller is not None:
-            self.column_stack.setCurrentWidget(controller.column)
+                and entry.controller is not None:
+            self._show_model(entry)
         else:
-            self.column_stack.setCurrentIndex(0)
+            self._show_crystal()
 
-    def _compare_overlay(self, on: bool) -> None:
-        """The page's side-by-side check drives the Structures dock's own
-        overlay control, so the two can never disagree."""
-        self.structure_panel.overlay.setChecked(bool(on))
+    def _compare_frame_changed(self, entry) -> None:
+        if self._compare_ws is not None:
+            self._compare_ws.frame_changed(entry)
+
+    def _compare_results_changed(self) -> None:
+        if self._compare_ws is not None:
+            self._compare_ws.set_model_candidates(self.project.models)
 
     def _add_site_to_compare(self, site_index: int) -> None:
         entry = self._crystal()
@@ -1848,16 +1876,14 @@ class PreviewWindow(QMainWindow):
     def _on_overlay(self, on: bool, spacing: float) -> None:
         self.project.set_overlay(on, spacing)
         self.structure_panel.refresh()
-        if self._compare_page is not None:
-            self._compare_page.set_overlay_state(self.project.overlay)
         self._rebuild(reframe=True)
 
     def _on_remove(self, row: int) -> None:
         if row < 0 or row >= len(self.project):
             return
         entry = self.project.entries[row]
-        if self._compare_page is not None:
-            self._compare_page.drop_entry(entry)
+        if self._compare_ws is not None:
+            self._compare_ws.drop_entry(entry)
         if entry.kind == "model":
             self._close_model(entry)
         self.project.remove(row)
@@ -1899,8 +1925,8 @@ class PreviewWindow(QMainWindow):
         self.project.set_bond_threshold(float(v))
         self.view.set_threshold(self.project.v_bond)
         self._update_analysis()
-        if self._compare_page is not None:
-            self._compare_page.set_v_bond(self.project.v_bond)
+        if self._compare_ws is not None:
+            self._compare_ws.set_v_bond(self.project.v_bond)
         entry = self.project.current
         self.utilities.update_for(
             entry.structure if entry else None,
@@ -1945,8 +1971,8 @@ class PreviewWindow(QMainWindow):
                     self.atom_label_box, self.bond_label_box):
             box.setMinimumWidth(0)
             self._fit_combo(box)
-        if self._compare_page is not None:
-            self._compare_page.apply_theme(theme)
+        if self._compare_ws is not None:
+            self._compare_ws.apply_theme(theme)
         self._sync_theme_menu(theme)
         self._update_analysis()
 
