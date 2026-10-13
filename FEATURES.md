@@ -211,6 +211,7 @@ that already exist. Revisit only if it is actually wanted.
 | Session save and restore | ✓ | ✓ | **done** | paths, thresholds, theme, camera, labels |
 | Animation, movies | ✓ | – | out of scope |
 | Scripting / batch | – | – | **planned** | the Library workspace |
+| Compare structures | – | – | **done** | a basket of crystal sites and model elements: values side by side, the CN-against-threshold staircases on one plot, a crystal site's value over the glass's per-atom distribution; and the shared descriptors of two or more MD runs overlaid, with the runs' parameter differences stated |
 
 ---
 

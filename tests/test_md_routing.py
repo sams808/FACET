@@ -110,6 +110,12 @@ class _Recorder:
 
         recorder = self
 
+        class _Elements(QObject):
+            # the window connects to the Elements dock's compare request at
+            # open time, so the stub has to offer the signal the real
+            # ElementsPanel carries
+            compareRequested = Signal(str)
+
         class ModelController(QObject):
             opened = Signal(object)
             finished = Signal(object)
@@ -131,6 +137,7 @@ class _Recorder:
                 self.themes = []
                 self.shut = False
                 self._widgets = tuple(QWidget() for _ in range(5))
+                self.elements = _Elements(self)
                 recorder.calls.append((entry.path, window, read_options))
                 recorder.controllers.append(self)
 

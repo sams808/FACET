@@ -239,9 +239,12 @@ class ElementsPanel(QWidget):
     """Per element of the frame shown: atoms, oxidation state (a model
     input) and mean CN at the strip's v_bond. ``elementChosen(symbol)`` on
     a click ('' when the chosen element is clicked again, or the selection
-    cleared): the window emphasises that element's atoms in the view."""
+    cleared): the window emphasises that element's atoms in the view.
+    ``compareRequested(symbol)`` from the right-click menu: the window puts
+    that element of this model in the comparison basket."""
 
     elementChosen = Signal(str)
+    compareRequested = Signal(str)
     COLUMNS = ("element", "atoms", "state", "CN")
 
     def __init__(self, parent=None):
@@ -265,6 +268,8 @@ class ElementsPanel(QWidget):
         header.setSectionResizeMode(QHeaderView.Stretch)
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.itemClicked.connect(self._on_click)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._menu)
         column.addWidget(self.table, 1)
         self.note = _hint("No frame is loaded yet.")
         column.addWidget(self.note)
@@ -323,6 +328,32 @@ class ElementsPanel(QWidget):
             self.elementChosen.emit("")
         else:
             self.choose(symbol)
+
+    def _element_menu(self, row: int):
+        """The row's menu, built but not shown (exec() would block a
+        test)."""
+        from PySide6.QtWidgets import QMenu
+
+        if not (0 <= row < self.table.rowCount()):
+            return None
+        symbol = self.table.item(row, 0).text()
+        menu = QMenu(self)
+        add = menu.addAction(f"Add {symbol} to comparison")
+        add.setToolTip(
+            "Put this element of this model in the comparison basket "
+            "(View > Compare structures…), beside crystal sites and the "
+            "elements of other models.")
+        add.triggered.connect(
+            lambda _=False, s=symbol: self.compareRequested.emit(s))
+        return menu
+
+    def _menu(self, position) -> None:
+        item = self.table.itemAt(position)
+        if item is None:
+            return
+        menu = self._element_menu(item.row())
+        if menu is not None:
+            menu.exec(self.table.viewport().mapToGlobal(position))
 
 
 # ---------------------------------------------------------------------------

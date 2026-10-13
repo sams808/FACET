@@ -531,6 +531,37 @@ fitted. The footer states the <i>R</i><sub>0</sub>, <i>b</i> and source
 actually used.</p>
 """),
 
+        ("compare", "Comparing structures", f"""
+<h1>Comparing structures</h1>
+<p><i>View &rsaquo; Compare structures&hellip;</i> opens the Compare
+workspace in the right column, and it stays there while the Structures dock
+switches rows, until <i>Back to the structure</i>.</p>
+<p><b>Site to site.</b> The comparison basket holds references added from a
+right-click: a row of the Sites list or an atom in the 3D view (a crystal
+site), or a row of a model's Elements dock (that element of that MD model).
+The table lists each reference's CN, bond-valence sum, &phi;, plateau width
+and mean bond length. A crystal row is computed from the site's contact
+list at the project's current bond threshold, so it follows the cutoff
+explorer; a model row is the mean &plusmn; standard deviation over that
+element's atoms on the frame shown, at that model's own v<sub>bond</sub>,
+and names the frame. One figure overlays every row's staircase (CN against
+v<sub>bond</sub> on the log axis) with the current threshold marked; when a
+crystal site and a model element share an element, a second figure bins the
+model's per-atom values (CN, BVS or &phi;) with the crystal site's value as
+a labelled vertical line &mdash; the reference crystal against the glass.
+The basket lives on the window and is not saved in sessions.</p>
+<p><b>Same calculations across models.</b> Tick two or more models with
+finished runs; the descriptors present in at least two of them are listed
+by question. Choosing one shows the models side by side: curves overlaid,
+distributions as grouped bars, scalars as a table with a dot figure. A
+header states, in plain words, where the runs' parameters differ
+(v<sub>bond</sub>, the formers, the frames analysed); it states the
+difference and leaves the reading to the reader.</p>
+<p {note}>Model frames are not drawn in the 3D overlay (&ldquo;Show all at
+once&rdquo; draws the ticked crystals); a model takes part in the
+comparison as numbers.</p>
+"""),
+
         ("lonepair", "The bond-valence vector", f"""
 <h1>The bond-valence vector, and the lone pair</h1>
 <p><i>View &rsaquo; Show bond-valence vector</i> draws a

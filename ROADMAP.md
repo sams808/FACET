@@ -62,8 +62,12 @@ bismuth survey that currently needs a script.
 - Deduplication by content hash and structure fingerprint
 - Batch analysis over a library, with a sortable results table
 - Saved analysis presets
-- Compare workspace: N structures or sites side by side, and the reduced-axis
-  (d − R₀) atlas plot ported from `bi_pubfig.py`
+- Compare workspace — **done ahead of this phase** (0.5.0): a comparison
+  basket of crystal sites and model elements (table, CN-against-threshold
+  staircases overlaid, a crystal site's value drawn over the glass's per-atom
+  distribution), and the same descriptors of two or more MD runs side by side
+  with the runs' parameter differences stated. Still open from the original
+  bullet: the reduced-axis (d − R₀) atlas plot ported from `bi_pubfig.py`
 
 ## Phase 6 — Completing the analysis
 

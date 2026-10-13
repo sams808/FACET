@@ -149,6 +149,10 @@ class PreviewWindow(QMainWindow):
         self.show_void_cones = False
         self.vector_scale = 0.6
         self._manual_dialog = None
+        # The Compare workspace: one page on the window (never per entry),
+        # built on first use. Its basket is not saved in sessions.
+        self._compare_page = None
+        self.compare_on = False
 
         self.view = _WorkspaceView()
         self.view.set_theme(self.theme)
@@ -745,6 +749,19 @@ class PreviewWindow(QMainWindow):
         v.addMenu(scale)
 
         v.addSeparator()
+        compare = QAction("Co&mpare structures…", self)
+        compare.setShortcut("M")
+        compare.setToolTip(
+            "The Compare workspace: a basket of crystal sites and model "
+            "elements listed side by side, their staircases overlaid, and "
+            "the same calculations of several models together. Add to the "
+            "basket from a right-click on a site, an atom or a model's "
+            "Elements row.")
+        compare.triggered.connect(self._show_compare)
+        v.addAction(compare)
+        self.compare_action = compare
+
+        v.addSeparator()
         # A QMenu built with addMenu("title") is owned by Python and is
         # destroyed when this method returns; parenting it to the menu keeps it.
         themes = QMenu("&Theme", v)
@@ -1282,6 +1299,9 @@ class PreviewWindow(QMainWindow):
             controller.opened.connect(self._on_model_opened)
             controller.statusMessage.connect(self._on_model_status)
             controller.stateChanged.connect(self._update_model_actions)
+            controller.elements.compareRequested.connect(
+                lambda element, e=entry:
+                self._add_model_to_compare(e, element))
             for widget, stack in zip(controller.widgets, self._stacks()):
                 stack.addWidget(widget)
             opened.append(controller)
@@ -1338,6 +1358,7 @@ class PreviewWindow(QMainWindow):
         for stack in self._stacks():
             stack.setCurrentIndex(0)
         self.sites_dock.setWindowTitle("Sites")
+        self._keep_compare_shown()
         self._update_model_actions()
 
     def _show_model(self, entry) -> None:
@@ -1365,6 +1386,7 @@ class PreviewWindow(QMainWindow):
             + (f"   [{len(self.project)} structures]" if len(self.project) > 1
                else ""))
         self.statusBar().showMessage(controller.status_line(), 0)
+        self._keep_compare_shown()
         self._update_model_actions()
 
     def _close_model(self, entry) -> None:
@@ -1381,6 +1403,73 @@ class PreviewWindow(QMainWindow):
             except RuntimeError:
                 pass
         controller.dispose()
+
+    # -- the Compare workspace ----------------------------------------------
+    def _compare(self):
+        """The window's one ComparePage, built on first use (it pulls the
+        MD plotting stack in, which the crystal side never needs)."""
+        if self._compare_page is None:
+            from .md_compare import ComparePage
+
+            page = ComparePage(self.project, theme=self.theme)
+            page.closeRequested.connect(self._leave_compare)
+            page.overlayToggled.connect(self._compare_overlay)
+            page.statusMessage.connect(
+                lambda text: self.statusBar().showMessage(text, 9000))
+            self.column_stack.addWidget(page)
+            self._compare_page = page
+        return self._compare_page
+
+    def _show_compare(self) -> None:
+        """Open or raise the Compare workspace in the right column. It
+        stays open across a change of the selected row until Back."""
+        page = self._compare()
+        page.set_model_candidates(self.project.models)
+        page.set_overlay_state(self.project.overlay)
+        page.set_v_bond(self.project.v_bond)
+        self.compare_on = True
+        self.column_stack.setCurrentWidget(page)
+
+    def _keep_compare_shown(self) -> None:
+        """Called after a row switch set the column stack: the comparison,
+        when open, keeps the right column whatever row is selected."""
+        if self.compare_on and self._compare_page is not None:
+            self._compare_page.set_model_candidates(self.project.models)
+            self.column_stack.setCurrentWidget(self._compare_page)
+
+    def _leave_compare(self) -> None:
+        """Back to the selected entry's own column; the basket is kept."""
+        self.compare_on = False
+        entry = self.project.current
+        controller = self._model()
+        if entry is not None and entry.kind == "model" \
+                and controller is not None:
+            self.column_stack.setCurrentWidget(controller.column)
+        else:
+            self.column_stack.setCurrentIndex(0)
+
+    def _compare_overlay(self, on: bool) -> None:
+        """The page's side-by-side check drives the Structures dock's own
+        overlay control, so the two can never disagree."""
+        self.structure_panel.overlay.setChecked(bool(on))
+
+    def _add_site_to_compare(self, site_index: int) -> None:
+        entry = self._crystal()
+        if entry is None:
+            return
+        added = self._compare().add_crystal_site(entry, int(site_index))
+        self._show_compare()
+        if not added:
+            self.statusBar().showMessage(
+                "That site is already in the comparison basket.", 6000)
+
+    def _add_model_to_compare(self, entry, element: str) -> None:
+        added = self._compare().add_model_element(entry, str(element))
+        self._show_compare()
+        if not added:
+            self.statusBar().showMessage(
+                "That element of that model is already in the comparison "
+                "basket.", 6000)
 
     def open_md_paths(self, paths, *, series: bool = False) -> list:
         """Open files chosen as MD models (File > Open MD model…).
@@ -1730,6 +1819,14 @@ class PreviewWindow(QMainWindow):
         turn.triggered.connect(lambda: self._center_on_site(site_index))
         menu.addAction("Rotate about the cell centre").triggered.connect(
             self._center_on_cell)
+        menu.addSeparator()
+        add = menu.addAction("Add to comparison")
+        add.setToolTip(
+            "Put this site in the comparison basket (View > Compare "
+            "structures…), beside sites of other structures and the "
+            "elements of MD models.")
+        add.triggered.connect(
+            lambda _=False, i=site_index: self._add_site_to_compare(i))
         return menu
 
     def _on_labels(self) -> None:
@@ -1751,12 +1848,16 @@ class PreviewWindow(QMainWindow):
     def _on_overlay(self, on: bool, spacing: float) -> None:
         self.project.set_overlay(on, spacing)
         self.structure_panel.refresh()
+        if self._compare_page is not None:
+            self._compare_page.set_overlay_state(self.project.overlay)
         self._rebuild(reframe=True)
 
     def _on_remove(self, row: int) -> None:
         if row < 0 or row >= len(self.project):
             return
         entry = self.project.entries[row]
+        if self._compare_page is not None:
+            self._compare_page.drop_entry(entry)
         if entry.kind == "model":
             self._close_model(entry)
         self.project.remove(row)
@@ -1798,6 +1899,8 @@ class PreviewWindow(QMainWindow):
         self.project.set_bond_threshold(float(v))
         self.view.set_threshold(self.project.v_bond)
         self._update_analysis()
+        if self._compare_page is not None:
+            self._compare_page.set_v_bond(self.project.v_bond)
         entry = self.project.current
         self.utilities.update_for(
             entry.structure if entry else None,
@@ -1842,6 +1945,8 @@ class PreviewWindow(QMainWindow):
                     self.atom_label_box, self.bond_label_box):
             box.setMinimumWidth(0)
             self._fit_combo(box)
+        if self._compare_page is not None:
+            self._compare_page.apply_theme(theme)
         self._sync_theme_menu(theme)
         self._update_analysis()
 
@@ -2128,6 +2233,12 @@ class PreviewWindow(QMainWindow):
                 "or middle button moves the centre off it again.")
             turn.triggered.connect(
                 lambda _=False, i=atom_index, t=label: self._center_on_atom(i, t))
+            compare = menu.addAction("Add to comparison")
+            compare.setToolTip(
+                "Put site " + site_label + " in the comparison basket "
+                "(View > Compare structures…).")
+            compare.triggered.connect(
+                lambda _=False, i=site_index: self._add_site_to_compare(i))
             menu.addSeparator()
 
             site_menu = QMenu("Site " + site_label, menu)
