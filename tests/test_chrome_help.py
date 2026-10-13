@@ -173,10 +173,7 @@ def test_no_panel_still_hard_codes_the_old_hint_colour():
     offenders = [
         str(f.relative_to(root)) for f in root.rglob("*.py")
         if "8a93a3" in f.read_text(encoding="utf-8")
-        # the two QPainter plots of the bottom strip carry their own palette,
-        # like the logo; they are drawn, not styled
-        and f.name not in ("branding.py", "cutoff_explorer.py",
-                           "shell_plot.py")
+        and f.name not in ("branding.py", "cutoff_explorer.py")
     ]
     assert not offenders, offenders
 

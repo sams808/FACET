@@ -108,7 +108,7 @@ says what is missing; what remains planned is listed as such.
 | **CN as a function of threshold (the staircase)** | – | – | **done** |
 | **Plateau analysis — is this CN a result or a choice?** | – | – | **done** |
 | **The threshold drives every consumer** | – | – | **done** | moving the cut re-sums the cached contacts (`coordination.reclassify`): labels, site list, tables, report and both bottom plots read the numbers at the threshold in force; a pin marks the threshold the file was opened at |
-| **Shell plot: CN and the running bond-valence sum, shell by shell** | – | – | **done** | the selected site's contacts against distance or valence; what each neighbour adds, what the next one outside the cut would add |
+| **The running bond-valence sum, shell by shell, on the explorer** | – | – | **done** | the right axis of the explorer: the sum over the contacts counted so far, its area filled, the next contact's step shaded with its increment, the size of the site's charge for scale; *View ▸ Cutoff explorer* offers the distance axis, the sum as % of charge, stacked panes, one bar per contact, a running-sum column in the Site tab, and bond labels by share of the sum |
 | **Sub-threshold contacts drawn, not hidden** | – | – | **done** |
 | **Bond thickness proportional to bond valence** | – | – | **done** |
 | Several CN definitions side by side | – | – | **done** | ten native rules plus eight pymatgen strategies, with the spread |

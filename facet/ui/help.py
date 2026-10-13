@@ -478,7 +478,7 @@ beside them -- a spin box reading "r to 20.0 &Aring;" is the r limit. Hovering
 any of them explains what it does, and the settings that are set once and left
 sit behind a disclosure arrow.</p>
 <h2>Bottom</h2>
-<p>The <b>cutoff explorer</b>, on the left. Each site is a staircase:
+<p>The <b>cutoff explorer</b>. Each site is a staircase:
 coordination number against threshold, with the flat treads being the
 plateaux. Drag the vertical line to move the bond threshold; everything above
 follows it &mdash; the drawn bonds, the labels on the atoms, the site list, the
@@ -488,16 +488,23 @@ count as bonds, so a drag re-sums them and searches for nothing.</p>
 <p>A round-headed <b>pin</b> marks the threshold the file was opened at, so
 after a drag the numbers first shown for it can be found again. The pin is
 where the structure was first analysed, not a recommendation.</p>
-<p>The <b>shell plot</b>, on the right, shows the same contacts of the selected
-site one shell at a time: the coordination number counted so far on the left
-axis, as a staircase, and the running bond-valence sum over those same
-contacts on the right axis, with the size of the site's charge drawn across
-it for scale. Read it to see what each successive neighbour adds to the sum,
-and where the next contact outside the cut would take it; the line under the
-plot states that. The corner button switches the horizontal axis between
-distance and bond valence; the two orders differ when a site has more than one
-kind of anion. The threshold line and the pin are the same ones as in the
-explorer, and dragging either plot moves both.</p>
+<p>The <b>right axis</b> carries the running bond-valence sum over the
+contacts counted so far, in green, with the size of the site's charge drawn
+across it for scale. The area under the sum is shaded, and so is the step the
+next contact outside the cut would add, with the increment written on it. The
+staircase and the sum step at the same contacts: read them together to see
+what each successive neighbour adds, and where the next one would take the
+sum; the line under the plot states that too. The corner button switches the
+horizontal axis between bond valence and distance; the two orders differ when
+a site has more than one kind of anion, and each axis shows its own.</p>
+<p><i>View &rsaquo; Cutoff explorer</i> holds the other ways of reading the
+same contacts, none of which changes a number: the axis choice; the fill;
+the sum as a <b>percentage of the site's charge</b>, so that sites of
+different charge share one scale; <b>stacked panes</b>, the staircase above
+and the sum below on their own axes; <b>one bar per contact</b> under the
+rail, each contact's own contribution with the running sum above it; a
+<b>running-sum column</b> in the Site tab's contact table; and a shortcut to
+the bond-label mode that writes on each drawn bond its share of the sum.</p>
 <p {note}>Both splitters can be dragged, and the docks can be undocked or
 closed. The window remembers nothing between runs, so a layout you liked has to
 be set up again — that is a limitation, not a preference.</p>

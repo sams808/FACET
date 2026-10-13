@@ -55,7 +55,6 @@ from ..gl.view import StructureView
 from ..version import NAME, __version__
 from . import chrome
 from .cutoff_explorer import CutoffExplorer
-from .shell_plot import ShellPlot
 from .structure_list import StructureList
 from .theme_panel import ThemePanel
 from .diffraction_panel import DiffractionPanel
@@ -167,12 +166,6 @@ class PreviewWindow(QMainWindow):
         self.explorer = CutoffExplorer()
         self.explorer.set_theme(self.theme)
         self.explorer.thresholdChanged.connect(self._on_threshold)
-        # The shells of the selected site beside the staircase: CN and the
-        # running bond-valence sum against distance or valence. It shares the
-        # threshold with the explorer, so a drag on either moves both.
-        self.shells = ShellPlot()
-        self.shells.set_theme(self.theme)
-        self.shells.thresholdChanged.connect(self._on_threshold)
         # Atom colours that encode a per-site number are rebuilt after a drag
         # settles rather than on every step: one rebuild, not one per pixel.
         self._recolour_timer = QTimer(self)
@@ -413,16 +406,8 @@ class PreviewWindow(QMainWindow):
         split.setSizes([980, 500])
         self.split = split
 
-        # The crystal's bottom strip: the staircase and, beside it, the shells
-        # of the selected site. A splitter, so either can be given the room.
-        self.bottom_strip = QSplitter(Qt.Horizontal)
-        self.bottom_strip.addWidget(self.explorer)
-        self.bottom_strip.addWidget(self.shells)
-        self.bottom_strip.setStretchFactor(0, 3)
-        self.bottom_strip.setStretchFactor(1, 2)
-        self.bottom_strip.setSizes([900, 580])
         self.bottom_stack = _PageStack()
-        self.bottom_stack.addWidget(self.bottom_strip)
+        self.bottom_stack.addWidget(self.explorer)
         vertical = QSplitter(Qt.Vertical)
         vertical.addWidget(split)
         vertical.addWidget(self.bottom_stack)
@@ -690,13 +675,17 @@ class PreviewWindow(QMainWindow):
         v.addAction(reset)
         v.addSeparator()
 
+        # One row for the three axes rather than three: the View menu is
+        # read at a glance, and twelve rows is where that stops.
+        along = QMenu("&Along an axis", v)
         axes = QActionGroup(self)
         for name, axis in (("Along &a", (1, 0, 0)), ("Along &b", (0, 1, 0)),
                            ("Along &c", (0, 0, 1))):
             act = QAction(name, self)
             act.triggered.connect(lambda _=False, ax=axis: self._view_along(ax))
             axes.addAction(act)
-            v.addAction(act)
+            along.addAction(act)
+        v.addMenu(along)
 
         v.addSeparator()
         # Not "&cell": the View menu already spends c on "Along c", and two
@@ -709,6 +698,9 @@ class PreviewWindow(QMainWindow):
             "block. Right-click an atom to turn about that atom instead.")
         cell_centre.triggered.connect(self._center_on_cell)
         v.addAction(cell_centre)
+
+        v.addSeparator()
+        v.addMenu(self._build_explorer_menu(v))
 
         v.addSeparator()
         # an MD model's frames and highlight rules: enabled for a model
@@ -1735,9 +1727,6 @@ class PreviewWindow(QMainWindow):
         self.explorer.set_result(current)
         self.explorer.set_pin(pin)
         self.explorer.set_threshold(self.project.v_bond)
-        self.shells.set_result(current)
-        self.shells.set_pin(pin)
-        self.shells.set_threshold(self.project.v_bond)
         self._update_analysis()
         self.utilities.update_for(
             active.structure if active else None,
@@ -1884,6 +1873,85 @@ class PreviewWindow(QMainWindow):
             lambda _=False, i=site_index: self._add_site_to_compare(i))
         return menu
 
+    def _build_explorer_menu(self, parent) -> QMenu:
+        """View > Cutoff explorer: how the staircase and the running sum are
+        shown. Every entry is a way of reading the same contacts; none of
+        them changes a number."""
+        from .cutoff_explorer import AXIS_DISTANCE, AXIS_VALENCE
+        m = QMenu("Cutoff e&xplorer", parent)
+
+        axes = QActionGroup(self)
+        self.explorer_axis_actions = {}
+        for text, axis, tip in (
+                ("Against bond &valence", AXIS_VALENCE,
+                 "Logarithmic in valence: a plateau's width is then exactly "
+                 "the distance gap divided by b."),
+                ("Against &distance", AXIS_DISTANCE,
+                 "Linear in distance, for the pair this site is read "
+                 "against. With two kinds of anion the contacts come in a "
+                 "different order than by valence.")):
+            act = QAction(text, self)
+            act.setCheckable(True)
+            act.setToolTip(tip)
+            act.setChecked(axis == self.explorer.axis)
+            act.triggered.connect(lambda _=False, a=axis: self._set_explorer_axis(a))
+            axes.addAction(act)
+            m.addAction(act)
+            self.explorer_axis_actions[axis] = act
+        m.addSeparator()
+
+        self.explorer_option_actions = {}
+        for text, name, tip in (
+                ("&Fill the running sum", "fill_sum",
+                 "Shade the area under the running bond-valence sum, and the "
+                 "step the next contact outside the cut would add."),
+                ("Running sum as % of the &charge", "sum_as_fraction",
+                 "Read the right axis as a fraction of the site's charge, so "
+                 "sites of different charge share one scale."),
+                ("CN and sum in &stacked panes", "stacked",
+                 "The staircase above and the running sum below, each on its "
+                 "own axis, instead of overlaid."),
+                ("One &bar per contact", "show_bars",
+                 "Under the rail, each contact's own contribution to the sum "
+                 "as a bar, with the running sum above it.")):
+            act = QAction(text, self)
+            act.setCheckable(True)
+            act.setChecked(getattr(self.explorer, name))
+            act.setToolTip(tip)
+            act.toggled.connect(lambda on, n=name: self.explorer.set_option(n, on))
+            m.addAction(act)
+            self.explorer_option_actions[name] = act
+        m.addSeparator()
+
+        self.running_sum_column = QAction("&Running-sum column in the Site tab", self)
+        self.running_sum_column.setCheckable(True)
+        self.running_sum_column.setToolTip(
+            "Add a column to the Site tab's contact table with the sum over "
+            "the contacts up to and including each row, by distance.")
+        self.running_sum_column.toggled.connect(lambda _on: self._update_analysis())
+        m.addAction(self.running_sum_column)
+
+        share = QAction("Label bonds by their s&hare of the sum", self)
+        share.setToolTip(
+            "Write on each drawn bond the percentage of the site's "
+            "bond-valence sum it carries (the bond-label mode of the same "
+            "name).")
+        share.triggered.connect(self._label_bonds_by_share)
+        m.addAction(share)
+        return m
+
+    def _set_explorer_axis(self, axis: str) -> None:
+        self.explorer.set_axis(axis)
+        for a, act in self.explorer_axis_actions.items():
+            act.setChecked(a == axis)
+
+    def _label_bonds_by_share(self) -> None:
+        from ..gl.labels import BondLabel
+        i = self.bond_label_box.findData(BondLabel.FRACTION_OF_BVS)
+        if i >= 0:
+            self.bond_label_box.setCurrentIndex(i)
+            self._on_labels()
+
     def _on_labels(self) -> None:
         self.labels.atom = self.atom_label_box.currentData()
         self.labels.bond = self.bond_label_box.currentData()
@@ -1925,7 +1993,6 @@ class PreviewWindow(QMainWindow):
             # cutoff staircase and a camera framed on it.
             self.view.set_scene(None, reframe=False)
             self.explorer.set_result(None)
-            self.shells.set_result(None)
             self._update_analysis()
             self.site_list.clear()
             self._set_enabled(False)
@@ -1955,7 +2022,7 @@ class PreviewWindow(QMainWindow):
         the bond threshold re-sums them (``coordination.reclassify``, through
         the project's result cache) and every consumer reads the numbers at
         the threshold now in force: the drawn bonds, the atom labels, the site
-        list, the analysis panel, the tables, both bottom plots. Before this,
+        list, the analysis panel, the tables, the explorer. Before this,
         only the analysis panel followed the cursor and the labels on the
         atoms kept the sum from the first analysis.
         """
@@ -1972,8 +2039,6 @@ class PreviewWindow(QMainWindow):
         current = self._current_result()
         self.explorer.set_result(current)
         self.explorer.set_threshold(self.project.v_bond)
-        self.shells.set_result(current)
-        self.shells.set_threshold(self.project.v_bond)
         self._update_analysis()
         if self._compare_ws is not None:
             self._compare_ws.set_v_bond(self.project.v_bond)
@@ -2004,7 +2069,6 @@ class PreviewWindow(QMainWindow):
         """
         self.theme = theme
         self.explorer.set_theme(theme)
-        self.shells.set_theme(theme)
         self.diffraction.apply_theme(theme)
         self.volume_panel.apply_theme(theme)
         self.pdf_panel.apply_theme(theme)
@@ -2142,7 +2206,6 @@ class PreviewWindow(QMainWindow):
         if "v_bond" in snapshot:
             self.project.set_bond_threshold(float(snapshot["v_bond"]))
             self.explorer.set_threshold(self.project.v_bond)
-            self.shells.set_threshold(self.project.v_bond)
 
         self.overrides_panel.set_context(
             entry.structure if entry else None,
@@ -2524,13 +2587,28 @@ class PreviewWindow(QMainWindow):
             for contact, value in zip(bonded, split.a_priori):
                 a_priori_of[id(contact)] = value
 
+        # the running sum, by distance: what the contacts up to and
+        # including this one carry together
+        running = {}
+        total = 0.0
+        for c in sorted((c for c in r.contacts if c.has_valence),
+                        key=lambda c: c.distance):
+            total += c.valence * c.occupancy
+            running[id(c)] = total
+        show_running = (getattr(self, "running_sum_column", None) is not None
+                        and self.running_sum_column.isChecked())
+
         def contact_row(c) -> str:
             ideal = a_priori_of.get(id(c))
             ideal_cell = ("&mdash;" if ideal is None else f"{ideal:.4f}")
+            running_cell = (f"<td align='right' style='color:{muted}'>"
+                            f"{running.get(id(c), float('nan')):.3f}</td>"
+                            if show_running else "")
             return (
                 f"<tr><td>{c.label}</td>"
                 f"<td align='right'>{c.distance:.4f}</td>"
                 f"<td align='right'>{c.valence:.4f}</td>"
+                f"{running_cell}"
                 f"<td align='right' style='color:{muted}'>{ideal_cell}</td>"
                 f"<td align='center'>"
                 f"{'&#9679;' if c.valence > v else '&#9675;'}</td>"
@@ -2620,6 +2698,7 @@ class PreviewWindow(QMainWindow):
           <tr style='color:{muted}'>
             <th align='left'>atom</th><th align='right'>d / Å</th>
             <th align='right'>v / v.u.</th>
+            {"<th align='right'>&Sigma; so far</th>" if show_running else ""}
             <th align='right'>a priori</th><th></th><th></th></tr>
           {rows}
         </table>

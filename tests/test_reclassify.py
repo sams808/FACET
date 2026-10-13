@@ -9,8 +9,8 @@ cut moved: the labels on the atoms, the site list, the tables and the report
 kept the first numbers. Now the project hands every consumer the results at
 the threshold in force, re-summed from the cached contacts.
 
-The shell plot beside the explorer draws the same contacts shell by shell:
-the count and the running sum, with the pin at the opening threshold.
+The explorer's right axis draws the same contacts shell by shell: the
+running sum beside the count, with the pin at the opening threshold.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from conftest import dispose, sample_cif
 
 from facet.core import bv, cif, coordination, project as project_mod
 from facet.gl import labels as labels_mod
-from facet.ui import shell_plot
+from facet.core import shells as shell_plot
 
 SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 
@@ -179,40 +179,34 @@ def test_the_explorer_marks_the_opening_threshold(qapp, base):
     dispose(w)
 
 
-def test_the_shell_plot_draws_the_contacts_where_the_numbers_put_them(qapp, base):
-    """The tick for each contact sits at its own distance or valence, in
-    order, and the staircase has one step per contact."""
-    w = shell_plot.ShellPlot()
-    w.resize(600, 230)
+def test_the_explorer_draws_the_contacts_where_the_numbers_put_them(qapp, base):
+    """The tick for each contact sits at its own valence or distance, in
+    order, and each staircase has one step per contact."""
+    from facet.ui.cutoff_explorer import CutoffExplorer
+    w = CutoffExplorer()
+    w.resize(900, 230)
     w.set_result(base[0])
     w.set_pin(0.075)
     w.set_threshold(0.075)
     w._layout()
-    shells = shell_plot.shell_curve(base[0], shell_plot.AXIS_DISTANCE)
-    xs = [w._shell_x(s) for s in shells]
-    assert xs == sorted(xs)
-    assert w._plot.left() <= xs[0] and xs[-1] <= w._plot.right()
-    # the step function: a move, then two points per contact, then the end
-    path = w._staircase(shells, lambda s: 0.0 if s == 0 else float(s.cn_after))
-    assert path.elementCount() == 2 + 2 * len(shells)
-    # against valence the order reverses: strongest contact at the right
-    w.set_axis(shell_plot.AXIS_VALENCE)
-    w._layout()
     by_v = shell_plot.shell_curve(base[0], shell_plot.AXIS_VALENCE)
     xv = [w._shell_x(s) for s in by_v]
-    assert xv == sorted(xv, reverse=True)
-    # the readout states the analysis at the threshold
+    assert xv == sorted(xv, reverse=True)          # strongest at the right
+    path = w._step_path(by_v, lambda s: 0.0 if s is None else float(s.cn_after))
+    assert path.elementCount() == 2 + 2 * len(by_v)
+    w.set_axis(shell_plot.AXIS_DISTANCE)
+    w._layout()
+    by_d = shell_plot.shell_curve(base[0], shell_plot.AXIS_DISTANCE)
+    xd = [w._shell_x(s) for s in by_d]
+    assert xd == sorted(xd)                         # nearest at the left
+    assert w._plot.left() <= xd[0] and xd[-1] <= w._plot.right()
     cn, total, _ = shell_plot.at_threshold(base[0], 0.075)
-    assert f"CN {cn}" in w.readout_text()
-    assert f"{total:.3f}" in w.readout_text()
-    # a drag maps back to the same threshold on either axis
+    assert f"CN {cn}" in w.readout_text() and f"{total:.3f}" in w.readout_text()
     for axis in (shell_plot.AXIS_DISTANCE, shell_plot.AXIS_VALENCE):
         w.set_axis(axis)
         w._layout()
-        x = w._v_to_x(0.12)
-        assert abs(w._x_to_v(x) - 0.12) < 1e-3, axis
-    image = w.grab().toImage()
-    assert image.width() > 0
+        assert abs(w._x_to_v(w._v_to_x(0.12)) - 0.12) < 1e-3, axis
+    assert w.grab().toImage().width() > 0
     dispose(w)
 
 
@@ -230,7 +224,6 @@ def test_the_window_refreshes_every_consumer_on_a_drag(qapp):
         win._rebuild()
         qapp.processEvents()
         assert win.explorer.pin_v == entry.first_v_bond == 0.075
-        assert win.shells.pin_v == 0.075
 
         win.explorer.set_threshold(0.03, emit=True)
         qapp.processEvents()
@@ -238,12 +231,12 @@ def test_the_window_refreshes_every_consumer_on_a_drag(qapp):
         assert r.v_bond == 0.03
         assert win.site_list.item(0).text().endswith(f"CN {r.cn_valence}")
         assert win.view.results[0] is r
-        assert win.shells.v_bond == 0.03
         assert win.explorer.v_bond == 0.03
-        assert f"CN {r.cn_valence}" in win.shells.readout_text()
+        assert f"CN {r.cn_valence}" in win.explorer.readout_text()
 
-        # and back through the shell plot's own cursor
-        win.shells.set_threshold(0.2, emit=True)
+        # and back, on the distance axis
+        win.explorer.set_axis(shell_plot.AXIS_DISTANCE)
+        win.explorer.set_threshold(0.2, emit=True)
         qapp.processEvents()
         assert win.project.v_bond == 0.2
         assert win.explorer.v_bond == 0.2
