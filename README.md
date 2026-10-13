@@ -209,6 +209,17 @@ elongation, and the channels, as translucent surfaces, with the rest dimmed.
 *Help ▸ MD models and the Model workspace* is the manual's section on all of
 it.
 
+**Reports on many CIFs.** *File ▸ Export ▸ Report on CIFs…* takes files or folders and
+writes, for every site of every file, the coordination number, bond valences
+and their sums, distances, plateaus, the distance each pair's cutoff means, and
+the charge balance, as an Excel workbook, CSV files, JSON, a web page, Markdown
+or text. The same from the command line:
+
+```
+py -3.11 -m facet.report structures/ -o report.xlsx
+py -3.11 -m facet.report a.cif b.cif --format html --v-bond 0.10 -o cmp
+```
+
 **From the command line.** `python -m facet.md` runs the same analyses with no
 window, on a workstation or a cluster node. Unlike the application, it needs
 Python and FACET's source.

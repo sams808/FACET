@@ -398,6 +398,25 @@ workstation, which is the reason that renderer exists.</p>
 the sites and contacts as CSV or XLSX, the cutoff table, and a threshold scan
 &mdash; the last being the data behind the staircase, if you would rather plot
 it yourself.</p>
+
+<h2>A report on many files</h2>
+<p><i>File &rsaquo; Export &rsaquo; Report on CIFs&hellip;</i> takes a set of files or whole
+folders, analyses every site of every file at the thresholds you give (the
+window's own are offered), and writes five tables: <b>sites</b> (coordination
+number, the bond-valence sum over the bonded set and to the listing cut, phi,
+the polyhedron's distance statistics, the plateau the threshold sits on),
+<b>contacts</b> (every distance with its valence, occupancy, running sum and
+whether it counts as a bond), <b>plateaus</b> (the whole staircase of each
+site as rows), <b>cutoffs</b> (the distance each cation&ndash;anion pair's
+thresholds correspond to) and <b>balance</b> (the cation and anion totals of
+each structure). The same tables go out as an Excel workbook, CSV files (one
+per table), JSON, a web page, Markdown or plain text, each headed by the
+thresholds, the parameter set, the version, the time and the list of files.
+A file that cannot be read stays in the report with the reason, so a short
+table is never silently short.</p>
+<p>The same report from the command line, with no window:</p>
+<pre>py -3.11 -m facet.report structures/ -o report.xlsx
+py -3.11 -m facet.report a.cif b.cif --format html --v-bond 0.10 -o cmp</pre>
 """),
 
         ("examples", "The bundled structures", f"""
@@ -497,7 +516,10 @@ what each successive neighbour adds, and where the next one would take the
 sum; the line under the plot states that too. The corner button switches the
 horizontal axis between bond valence and distance; the two orders differ when
 a site has more than one kind of anion, and each axis shows its own.</p>
-<p><i>View &rsaquo; Cutoff explorer</i> holds the other ways of reading the
+<p>As the window opens, the axis is distance, the staircase and the sum sit
+in stacked panes, the area under the sum is filled, one bar per contact runs
+under the rail, and the Site tab's contact table carries a running-sum
+column. <i>View &rsaquo; Cutoff explorer</i> holds every way of reading the
 same contacts, none of which changes a number: the axis choice; the fill;
 the sum as a <b>percentage of the site's charge</b>, so that sites of
 different charge share one scale; <b>stacked panes</b>, the staircase above

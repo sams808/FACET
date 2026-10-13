@@ -188,6 +188,7 @@ def test_the_explorer_draws_the_contacts_where_the_numbers_put_them(qapp, base):
     w.set_result(base[0])
     w.set_pin(0.075)
     w.set_threshold(0.075)
+    w.set_axis(shell_plot.AXIS_VALENCE)
     w._layout()
     by_v = shell_plot.shell_curve(base[0], shell_plot.AXIS_VALENCE)
     xv = [w._shell_x(s) for s in by_v]

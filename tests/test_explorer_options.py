@@ -30,6 +30,12 @@ def explorer(qapp, site):
     w.set_result(site)
     w.set_pin(0.075)
     w.set_threshold(0.2)
+    # the fixture starts from the plain overlay, whatever the defaults are,
+    # so each test turns on exactly what it checks
+    w.set_axis(AXIS_VALENCE)
+    for name in ("stacked", "show_bars", "sum_as_fraction"):
+        w.set_option(name, False)
+    w.set_option("fill_sum", True)
     yield w
     dispose(w)
 
@@ -108,15 +114,21 @@ def test_the_menu_drives_the_explorer_and_the_site_tab(qapp):
         qapp.processEvents()
 
         assert win.explorer.fill_sum
-        win.explorer_option_actions["stacked"].setChecked(True)
-        assert win.explorer.stacked
-        win.explorer_option_actions["show_bars"].setChecked(True)
-        assert win.explorer.show_bars
+        for name in ("stacked", "show_bars"):
+            act = win.explorer_option_actions[name]
+            act.setChecked(not act.isChecked())
+            assert getattr(win.explorer, name) == act.isChecked()
+            act.setChecked(not act.isChecked())
+            assert getattr(win.explorer, name) == act.isChecked()
+        win.explorer_axis_actions[AXIS_VALENCE].trigger()
+        assert win.explorer.axis == AXIS_VALENCE
+        assert win.explorer_axis_actions[AXIS_VALENCE].isChecked()
+        assert not win.explorer_axis_actions[AXIS_DISTANCE].isChecked()
         win.explorer_axis_actions[AXIS_DISTANCE].trigger()
         assert win.explorer.axis == AXIS_DISTANCE
-        assert win.explorer_axis_actions[AXIS_DISTANCE].isChecked()
-        assert not win.explorer_axis_actions[AXIS_VALENCE].isChecked()
 
+        win.running_sum_column.setChecked(False)
+        qapp.processEvents()
         assert "so far" not in win.analysis.toHtml()
         win.running_sum_column.setChecked(True)
         qapp.processEvents()

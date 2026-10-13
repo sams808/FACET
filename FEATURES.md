@@ -183,6 +183,7 @@ verified against an analytic sphere, planar sections, and bond-valence maps.
 | PDB / mmCIF | **done** | – | via gemmi; invents a box when the file has no real cell |
 | FEFF input | – | **done** | absorber first at the origin; distances asserted to match the analysis |
 | CSV / XLSX of results | – | **done** | every file carries the parameter set and both thresholds |
+| **Report on a set of CIFs** | – | – | **done** | *File ▸ Export ▸ Report on CIFs…* and `py -3.11 -m facet.report`: sites, contacts (with running sums), plateaus, pair cutoffs and charge balance for every file, as xlsx / csv / json / html / md / txt with provenance; unreadable files listed with the reason |
 | PNG image | – | **done** | supersampled, any resolution |
 | Vector (SVG / PDF) | – | **done** | the QPainter tier doubles as the vector exporter: the 3D view, the pattern and the sections |
 

@@ -412,7 +412,7 @@ class PreviewWindow(QMainWindow):
         vertical.addWidget(split)
         vertical.addWidget(self.bottom_stack)
         vertical.setStretchFactor(0, 1)
-        vertical.setSizes([640, 230])
+        vertical.setSizes([560, 330])
         self.vertical = vertical
         self.setCentralWidget(vertical)
 
@@ -613,6 +613,14 @@ class PreviewWindow(QMainWindow):
             action = QAction(label, self)
             action.triggered.connect(handler)
             export.addAction(action)
+        export.addSeparator()
+        self.report_action = QAction("&Report on CIFs…", self)
+        self.report_action.setToolTip(
+            "Read a set of CIF files or folders and write their bond "
+            "valences, sums, distances, plateaus and cutoffs as a workbook, "
+            "CSV files, JSON, a web page, Markdown or text.")
+        self.report_action.triggered.connect(self._report_on_cifs)
+        export.addAction(self.report_action)
 
         m.addSeparator()
         # one row for the three parameter actions: File stays within twelve
@@ -1873,6 +1881,16 @@ class PreviewWindow(QMainWindow):
             lambda _=False, i=site_index: self._add_site_to_compare(i))
         return menu
 
+    def _report_on_cifs(self) -> None:
+        """File > Report on CIFs…: the open crystals are offered as a start."""
+        from .report_dialog import ReportDialog
+        paths = [e.path for e in self.project.crystals if e.path]
+        dialog = ReportDialog(self, v_bond=self.project.v_bond,
+                              v_list=self.project.v_list,
+                              params=self.project.params,
+                              anions=self.project.include_anions, paths=paths)
+        dialog.exec()
+
     def _build_explorer_menu(self, parent) -> QMenu:
         """View > Cutoff explorer: how the staircase and the running sum are
         shown. Every entry is a way of reading the same contacts; none of
@@ -1925,6 +1943,7 @@ class PreviewWindow(QMainWindow):
 
         self.running_sum_column = QAction("&Running-sum column in the Site tab", self)
         self.running_sum_column.setCheckable(True)
+        self.running_sum_column.setChecked(True)
         self.running_sum_column.setToolTip(
             "Add a column to the Site tab's contact table with the sum over "
             "the contacts up to and including each row, by distance.")

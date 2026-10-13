@@ -84,14 +84,15 @@ class CutoffExplorer(QWidget):
         # once the cut has been dragged the reader can still see where the
         # numbers first shown for this file came from.
         self.pin_v: float | None = None
-        self.axis = AXIS_VALENCE
-        # How the running sum is shown. Each is a View menu option; the
-        # defaults are the overlay with the area under the sum filled and the
-        # step the next contact would add shaded.
+        # The defaults Sami chose after trying the options: the distance
+        # axis, the staircase and the sum in stacked panes with the area
+        # under the sum filled and the next contact's step shaded, and one
+        # bar per contact under the rail. Each is a View menu option.
+        self.axis = AXIS_DISTANCE
         self.fill_sum = True          # area under the running sum
         self.sum_as_fraction = False  # right axis as % of |charge|
-        self.stacked = False          # CN above, the sum in its own pane below
-        self.show_bars = False        # one bar per contact under the rail
+        self.stacked = True           # CN above, the sum in its own pane below
+        self.show_bars = True         # one bar per contact under the rail
 
         self._dragging = False
         self._hover_v: float | None = None
@@ -102,6 +103,7 @@ class CutoffExplorer(QWidget):
         self._sum_plot = QRectF()
         self._bars = QRectF()
         self._rail = QRectF()
+        self.setMinimumHeight(210 + 80 + 34)
 
         # the axis switch sits in the corner of the plot, by the axis it changes
         self.axis_button = QToolButton(self)

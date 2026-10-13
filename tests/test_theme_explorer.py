@@ -323,6 +323,7 @@ class TestCutoffExplorer:
         w = CutoffExplorer()
         w.resize(900, 220)
         w.set_result(result)
+        w.set_axis("valence")       # these tests are about the valence axis
         return w
 
     def test_the_valence_axis_round_trips(self, qapp, result):
