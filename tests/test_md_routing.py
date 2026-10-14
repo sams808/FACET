@@ -62,7 +62,7 @@ PATHS = [path for _, path in MD_FILES]
 
 CRYSTAL_TABS = ["Site", "Tools", "Diffraction", "PDF", "EXAFS", "Planes",
                 "Styles", "Volume", "Disorder", "Theme"]
-MODEL_TABS = ["Setup", "Results", "Highlight", "Notes"]
+MODEL_TABS = ["Setup", "Results", "Highlight", "Atom", "Notes"]
 
 
 def _plain_xyz(path: Path, frames: int = 2, comment: str = " Atoms. Timestep: {}"

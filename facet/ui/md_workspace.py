@@ -82,7 +82,9 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QSplitter,
     QTabWidget,
+    QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -775,6 +777,11 @@ class ModelController(QObject):
         self.view.ready.connect(self._on_view_ready)
         self.view.measured.connect(self.statusMessage)
         self.view.contextRequested.connect(self._on_context_menu)
+        self.view.sitePicked.connect(self._on_atom_picked)
+        # the atom under investigation: its frame row and its SiteResult at
+        # the strip's threshold, shown in the Atom tab and the explorer
+        self._atom_row: int | None = None
+        self._atom_result = None
         # the environment isolated by the right-click menu: (frame row,
         # shells), or None for the whole frame
         self._isolated: tuple[int, int] | None = None
@@ -784,12 +791,27 @@ class ModelController(QObject):
         self.strip = ThresholdStrip(theme=self.theme)
         self.strip.thresholdChanged.connect(self._on_strip_threshold)
         self.strip.statusMessage.connect(self._relay_status)
+        # The bottom strip: the mean staircase, and beside it the crystal
+        # workspace's cutoff explorer for the atom under investigation --
+        # hidden until an atom is clicked. One threshold between them.
+        from .cutoff_explorer import CutoffExplorer
+
+        self.atom_explorer = CutoffExplorer()
+        self.atom_explorer.set_theme(self.theme)
+        self.atom_explorer.thresholdChanged.connect(
+            lambda v: self.strip.set_threshold(float(v), emit=True))
+        self.atom_explorer.hide()
+        self.bottom = QSplitter(Qt.Horizontal)
+        self.bottom.addWidget(self.strip)
+        self.bottom.addWidget(self.atom_explorer)
+        self.bottom.setStretchFactor(0, 2)
+        self.bottom.setStretchFactor(1, 3)
 
     @property
     def widgets(self) -> tuple:
         """The five widgets the window puts in its stacked regions."""
         return (self.column, self.elements, self.toolbar, self.canvas,
-                self.strip)
+                self.bottom)
 
     def _build_workspace(self) -> None:
         """The four tabs, built once the file has read (and again after a
@@ -842,6 +864,17 @@ class ModelController(QObject):
         self.tabs.addTab(self.setup_tab, "Setup")
         self.tabs.addTab(self.results_page, "Results")
         self.tabs.addTab(self.highlight_scroll, "Highlight")
+        # the Atom tab: the Site tab of the crystal workspace for the atom
+        # clicked in the frame (facet.core.md_site)
+        self.atom_text = QTextBrowser()
+        self.atom_text.setOpenExternalLinks(False)
+        self.atom_text.setHtml(
+            f"<p style='color:{chrome.muted_hex(self.theme)}'>Click an atom "
+            "in the frame to read its coordination, bond-valence sum, "
+            "contacts and staircase, as the Site tab does for a crystal "
+            "site. Right-click it for the angles, its environment and an "
+            "XYZ of it.</p>")
+        self.tabs.addTab(self.atom_text, "Atom")
         self.tabs.addTab(self.notes_text, "Notes")
         self.tabs.setMinimumWidth(400)
         self.tabs.tabBar().setElideMode(Qt.ElideNone)
@@ -1589,6 +1622,7 @@ class ModelController(QObject):
             self.view.set_threshold(float(v_bond_vu))
             self._fill_elements()
             self._schedule_redraw()
+            self._refresh_atom(float(v_bond_vu))
 
     @Slot(str)
     def _on_element_chosen(self, symbol: str) -> None:
@@ -1637,6 +1671,15 @@ class ModelController(QObject):
             header.setEnabled(False)
             menu.addSeparator()
             position = np.asarray(scene.atom_position[atom_index], float)
+            if fv.table is not None:
+                menu.addAction(f"Investigate {label}").triggered.connect(
+                    lambda _=False, r=row: self.investigate(r))
+                if self.view.angle_hub == atom_index:
+                    menu.addAction("Hide the angles").triggered.connect(
+                        lambda _=False: self.view.set_angle_hub(None))
+                else:
+                    menu.addAction(f"Show the angles at {label}").triggered.connect(
+                        lambda _=False, i=atom_index: self.view.set_angle_hub(i))
             menu.addAction(f"Rotate about {label}").triggered.connect(
                 lambda _=False, p=position, t=label: self.view.center_on(p, t))
             if fv.table is not None:
@@ -1750,6 +1793,83 @@ class ModelController(QObject):
         if words:
             self.statusMessage.emit(f"Highlighting {words}.")
         self._schedule_redraw()
+
+    # -- one atom under investigation ----------------------------------------
+    def _on_atom_picked(self, atom_index: int) -> None:
+        scene = self.view.scene
+        if scene is None or atom_index < 0 or atom_index >= scene.n_atoms:
+            return
+        self.investigate(int(scene.atom_site[atom_index]), show=False)
+
+    def atom_result(self, row: int, v_bond: float | None = None):
+        """The ``SiteResult`` of frame row ``row`` at the strip's threshold
+        (or ``v_bond``): the crystal workspace's analysis of one atom."""
+        from ..core.md_site import site_result_for_atom
+
+        fv = self.frame_view
+        if fv is None or fv.table is None:
+            return None
+        if v_bond is None:
+            v_bond = self._strip_v_bond()
+            v_bond = fv.v_bond_vu if v_bond is None else v_bond
+        return site_result_for_atom(fv.frame, fv.table, row, v_bond=v_bond,
+                                    v_list=fv.v_list_vu, k=fv.k)
+
+    def investigate(self, row: int, show: bool = True) -> None:
+        """Put frame row ``row`` in the Atom tab and the explorer, as the
+        crystal workspace does for a site; ``show`` brings the tab up."""
+        result = self.atom_result(row)
+        if result is None:
+            self.statusMessage.emit("The frame is drawn without bonds: no "
+                                    "contacts to read for an atom.")
+            return
+        self._atom_row = int(row)
+        self._atom_result = result
+        fv = self.frame_view
+        self.atom_explorer.set_result(result)
+        self.atom_explorer.set_pin(fv.v_bond_vu if fv is not None else None)
+        self.atom_explorer.set_threshold(result.v_bond)
+        if self.atom_explorer.isHidden():
+            self.atom_explorer.show()
+        # a widget shown into a splitter gets no room until told, in pixels
+        sizes = self.bottom.sizes()
+        if len(sizes) == 2 and sizes[1] < 200:
+            total = max(sum(sizes), self.bottom.width(), 600)
+            self.bottom.setSizes([int(total * 0.42), int(total * 0.58)])
+        self._fill_atom_text()
+        if show:
+            self.show_tab("Atom")
+        self.statusMessage.emit(
+            f"{result.label}: CN {result.cn_valence}, bond-valence sum "
+            f"{result.bvs:.2f} v.u. at {result.v_bond:.4f}; the Atom tab and "
+            "the explorer read it.")
+
+    def _refresh_atom(self, v_bond: float) -> None:
+        """The strip moved: the atom's numbers at the new threshold."""
+        if self._atom_row is None or self._atom_result is None:
+            return
+        from ..core.coordination import reclassify
+
+        self._atom_result = reclassify(self._atom_result, v_bond)
+        self.atom_explorer.set_result(self._atom_result)
+        self.atom_explorer.set_threshold(v_bond)
+        self._fill_atom_text()
+
+    def _fill_atom_text(self) -> None:
+        from .site_html import site_html
+
+        r = self._atom_result
+        if r is None:
+            return
+        fv = self.frame_view
+        head = (f"{r.element}{'' if r.ox is None else f'{r.ox:+d}'}"
+                f" &middot; frame {fv.k if fv is not None else '?'}"
+                f" &middot; row {r.site_index}"
+                f" &middot; oxidation state from {r.ox_source}")
+        self.atom_text.setHtml(site_html(
+            r, r.v_bond, chrome.muted_hex(self.theme), headline=head,
+            apriori_reason="an MD frame has no bond network to split "
+                           "the variation by", show_running=True))
 
     def _frame_data_at(self, v_bond: float):
         """The FrameData of the frame shown at ``v_bond`` (the strip's),
@@ -2199,6 +2319,7 @@ class ModelController(QObject):
         self.theme = theme
         self.view.set_theme(theme)
         self.toolbar.fit_combos()
+        self.atom_explorer.set_theme(theme)
         for widget in (self.page, self.highlight, self.browser, self.strip,
                        self.read_panel):
             if widget is None:

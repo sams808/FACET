@@ -182,7 +182,7 @@ def test_an_opened_model_becomes_an_entry_with_its_workspace(qapp, window):
     assert entry.name.splitlines() == ["glass.extxyz", "5 atoms · 2 frames"]
     tabs = controller.tabs
     assert [tabs.tabText(i) for i in range(tabs.count())] == [
-        "Setup", "Results", "Highlight", "Notes"]
+        "Setup", "Results", "Highlight", "Atom", "Notes"]
     for widget, stack in zip(controller.widgets, window._stacks()):
         assert stack.currentWidget() is widget
     assert window.sites_dock.windowTitle() == "Elements"

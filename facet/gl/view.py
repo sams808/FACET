@@ -84,6 +84,8 @@ class StructureView(QOpenGLWidget):
         self._button = Qt.NoButton
         self._selected: int | None = None
         self._measure_chain: list[int] = []
+        # the atom whose bond angles are drawn as arcs, or None
+        self._angle_hub: int | None = None
         self._status = ""
         self.labels = labels_mod.LabelSettings()
         self.structure = None
@@ -134,6 +136,7 @@ class StructureView(QOpenGLWidget):
         # following the cursor -- keeps the clicked atom; a new scene does not.
         if not same:
             self._selected = None
+            self._angle_hub = None
         self._measure_chain.clear()
         if self._renderer is not None:
             self.makeCurrent()
@@ -630,6 +633,8 @@ class StructureView(QOpenGLWidget):
             self._paint_selection(painter)
         if len(self._measure_chain) >= 2:
             self._paint_measurement(painter)
+        if self._angle_hub is not None:
+            self._paint_angles(painter)
         if self.show_axis_gizmo and self.structure is not None:
             self._paint_axis_gizmo(painter)
         if self._status:
@@ -876,6 +881,114 @@ class StructureView(QOpenGLWidget):
         for point in px:
             painter.drawEllipse(QPointF(point[0], point[1]),
                                 3 * scale, 3 * scale)
+        # the angle at each interior vertex, as the arc between its two
+        # segments; the value itself is placed by the measurement labels
+        for a, p, b in zip(px[:-2], px[1:-1], px[2:]):
+            self._paint_arc(painter, p, a, b, scale, QColor(120, 220, 255))
+
+    # -- bond angles ---------------------------------------------------------
+    def set_angle_hub(self, index: int | None) -> None:
+        """Draw the angle between every pair of bonds at ``index`` as an arc
+        with its value, or (``None``) draw none."""
+        if index is not None and (self.scene is None
+                                  or index >= self.scene.n_atoms):
+            index = None
+        self._angle_hub = index
+        self.update()
+
+    @property
+    def angle_hub(self) -> int | None:
+        return self._angle_hub
+
+    def hub_angles(self) -> list[tuple[int, int, float]]:
+        """(bond i, bond j, angle in degrees) for every pair of bonds at the
+        hub, in world space; the arcs draw these."""
+        s = self.scene
+        hub = self._angle_hub
+        if s is None or hub is None or s.n_bonds == 0 \
+                or len(s.bond_atoms) != s.n_bonds:
+            return []
+        ends = np.asarray(s.bond_atoms, int)
+        above = np.asarray(s.bond_valence) >= s.v_bond
+        first = np.flatnonzero((ends[:, 0] == hub) & above)
+        second = np.flatnonzero((ends[:, 1] == hub) & above)
+        tips = [np.asarray(s.bond_b[i], float) for i in first] + \
+               [np.asarray(s.bond_a[i], float) for i in second]
+        bonds = list(first) + list(second)
+        centre = np.asarray(s.atom_position[hub], float)
+        out = []
+        for x in range(len(tips)):
+            for y in range(x + 1, len(tips)):
+                u, v = tips[x] - centre, tips[y] - centre
+                nu, nv = np.linalg.norm(u), np.linalg.norm(v)
+                if nu < 1e-9 or nv < 1e-9:
+                    continue
+                ang = float(np.degrees(np.arccos(
+                    np.clip(float(u @ v) / (nu * nv), -1.0, 1.0))))
+                out.append((int(bonds[x]), int(bonds[y]), ang))
+        return out
+
+    def _paint_angles(self, painter: QPainter) -> None:
+        s = self.scene
+        hub = self._angle_hub
+        pairs = self.hub_angles()
+        if not pairs:
+            return
+        scale = self._view_scale()
+        centre = np.asarray(s.atom_position[hub], float)
+        ends = np.asarray(s.bond_atoms, int)
+
+        def tip(bond: int) -> np.ndarray:
+            return np.asarray(s.bond_b[bond] if ends[bond, 0] == hub
+                              else s.bond_a[bond], float)
+
+        colour = QColor(255, 196, 92) if not (
+            self.theme and self.theme.is_light_background) else QColor(160, 96, 0)
+        fnt = QFont(painter.font())
+        fnt.setPointSizeF(max(6.5, 8.0 * scale))
+        painter.setFont(fnt)
+        # the largest arcs first, so the small ones draw on top of them
+        for n, (i, j, ang) in enumerate(sorted(pairs, key=lambda t: -t[2])):
+            px = self._visible(np.array([centre, tip(i), tip(j)]))
+            # a different fraction of the bond's drawn length for each
+            # pair, so the arcs sit at different radii and read apart
+            self._paint_arc(painter, px[0], px[1], px[2], scale, colour,
+                            fraction=0.22 + 0.07 * (n % 5),
+                            text=f"{ang:.1f}°")
+        painter.setFont(self.font())
+
+    @staticmethod
+    def _paint_arc(painter: QPainter, p, a, b, scale: float, colour: QColor,
+                   *, radius: float | None = None, fraction: float = 0.35,
+                   text: str | None = None) -> None:
+        """The arc at ``p`` from the direction of ``a`` to that of ``b``,
+        the shorter way round, in screen space; ``text`` at its middle."""
+        import math
+
+        u = np.array([a[0] - p[0], a[1] - p[1]], float)
+        v = np.array([b[0] - p[0], b[1] - p[1]], float)
+        nu, nv = np.linalg.norm(u), np.linalg.norm(v)
+        if nu < 1e-6 or nv < 1e-6:
+            return
+        # a fraction of the shorter arm, so the arc scales with the zoom and
+        # never crosses the atoms at the arms' ends
+        r = radius if radius is not None else fraction * min(nu, nv)
+        r = max(min(r, 0.6 * min(nu, nv)), 4.0 * scale)
+        # Qt measures angles counter-clockwise with y upwards: negate y
+        start = math.degrees(math.atan2(-u[1], u[0]))
+        end = math.degrees(math.atan2(-v[1], v[0]))
+        span = (end - start + 540.0) % 360.0 - 180.0
+        painter.setPen(QPen(colour, 1.4 * scale, Qt.SolidLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawArc(QRectF(p[0] - r, p[1] - r, 2 * r, 2 * r),
+                        int(round(start * 16)), int(round(span * 16)))
+        if text:
+            mid = math.radians(start + span / 2.0)
+            tx = p[0] + (r + 9 * scale) * math.cos(mid)
+            ty = p[1] - (r + 9 * scale) * math.sin(mid)
+            painter.setPen(colour)
+            painter.drawText(QRectF(tx - 30, ty - 8, 60, 16), Qt.AlignCenter,
+                             text)
 
     @staticmethod
     def _ink(rgb) -> QColor:

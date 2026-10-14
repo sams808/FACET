@@ -107,6 +107,7 @@ says what is missing; what remains planned is listed as such.
 | **Bond search by partial bond valence** | – | – | **done** |
 | **CN as a function of threshold (the staircase)** | – | – | **done** |
 | **Plateau analysis — is this CN a result or a choice?** | – | – | **done** |
+| **Bond angles as arcs** | – | – | **done** | right-click an atom in either workspace: every pair of bonds at it drawn as an arc with its value, at the threshold in force; a three-atom measurement draws its angle the same way |
 | **Focus the 3D view within the cut** | – | – | **done** | everything but the selected site and the atoms within the distance the threshold means is dimmed; a translucent sphere of that radius is drawn and follows the cursor on the explorer; the status bar counts what is inside |
 | **The threshold drives every consumer** | – | – | **done** | moving the cut re-sums the cached contacts (`coordination.reclassify`): labels, site list, tables, report and both bottom plots read the numbers at the threshold in force; a pin marks the threshold the file was opened at |
 | **The running bond-valence sum, shell by shell, on the explorer** | – | – | **done** | the right axis of the explorer: the sum over the contacts counted so far, its area filled, the next contact's step shaded with its increment, the size of the site's charge for scale; *View ▸ Cutoff explorer* offers the distance axis, the sum as % of charge, stacked panes, one bar per contact, a running-sum column in the Site tab, and bond labels by share of the sum |
@@ -343,6 +344,7 @@ No model from the group's own work has been analysed yet.
 | Void regions | **done** | the empty spheres of the Delaunay tetrahedra joined where a probe of a stated radius passes between them: union volume, elongation, extent, dimensionality, percolation and the atoms lining each region |
 | Results as figures beside their rows | **done** | the spread across frames drawn on every figure; SVG, PDF or 600 dpi PNG, with colour never the only cue |
 | Threshold slider on one frame | **done** | moves v_bond without a new search; the staircase of mean CN against threshold, clicked to set it |
+| The Atom tab | **done** | click an atom: the crystal workspace's Site tab for that atom (CN, BVS, ECoN, φ, vector, plateau, contacts with running sum) from the frame's valence table, and the cutoff explorer beside the strip with the atom's own staircase and running sum; strip and explorer share one threshold |
 | Right-click on the frame | **done** | rotate about an atom; isolate it with one or two shells of neighbours at the threshold (the rest left out); export the environment as XYZ, minimum-image unwrapped, with row, id, shell and distance per line; show the whole frame again |
 | A result into a highlight | **done** | double-click a Qⁿ or CN distribution or a BVS / φ histogram in the Results tree: the Highlight tab opens with the rule that shows it (equals on the mode class, or the mode bin's bounds) |
 | 'Equal to' rule | **done** | show only atoms whose CN, former CN or Qⁿ equals a value |

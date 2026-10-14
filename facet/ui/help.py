@@ -980,7 +980,9 @@ survives zooming.</p>
    centre of rotation with it.</td></tr>
 <tr><td><b>Wheel</b></td><td>Zoom</td></tr>
 <tr><td><b>Left-click an atom</b></td><td>Select that site</td></tr>
-<tr><td><b>Right-click</b></td><td>Context menu for the atom under the cursor:
+<tr><td><b>Right-click</b></td><td>Context menu for the atom under the cursor
+(<i>Show the angles at …</i> draws every bond angle at it as an arc with its
+value; a measurement chain of three atoms draws its angle the same way):
    colour, radius, visibility, its polyhedron, and what to turn the view
    about</td></tr>
 <tr><td><b>Click two atoms</b></td><td>Distance</td></tr>
@@ -1508,6 +1510,17 @@ most populated class as an equals rule ('Si with Q<sup>4</sup>'), or the
 mode bin as a pair of bounds &mdash; and the view follows. Change the value
 to see another class. The Overview reads each Q<sup><i>n</i></sup> class as
 a count as well as a fraction ('300 Si Q4 (75 %)').</p>
+<p><b>The Atom tab.</b> Click an atom in the frame and the Atom tab reads
+it as the Site tab reads a crystal site: coordination number, bond-valence
+sum with its uncertainty, ECoN, &phi;, the bond-valence vector, the mean
+bond length and spread, the plateau, and every contact with its distance,
+valence and running sum. The cutoff explorer appears beside the threshold
+strip with that atom's own staircase and running sum, its pin at the run's
+threshold; dragging either the strip or the explorer moves the other, and
+the atom's numbers follow. The contacts are the frame's valence table
+rows, so nothing is searched again. <i>Investigate …</i> in the right-click
+menu brings the tab up; <i>Show the angles at …</i> draws every bond angle
+at the atom as an arc with its value.</p>
 <p><b>One atom's environment.</b> Right-click an atom in the frame: rotate
 about it; <i>isolate</i> it with its bonded neighbours, or with their
 neighbours too, the rest of the frame left out; or <i>export the
