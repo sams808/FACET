@@ -300,6 +300,44 @@ def _quads_to_triangles(points, normals):
             tri_n.reshape(n, per_atom, 3).astype(np.float32))
 
 
+def sphere_mesh(centre, radius: float, color, alpha: float = 0.18, *,
+                rings: int = 18, segments: int = 36) -> OverlayMesh:
+    """A translucent sphere of one radius about one point, as an overlay.
+
+    The focus sphere: its radius is the distance the current bond threshold
+    corresponds to for the selected site, so the atoms inside it are the
+    ones the cut counts. A UV sphere with outward normals; one part, anchored
+    at the centre, so the slab filter keeps or drops it whole.
+    """
+    centre = np.asarray(centre, np.float32)
+    r = float(radius)
+    rings = max(int(rings), 3)
+    segments = max(int(segments), 3)
+    theta = np.linspace(0.0, np.pi, rings + 1)
+    phi = np.linspace(0.0, 2 * np.pi, segments + 1)
+    # unit points on the (rings+1) x (segments+1) grid
+    st, ct = np.sin(theta)[:, None], np.cos(theta)[:, None]
+    sp, cp = np.sin(phi)[None, :], np.cos(phi)[None, :]
+    px = (st * cp).astype(np.float32)
+    py = (st * sp).astype(np.float32)
+    pz = np.broadcast_to(ct, px.shape).astype(np.float32)
+    grid = np.stack([px, py, pz], axis=-1)          # (rings+1, segments+1, 3)
+    tri = []
+    for i in range(rings):
+        a, b = grid[i, :-1], grid[i, 1:]
+        c, d = grid[i + 1, :-1], grid[i + 1, 1:]
+        tri.append(np.stack([a, c, b], axis=1))
+        tri.append(np.stack([b, c, d], axis=1))
+    unit = np.concatenate(tri, axis=0).reshape(-1, 3)
+    vertices = (centre[None, :] + r * unit).astype(np.float32)
+    normals = unit.astype(np.float32)
+    return OverlayMesh(vertices=vertices, normals=normals,
+                       color=tuple(float(x) for x in color[:3]),
+                       alpha=float(alpha),
+                       anchors=centre.reshape(1, 3),
+                       part_of=np.zeros(len(vertices) // 3, np.int32))
+
+
 def lobe_meshes(origins, directions, lengths, *, radius: float = LOBE_RADIUS,
                 around: int = AROUND, along: int = ALONG, atoms=None,
                 color=LOBE_COLOR_LIGHT, alpha: float = LOBE_ALPHA,

@@ -527,6 +527,16 @@ and the sum below on their own axes; <b>one bar per contact</b> under the
 rail, each contact's own contribution with the running sum above it; a
 <b>running-sum column</b> in the Site tab's contact table; and a shortcut to
 the bond-label mode that writes on each drawn bond its share of the sum.</p>
+<p><b>Focus the 3D view within the cut</b>, in the same menu, dims every atom
+but the selected site and those within the distance the threshold
+corresponds to for it &mdash; the explorer's distance axis read at the cursor
+&mdash; and draws that sphere, translucent, about the site. Drag the cursor
+and the sphere grows or shrinks with it; the atoms that come inside are
+drawn in full, with the bonds among them, so the coordination the cut gives
+is seen on the structure as well as counted. The status bar states how many
+atoms are inside and at what radius. The focused atom is the one you
+clicked when it belongs to the selected site, else the site's atom nearest
+the middle of the drawn block.</p>
 <p {note}>Both splitters can be dragged, and the docks can be undocked or
 closed. The window remembers nothing between runs, so a layout you liked has to
 be set up again — that is a limitation, not a preference.</p>

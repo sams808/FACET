@@ -58,6 +58,13 @@ FALLBACK_ELLIPSOID_RADIUS = 0.08
 ELLIPSOID_BOND_SCALE = 0.35
 
 
+# The focus dims like the Model workspace's "Dim the rest": a dimmed atom
+# keeps a fifth of its colour over the background and 40 % of its radius.
+FOCUS_DIM_KEEP = 0.20
+FOCUS_DIM_ATOM_RADIUS = 0.40
+FOCUS_DIM_BOND_RADIUS = 0.35
+
+
 @dataclass
 class Scene:
     """Everything to draw, as flat arrays ready for a vertex buffer."""
@@ -141,6 +148,15 @@ class Scene:
     overlay_meshes: list = field(default_factory=list)
     show_vectors: bool = False
     show_void_cones: bool = False
+    # The focus: one drawn atom and a radius about it. Everything outside the
+    # sphere is dimmed, the sphere itself is drawn translucent, and the radius
+    # is the distance the bond threshold corresponds to for that site, so
+    # the cursor on the explorer grows and shrinks it. None: no focus.
+    focus_atom: int | None = None
+    focus_radius: float = 0.0
+    focus_color: tuple = (0.95, 0.72, 0.20)
+    _atom_base_color: np.ndarray | None = field(default=None, repr=False)
+    _atom_base_radius: np.ndarray | None = field(default=None, repr=False)
     # Length = vector_scale x phi x mean bond length. The only imported number
     # in the construction, and it is a drawing scale rather than a distance to
     # anything, which is why it is here and not in the analysis.
@@ -209,6 +225,11 @@ class Scene:
         """
         self.overlay_meshes = []
         theme = theme or self.theme
+        if self.focus_atom is not None and 0 <= self.focus_atom < self.n_atoms \
+                and self.focus_radius > 0:
+            self.overlay_meshes.append(vectors_mod.sphere_mesh(
+                self.atom_position[self.focus_atom], self.focus_radius,
+                self.focus_color))
         if self.n_bonds == 0 or self.n_atoms == 0:
             self.vector_sums = None
             return
@@ -387,6 +408,75 @@ class Scene:
         # The vector sum is over the contacts above the threshold, so it moves
         # with the threshold -- which is the point of showing it here at all.
         self.rebuild_overlays()
+        self._apply_focus()
+
+    # -- the focus -----------------------------------------------------------
+    def set_focus(self, atom: int | None, radius: float = 0.0) -> None:
+        """Dim everything but the atoms within ``radius`` of ``atom``, and
+        draw that sphere. ``None`` clears it and restores the colours."""
+        if atom is None or atom < 0 or atom >= self.n_atoms:
+            self.clear_focus()
+            return
+        if self._atom_base_color is None \
+                or len(self._atom_base_color) != self.n_atoms:
+            self._atom_base_color = np.array(self.atom_color, np.float32)
+            self._atom_base_radius = np.array(self.atom_radius, np.float32)
+        self.focus_atom = int(atom)
+        self.focus_radius = float(radius)
+        self.rebuild_overlays()
+        self._apply_focus()
+
+    def clear_focus(self) -> None:
+        had = self.focus_atom is not None
+        self.focus_atom = None
+        self.focus_radius = 0.0
+        if self._atom_base_color is not None \
+                and len(self._atom_base_color) == self.n_atoms:
+            self.atom_color = np.array(self._atom_base_color, np.float32)
+            self.atom_radius = np.array(self._atom_base_radius, np.float32)
+        self._atom_base_color = None
+        self._atom_base_radius = None
+        if had:
+            self.rebuild_overlays()
+            if self.n_bonds:
+                # the bond colours are restyle's; recompute them undimmed
+                self.restyle(self.v_bond)
+
+    def focus_mask(self) -> np.ndarray | None:
+        """Which drawn atoms lie within the focus sphere (centre included)."""
+        if self.focus_atom is None or self.focus_atom >= self.n_atoms:
+            return None
+        centre = self.atom_position[self.focus_atom]
+        d = np.linalg.norm(np.asarray(self.atom_position, np.float32)
+                           - centre[None, :], axis=1)
+        return d <= self.focus_radius + 1e-6
+
+    def _apply_focus(self) -> None:
+        """Dim the atoms outside the sphere and the bonds not wholly inside
+        it, from the undimmed arrays. Called after every restyle, because the
+        restyle writes fresh bond colours."""
+        keep = self.focus_mask()
+        if keep is None or self._atom_base_color is None \
+                or len(self._atom_base_color) != self.n_atoms:
+            return
+        bg = np.array(getattr(self.theme, "background", None)
+                      or theme_mod.FALLBACK_BACKGROUND, np.float32)
+        base_c, base_r = self._atom_base_color, self._atom_base_radius
+        pale = (1 - FOCUS_DIM_KEEP) * bg + FOCUS_DIM_KEEP * base_c
+        self.atom_color = np.where(keep[:, None], base_c, pale).astype(np.float32)
+        self.atom_radius = np.where(keep, base_r,
+                                    base_r * FOCUS_DIM_ATOM_RADIUS).astype(np.float32)
+        if self.n_bonds and len(self.bond_atoms) == self.n_bonds:
+            ends = np.asarray(self.bond_atoms, int)
+            inside = keep[ends[:, 0]] & keep[ends[:, 1]]
+            for name in ("bond_color_a", "bond_color_b"):
+                c = getattr(self, name)
+                setattr(self, name, np.where(inside[:, None], c,
+                                             (1 - FOCUS_DIM_KEEP) * bg
+                                             + FOCUS_DIM_KEEP * c).astype(np.float32))
+            self.bond_radius = np.where(inside, self.bond_radius,
+                                        self.bond_radius * FOCUS_DIM_BOND_RADIUS
+                                        ).astype(np.float32)
 
     def bonds_above_threshold(self) -> int:
         return int((self.bond_valence >= self.v_bond).sum())

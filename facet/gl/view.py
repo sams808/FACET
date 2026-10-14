@@ -106,6 +106,7 @@ class StructureView(QOpenGLWidget):
         self.update()
 
     def set_scene(self, scene: Scene, reframe: bool = True) -> None:
+        same = scene is not None and scene is self.scene
         self.scene = scene
         if scene is not None and scene.theme is not None:
             self.theme = scene.theme
@@ -129,7 +130,10 @@ class StructureView(QOpenGLWidget):
             # name an atom the camera is no longer turning about.
             self._pivot = None
             self.pivotChanged.emit(None)
-        self._selected = None
+        # Re-uploading the scene that is already shown -- the focus sphere
+        # following the cursor -- keeps the clicked atom; a new scene does not.
+        if not same:
+            self._selected = None
         self._measure_chain.clear()
         if self._renderer is not None:
             self.makeCurrent()
@@ -232,6 +236,18 @@ class StructureView(QOpenGLWidget):
     def select_atom(self, index: int | None) -> None:
         self._selected = index
         self.update()
+
+    @property
+    def selected_atom(self) -> int | None:
+        return self._selected
+
+    def set_focus(self, atom: int | None, radius: float = 0.0) -> None:
+        """Focus the drawn scene on one atom within one radius, or clear
+        it; the arrays change, so the scene is uploaded again."""
+        if self.scene is None:
+            return
+        self.scene.set_focus(atom, radius)
+        self.set_scene(self.scene, reframe=False)
 
     def save_vector(self, path, background=None, scale: float = 1.0,
                     width_mm: float = 170.0, title: str = ""):

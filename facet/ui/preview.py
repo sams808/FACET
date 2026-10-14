@@ -1735,6 +1735,7 @@ class PreviewWindow(QMainWindow):
         self.explorer.set_result(current)
         self.explorer.set_pin(pin)
         self.explorer.set_threshold(self.project.v_bond)
+        self._apply_focus()
         self._update_analysis()
         self.utilities.update_for(
             active.structure if active else None,
@@ -1881,6 +1882,55 @@ class PreviewWindow(QMainWindow):
             lambda _=False, i=site_index: self._add_site_to_compare(i))
         return menu
 
+    def _focus_target(self):
+        """(drawn atom, radius in angstrom) for the focus, or None.
+
+        The atom is the one clicked when it belongs to the selected site,
+        else the site's drawn atom nearest the centre of the scene. The
+        radius is the distance the bond threshold corresponds to, read
+        through the parameter the site is read against -- the same mapping
+        as the explorer's distance axis and its top label."""
+        scene = getattr(self, "scene", None)
+        result = self._current_result()
+        if scene is None or result is None or scene.n_atoms == 0:
+            return None
+        param = next((c.param for c in result.contacts if c.param is not None),
+                     None)
+        if param is None:
+            return None
+        radius = float(param.distance_for(max(self.project.v_bond, 1e-9)))
+        site = result.site_index
+        rows = np.flatnonzero(np.asarray(scene.atom_site) == site)
+        if len(rows) == 0:
+            return None
+        picked = self.view.selected_atom
+        if picked is not None and picked < scene.n_atoms \
+                and int(scene.atom_site[picked]) == site:
+            return int(picked), radius
+        centre = np.asarray(scene.center, float)
+        d = np.linalg.norm(np.asarray(scene.atom_position)[rows] - centre, axis=1)
+        return int(rows[int(np.argmin(d))]), radius
+
+    def _apply_focus(self) -> None:
+        """Focus the view on the selected site within the cut, or clear it."""
+        action = getattr(self, "focus_action", None)
+        scene = getattr(self, "scene", None)
+        if scene is None or action is None:
+            return
+        target = self._focus_target() if action.isChecked() else None
+        if target is None:
+            if scene.focus_atom is not None:
+                self.view.set_focus(None)
+            return
+        atom, radius = target
+        self.view.set_focus(atom, radius)
+        mask = scene.focus_mask()
+        n = int(mask.sum()) - 1 if mask is not None else 0
+        self.statusBar().showMessage(
+            f"Focus: {n} atom{'s' if n != 1 else ''} within {radius:.3f} Å of "
+            f"{scene.atom_label[atom] if atom < len(scene.atom_label) else 'the site'}"
+            f" (v_bond {self.project.v_bond:.4f})", 4000)
+
     def _report_on_cifs(self) -> None:
         """File > Report on CIFs…: the open crystals are offered as a start."""
         from .report_dialog import ReportDialog
@@ -1939,6 +1989,16 @@ class PreviewWindow(QMainWindow):
             act.toggled.connect(lambda on, n=name: self.explorer.set_option(n, on))
             m.addAction(act)
             self.explorer_option_actions[name] = act
+        m.addSeparator()
+
+        self.focus_action = QAction("F&ocus the 3D view within the cut", self)
+        self.focus_action.setCheckable(True)
+        self.focus_action.setToolTip(
+            "Dim every atom but those within the distance the threshold "
+            "corresponds to for the selected site, draw that sphere, and let "
+            "the cursor on the explorer grow and shrink it.")
+        self.focus_action.toggled.connect(lambda _on: self._apply_focus())
+        m.addAction(self.focus_action)
         m.addSeparator()
 
         self.running_sum_column = QAction("&Running-sum column in the Site tab", self)
@@ -2058,6 +2118,7 @@ class PreviewWindow(QMainWindow):
         current = self._current_result()
         self.explorer.set_result(current)
         self.explorer.set_threshold(self.project.v_bond)
+        self._apply_focus()
         self._update_analysis()
         if self._compare_ws is not None:
             self._compare_ws.set_v_bond(self.project.v_bond)
