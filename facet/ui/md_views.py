@@ -863,6 +863,48 @@ class _NameDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+def rules_for_result(name: str, container) -> tuple[list[dict], str]:
+    """The highlight rules that show one result on the frame, and words.
+
+    A Qn or CN distribution picks the most populated category with an
+    equals rule ('Qn Si = 4'); a binned BVS or phi picks the mode bin with a
+    pair of rules; anything else gives no rule. The rules are dicts so the
+    Highlight tab's rows can be filled without this module importing it.
+    """
+    from ..core.md_stats import Distribution, Histogram
+    match = re.fullmatch(r"(Qn|CN) ([A-Z][a-z]?)(?: \((?:BV|distance)\))?", name)
+    if match and isinstance(container, Distribution) and len(container.keys):
+        descriptor, element = match[1], match[2]
+        mean = np.asarray(container.mean, float)
+        if not np.isfinite(mean).any():
+            return [], ""
+        key = container.keys[int(np.nanargmax(mean))]
+        try:
+            value = float(key)
+        except (TypeError, ValueError):
+            return [], ""
+        label = f"Q{int(value)}" if descriptor == "Qn" else f"CN {int(value)}"
+        return ([{"element": element, "descriptor": descriptor, "sense": "=",
+                  "value": value}],
+                f"{element} atoms with {label} (the most populated class)")
+    match = re.fullmatch(r"(BVS|phi) ([A-Z][a-z]?)(?: \((?:BV|distance)\))?", name)
+    if match and isinstance(container, Histogram):
+        descriptor, element = match[1], match[2]
+        counts = np.asarray(container.mean, float)
+        edges = np.asarray(container.edges, float)
+        if not np.isfinite(counts).any() or len(edges) < 2:
+            return [], ""
+        k = int(np.nanargmax(counts))
+        lo, hi = float(edges[k]), float(edges[min(k + 1, len(edges) - 1)])
+        return ([{"element": element, "descriptor": descriptor, "sense": "≥",
+                  "value": lo},
+                 {"element": element, "descriptor": descriptor, "sense": "≤",
+                  "value": hi}],
+                f"{element} atoms with {descriptor} in the mode bin "
+                f"{lo:g}–{hi:g}")
+    return [], ""
+
+
 class ResultBrowser(QWidget):
     """A ModelResult as a tree beside a view of the item chosen.
 
@@ -880,6 +922,10 @@ class ResultBrowser(QWidget):
     exportFinished = Signal(object)
     exportFailed = Signal(str)
     statusMessage = Signal(str)
+    # a double-click on a result: the highlight rules that show it on the
+    # frame, as a list of dicts (element, descriptor, sense, value), and a
+    # sentence saying what they pick
+    highlightRequested = Signal(object, str)
 
     # The width of the tree's name column: the longest names two levels
     # down ('connectivity all formers (distance)') in a 9 pt Segoe UI.
@@ -1010,6 +1056,7 @@ class ResultBrowser(QWidget):
         self.export_all_button.clicked.connect(self._export_menu)
         self.provenance_button.toggled.connect(self.provenance_text.setVisible)
         self.tree.currentItemChanged.connect(self._on_current)
+        self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.view.figure_button.clicked.connect(self.choose_export_figure)
         self.view.rows_button.clicked.connect(self.choose_export_rows)
         # a figure saved from the plot's own context menu says so here
@@ -1254,6 +1301,20 @@ class ResultBrowser(QWidget):
     def _on_current(self, item, _previous=None) -> None:
         if item is not None:
             self._show(item)
+
+    def _on_double_click(self, item, _column: int = 0) -> None:
+        """Jump to the Highlight tab with the rules that show this result."""
+        role = item.data(0, _ROLE) if item is not None else None
+        if not role or role[0] != "item" or self.result is None:
+            return
+        container = self.result.outputs[role[1]].tables.get(role[2])
+        rules, words = rules_for_result(role[2], container)
+        if rules:
+            self.highlightRequested.emit(rules, words)
+        else:
+            self.statusMessage.emit(
+                f"{display_name(role[2])} is not a per-atom descriptor the "
+                "Highlight tab can pick atoms by.")
 
     def _show(self, item: QTreeWidgetItem) -> None:
         result = self.result

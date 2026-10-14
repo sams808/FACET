@@ -1493,13 +1493,30 @@ element colour); by Q<sup><i>n</i></sup> or by modifier-rich O, which read
 the formers ticked in Setup or those of the last run; or by channel
 membership, which needs a channels rule that is on.</p>
 <p><b>Show only</b> [an element or any] where [CN, former CN, BVS, &phi; or
-Q<sup><i>n</i></sup>] [&le; or &ge;] a value. CN counts bonds to every
+Q<sup><i>n</i></sup>] [&le;, &ge; or =] a value. CN counts bonds to every
 counter-ion at <i>v</i><sub>bond</sub>; former CN counts an anion's bonds to
 the formers only (an O with former CN 1 is non-bridging); Q<sup><i>n</i></sup>
-is a former cation's bonds to anions bonded to two or more formers. With
-<i>Dim the rest</i> on, an atom outside the rule keeps {dim}, so the inside
-of a box stays visible; off, it is left out of the scene. The count of atoms
-matched is written under the rules.</p>
+is a former cation's bonds to anions bonded to two or more formers.
+<b>Atoms outside the rules</b> are, by your choice, <i>dimmed</i> &mdash;
+each keeps {dim}, so the inside of a box stays visible &mdash; or <i>left out
+of the scene entirely</i>, which draws only the atoms picked and the bonds
+among them. The count of atoms matched is written under the rules.</p>
+<p><b>From a result.</b> Double-click a Q<sup><i>n</i></sup> or CN
+distribution, or a BVS or &phi; histogram, in the Results tree: the
+Highlight tab opens with the rule that shows it on the frame &mdash; the
+most populated class as an equals rule ('Si with Q<sup>4</sup>'), or the
+mode bin as a pair of bounds &mdash; and the view follows. Change the value
+to see another class. The Overview reads each Q<sup><i>n</i></sup> class as
+a count as well as a fraction ('300 Si Q4 (75 %)').</p>
+<p><b>One atom's environment.</b> Right-click an atom in the frame: rotate
+about it; <i>isolate</i> it with its bonded neighbours, or with their
+neighbours too, the rest of the frame left out; or <i>export the
+environment as XYZ</i>, two shells deep, unwrapped about the atom by the
+minimum image so a bond across the box edge comes out short, with each
+line carrying the frame row, the atom id, the shell and the distance, for
+a cluster calculation elsewhere. The bonds are the ones the threshold on
+the strip counts, so the first shell is the coordination the analysis
+reports. <i>Show the whole frame again</i> is in the same menu.</p>
 <p><b>Voids</b> at or above a volume in &Aring;&sup3;, drawn as translucent
 spheres: the empty spheres of the frame (FACET's van der Waals radii), each
 with the radius of a sphere of that volume or more. An elongation above 1

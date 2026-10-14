@@ -217,6 +217,27 @@ What remains:
   CIFs in the reference collection that hold Si and O is an M_xSi₂O₅ with Si
   as the only former, so the Q³ reference test skips.
 
+## Phase MD-2 — Environments *(proposed, from Wyatt Kiff's notes, 2026-10-14)*
+
+**Why:** a Qⁿ fraction says how many Si are Q³; it does not say which Q³
+environments are alike. Grouping the environments of one species by what is
+around them -- the sorted bond lengths, the angles, the elements and counts of
+the next-nearest shell -- within a tolerance would give classes such as
+"Si Q³ environment 1" with their populations, members to highlight on the
+frame, and a representative cluster to export, so that an NMR shift computed
+on the representative stands for the class.
+
+* a per-atom environment descriptor (first-shell distances sorted, angles at
+  the centre, second-shell composition), from the bonds the threshold counts;
+* a grouping within a stated tolerance (no clustering verdict: the tolerance
+  is the user's, the counts are reported), one table per species and Qⁿ;
+* each group a highlight rule and an XYZ export of its representative;
+* a per-group summary of the electrostatics the engine already has (the
+  bond-valence landscape about the centre) and the free volume around it.
+
+What exists now (0.8.0): the equals rule, a result double-clicked into the
+Highlight tab, and one atom's environment isolated and exported.
+
 ## Deliberately out of scope
 
 Each with a reason, so the decision can be revisited rather than rediscovered:

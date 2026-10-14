@@ -1,0 +1,108 @@
+"""One atom's environment in an MD frame: its neighbour shells, and that
+cluster written out as XYZ for a calculation elsewhere.
+
+The bonds are the ones the bond threshold counts (``bulk.bonds_at``), so the
+first shell is the coordination the analysis reports and the second shell is
+the coordination of those neighbours -- a Si with its four O and the Si, Na
+or Ca each O touches. The cluster is unwrapped about the centre atom by the
+minimum image, so a bond across the box edge comes out as one short bond
+rather than two atoms a box apart, which is what a DFT or NMR input needs.
+"""
+from __future__ import annotations
+
+from collections import deque
+from pathlib import Path
+
+import numpy as np
+
+from .md_model import Frame
+
+
+def neighbour_shells(bonds, n_atoms: int, centre: int, shells: int = 1
+                     ) -> tuple[np.ndarray, np.ndarray]:
+    """Which atoms lie within ``shells`` bonds of ``centre``.
+
+    Returns ``(keep, shell)``: ``keep`` (n_atoms,) bool, ``shell`` (n_atoms,)
+    int with 0 at the centre, 1 for its bonded neighbours, 2 for theirs ...
+    and -1 outside. Bonds are taken undirected; ``bonds`` is a ``bulk.Bonds``
+    (``cation``, ``anion`` rows) or any pair of row arrays.
+    """
+    if hasattr(bonds, "cation"):
+        a, b = np.asarray(bonds.cation, int), np.asarray(bonds.anion, int)
+    else:
+        a, b = (np.asarray(x, int) for x in bonds)
+    if not 0 <= centre < n_atoms:
+        raise ValueError(f"atom row {centre} is not in a frame of {n_atoms}")
+    shells = max(int(shells), 0)
+    order = np.argsort(a, kind="stable")
+    a_sorted, b_sorted = a[order], b[order]
+    order_b = np.argsort(b, kind="stable")
+    a_by_b, b_sorted2 = a[order_b], b[order_b]
+
+    def neighbours(row: int) -> np.ndarray:
+        lo, hi = np.searchsorted(a_sorted, [row, row + 1])
+        from_a = b_sorted[lo:hi]
+        lo, hi = np.searchsorted(b_sorted2, [row, row + 1])
+        from_b = a_by_b[lo:hi]
+        return np.concatenate([from_a, from_b])
+
+    shell = np.full(n_atoms, -1, np.int32)
+    shell[centre] = 0
+    queue = deque([centre])
+    while queue:
+        row = int(queue.popleft())
+        if shell[row] >= shells:
+            continue
+        for nb in neighbours(row):
+            nb = int(nb)
+            if shell[nb] < 0:
+                shell[nb] = shell[row] + 1
+                queue.append(nb)
+    return shell >= 0, shell
+
+
+def unwrapped_about(frame: Frame, rows: np.ndarray, centre: int) -> np.ndarray:
+    """Cartesian positions (Å) of ``rows``, each the minimum image relative
+    to the centre atom, so the cluster is one connected piece."""
+    frac = np.asarray(frame.frac, float)
+    box = np.asarray(frame.box_ang, float)
+    origin = np.asarray(getattr(frame, "origin_ang", np.zeros(3)), float)
+    d = frac[rows] - frac[centre][None, :]
+    d -= np.round(d)
+    return (frac[centre][None, :] + d) @ box + origin[None, :]
+
+
+def environment_xyz(frame: Frame, keep: np.ndarray, centre: int, *,
+                    shell: np.ndarray | None = None,
+                    comment: str = "") -> str:
+    """The cluster as XYZ text: the centre first, then by distance from it.
+
+    The comment line carries what was asked, and each atom line ends with
+    its frame row, its atom id, its shell and its distance to the centre,
+    so the cluster can be traced back to the model it was cut from.
+    """
+    rows = np.flatnonzero(np.asarray(keep, bool))
+    if centre not in rows:
+        rows = np.concatenate([[centre], rows])
+    cart = unwrapped_about(frame, rows, centre)
+    d = np.linalg.norm(cart - cart[list(rows).index(centre)][None, :], axis=1)
+    order = np.argsort(d, kind="stable")
+    rows, cart, d = rows[order], cart[order], d[order]
+    symbols = np.asarray(frame.elements)
+    ids = np.asarray(frame.atom_id)
+    lines = [str(len(rows)), comment.replace("\n", " ").strip()]
+    for row, p, dist in zip(rows, cart, d):
+        sh = "" if shell is None else f" shell={int(shell[row])}"
+        lines.append(f"{symbols[row]:<2s} {p[0]:14.6f} {p[1]:14.6f} "
+                     f"{p[2]:14.6f}   # row={int(row)} id={int(ids[row])}"
+                     f"{sh} d={dist:.4f}")
+    return "\n".join(lines) + "\n"
+
+
+def write_environment_xyz(path, frame: Frame, keep: np.ndarray, centre: int,
+                          *, shell: np.ndarray | None = None,
+                          comment: str = "") -> Path:
+    path = Path(path)
+    path.write_text(environment_xyz(frame, keep, centre, shell=shell,
+                                    comment=comment), encoding="utf-8")
+    return path

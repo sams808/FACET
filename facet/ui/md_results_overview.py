@@ -87,6 +87,30 @@ def _scalar(tables, name: str) -> Scalar | None:
     return c if isinstance(c, Scalar) and math.isfinite(c.mean) else None
 
 
+def _counts(dist: Distribution, label=str) -> list[tuple[str, float]]:
+    """(label, mean number of items per frame) of each category: the
+    fractions times how many were counted, so '40 Si Q3' can be read as
+    well as '8 %'. Empty when the distribution carries no item counts."""
+    n_items = getattr(dist, "n_items", None)
+    if n_items is None:
+        return []
+    per_frame = np.asarray(dist.per_frame, float)
+    n = np.asarray(n_items, float)
+    if per_frame.ndim != 2 or len(n) != len(per_frame):
+        return []
+    if dist.kind == "count":
+        counts = per_frame
+    else:
+        counts = per_frame * n[:, None]
+    with np.errstate(invalid="ignore"):
+        mean = np.nanmean(counts, axis=0) if len(counts) else np.zeros(0)
+    out = []
+    for key, value in zip(dist.keys, mean):
+        if math.isfinite(value):
+            out.append((label(key), float(value)))
+    return out
+
+
 def _fractions(dist: Distribution, label=str) -> list[tuple[str, float]]:
     """(label, mean fraction) of each category worth drawing (>= 0.5 %)."""
     total = float(np.nansum(dist.mean)) or 1.0
@@ -435,11 +459,15 @@ def _glass_measures(tables) -> list[Measure]:
         if match and isinstance(container, Distribution):
             bars = _fractions(container, lambda k: f"Q{k}")
             if bars:
+                counts = dict(_counts(container, lambda k: f"Q{k}"))
+                # the integer reading beside the fraction: '300 Si Q4 (75 %)'
+                text = " · ".join(
+                    (f"{counts[k]:.0f} {match[1]} {k} ({_pct(f)})"
+                     if k in counts else f"{k} {_pct(f)}")
+                    for k, f in bars)
                 out.append(Measure(
                     f"Qn {match[1]}", f"Qⁿ of {match[1]} — bond-valence cut",
-                    "fraction", text=" · ".join(f"{k} {_pct(f)}"
-                                                for k, f in bars),
-                    bar=tuple(bars)))
+                    "fraction", text=text, bar=tuple(bars)))
     for name, container in tables.items():
         match = re.fullmatch(r"([A-Z][a-z]?) speciation \(BV\)", name)
         if match and isinstance(container, Distribution):

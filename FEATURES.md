@@ -343,6 +343,10 @@ No model from the group's own work has been analysed yet.
 | Void regions | **done** | the empty spheres of the Delaunay tetrahedra joined where a probe of a stated radius passes between them: union volume, elongation, extent, dimensionality, percolation and the atoms lining each region |
 | Results as figures beside their rows | **done** | the spread across frames drawn on every figure; SVG, PDF or 600 dpi PNG, with colour never the only cue |
 | Threshold slider on one frame | **done** | moves v_bond without a new search; the staircase of mean CN against threshold, clicked to set it |
+| Right-click on the frame | **done** | rotate about an atom; isolate it with one or two shells of neighbours at the threshold (the rest left out); export the environment as XYZ, minimum-image unwrapped, with row, id, shell and distance per line; show the whole frame again |
+| A result into a highlight | **done** | double-click a Qⁿ or CN distribution or a BVS / φ histogram in the Results tree: the Highlight tab opens with the rule that shows it (equals on the mode class, or the mode bin's bounds) |
+| 'Equal to' rule | **done** | show only atoms whose CN, former CN or Qⁿ equals a value |
+| Qⁿ as counts | **done** | the Overview reads each class as a number of atoms per frame beside its fraction |
 | 3D view of one frame | **partial** | drawn from the bulk engine's bonds, which equal the crystal scene builder's on 3 000-atom SiO₂ and NS3 frames and five small test frames; no polyhedra or slab; above 5 000 atoms the QPainter tier draws the atoms without bonds. Looked at offscreen on the QPainter tier; the OpenGL tiers are not yet checked with an MD frame on a graphics card |
 | Request file in the Model workspace | **done** | the workspace saves its setup as a request file that `python -m facet.md analyse --request` runs, and loads one back |
 | Running, building or editing molecular dynamics | out of scope | FACET reads MD output; producing it is a different program |

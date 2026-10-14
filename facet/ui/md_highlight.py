@@ -67,7 +67,7 @@ __all__ = [
 ]
 
 DESCRIPTORS = ("CN", "former CN", "BVS", "phi", "Qn")
-SENSES = ("≤", "≥")
+SENSES = ("≤", "≥", "=")
 COLOUR_MODES = ("element", "bond-valence sum", "coordination number",
                 "stereoactivity (phi)", "Qn", "modifier-rich O",
                 "channel membership")
@@ -867,8 +867,14 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
 def _keep_of_rule(fd: FrameData, rule: Rule) -> np.ndarray:
     values = fd.descriptor(rule.descriptor)
     with np.errstate(invalid="ignore"):
-        keep = (values <= rule.value) if rule.sense == "≤" \
-            else (values >= rule.value)
+        if rule.sense == "=":
+            # equal to, for the integer descriptors (CN, former CN, Qn): a
+            # rule 'Qn = 3' picks exactly the Q3 silicons
+            keep = np.isclose(values, rule.value, atol=1e-6)
+        elif rule.sense == "≤":
+            keep = values <= rule.value
+        else:
+            keep = values >= rule.value
     keep &= np.isfinite(values)
     if rule.element != "any":
         keep &= fd.elements == rule.element
@@ -930,6 +936,55 @@ def _hide(scene, keep_rows: np.ndarray) -> None:
             if len(value) == len(bond_keep):
                 setattr(scene, name, np.asarray(value)[bond_keep])
     scene.selected_atom = None
+
+
+def _unwrap_about(scene, frame, centre_row: int) -> None:
+    """Move every drawn atom to its minimum image about ``centre_row`` and
+    the bond ends with them, then drop the periodic images that now sit on
+    their originals. For an isolated environment: a cluster across the box
+    edge is drawn as one piece, as the XYZ export writes it."""
+    from ..core.md_environment import unwrapped_about
+
+    if scene.n_atoms == 0:
+        return
+    rows = np.asarray(scene.atom_site, int)
+    old = np.asarray(scene.atom_position, float)
+    new = unwrapped_about(frame, rows, centre_row)
+    if scene.n_bonds:
+        for name in ("bond_a", "bond_b"):
+            ends = np.asarray(getattr(scene, name), float)
+            if len(ends) == 0:
+                continue
+            d = np.linalg.norm(ends[:, None, :] - old[None, :, :], axis=2)
+            j = d.argmin(axis=1)
+            ok = d[np.arange(len(ends)), j] < 1e-3
+            ends = ends.copy()
+            ends[ok] = new[j[ok]]
+            setattr(scene, name, ends.astype(np.float32))
+    scene.atom_position = new.astype(np.float32)
+    # frame the cluster, not the box it was cut from
+    scene.center = new.mean(axis=0).astype(np.float32)
+    scene.radius = float(np.linalg.norm(new - new.mean(axis=0), axis=1).max()
+                         + 2.0)
+    # the images of a kept atom now coincide with it: keep each once
+    _, first = np.unique(np.round(new, 3), axis=0, return_index=True)
+    keep = np.zeros(len(new), bool)
+    keep[np.sort(first)] = True
+    if keep.all():
+        return
+    for name in _PER_ATOM:
+        value = getattr(scene, name)
+        if len(value) == len(keep):
+            setattr(scene, name, np.asarray(value)[keep])
+    for name in ("atom_label", "atom_element"):
+        value = getattr(scene, name)
+        if len(value) == len(keep):
+            setattr(scene, name, [v for v, k in zip(value, keep) if k])
+    for name in ("atom_shape", "atom_anisotropic", "structure_of"):
+        value = getattr(scene, name, None)
+        if value is not None and len(value) == len(keep):
+            setattr(scene, name, np.asarray(value)[keep])
+    scene.atom_index = np.arange(int(keep.sum()), dtype=np.int32)
 
 
 def _drop_overlays(scene, labels: Sequence[str]) -> None:
@@ -1477,18 +1532,31 @@ class HighlightPage(QWidget):
         column.addLayout(add_row)
 
         column.addWidget(QLabel("<b>Then</b>"))
+        # What happens to the atoms the rules do not pick: a two-way choice
+        # in words. The hidden checkbox is the same state, kept for the
+        # callers and tests that read or set ``dim``.
+        self.rest = QComboBox()
+        self.rest.addItems(["are dimmed, paler and smaller",
+                            "are left out of the scene entirely"])
+        self.rest.setToolTip("Dimmed keeps the context of the box around "
+                             "what the rules pick; left out draws only the "
+                             "atoms picked, and the bonds among them.")
+        chrome.fit_combo(self.rest)
         self.dim = QCheckBox("Dim the rest")
-        self.dim.setToolTip("Atoms and bonds outside the rules are drawn "
-                            "paler and smaller rather than left out, so the "
-                            "context stays.")
         self.dim.setChecked(True)
-        self.dim.toggled.connect(lambda _on: self._changed())
+        self.dim.hide()
+        self.rest.currentIndexChanged.connect(
+            lambda i: self.dim.setChecked(i == 0))
+        self.dim.toggled.connect(
+            lambda on: (self.rest.setCurrentIndex(0 if on else 1),
+                        self._changed()))
         self.export = QCheckBox("Add to export")
         self.export.setToolTip("Write the count line into the header of "
                                "every figure and table exported while the "
                                "rules are on (the window reads this box).")
         then = QHBoxLayout()
-        then.addWidget(self.dim)
+        then.addWidget(QLabel("Atoms outside the rules"))
+        then.addWidget(self.rest)
         then.addWidget(self.export)
         then.addStretch(1)
         column.addLayout(then)

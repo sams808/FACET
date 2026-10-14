@@ -774,6 +774,10 @@ class ModelController(QObject):
         self.view.set_theme(self.theme)
         self.view.ready.connect(self._on_view_ready)
         self.view.measured.connect(self.statusMessage)
+        self.view.contextRequested.connect(self._on_context_menu)
+        # the environment isolated by the right-click menu: (frame row,
+        # shells), or None for the whole frame
+        self._isolated: tuple[int, int] | None = None
         self.canvas.addWidget(self.view)
         self.figure_page = None
 
@@ -810,6 +814,7 @@ class ModelController(QObject):
         setup_col.addWidget(self.page.detach_footer())
 
         self.browser = ResultBrowser(theme=self.theme)
+        self.browser.highlightRequested.connect(self.highlight_from_result)
         self.browser.set_empty_text(EMPTY_TEXT)
         self.browser.statusMessage.connect(self._relay_status)
         self.browser.tree.currentItemChanged.connect(self._on_descriptor)
@@ -1604,6 +1609,148 @@ class ModelController(QObject):
         if self.frame_view is not None:
             self._redraw_timer.start()
 
+    # -- the right-click menu on the frame ---------------------------------
+    def _on_context_menu(self, atom_index: int, global_pos=None) -> None:
+        from PySide6.QtGui import QCursor
+
+        menu = self.build_context_menu(atom_index)
+        if menu is not None:
+            menu.exec(global_pos if global_pos is not None else QCursor.pos())
+
+    def build_context_menu(self, atom_index: int):
+        """The right-click menu on the frame, built but not shown: centre the
+        view on the atom, isolate it with one or two shells of neighbours,
+        export that environment as XYZ, or show the whole frame again."""
+        from PySide6.QtWidgets import QMenu
+
+        fv = self.frame_view
+        scene = self.view.scene
+        if fv is None or scene is None:
+            return None
+        menu = QMenu(self.view)
+        row = None
+        if 0 <= atom_index < scene.n_atoms:
+            row = int(scene.atom_site[atom_index])
+            label = scene.atom_label[atom_index] if atom_index < len(
+                scene.atom_label) else f"row {row}"
+            header = menu.addAction(label)
+            header.setEnabled(False)
+            menu.addSeparator()
+            position = np.asarray(scene.atom_position[atom_index], float)
+            menu.addAction(f"Rotate about {label}").triggered.connect(
+                lambda _=False, p=position, t=label: self.view.center_on(p, t))
+            if fv.table is not None:
+                menu.addAction(
+                    f"Isolate {label} with its neighbours").triggered.connect(
+                    lambda _=False, r=row: self.isolate(r, 1))
+                menu.addAction(
+                    f"Isolate {label} with its next-nearest neighbours too"
+                ).triggered.connect(lambda _=False, r=row: self.isolate(r, 2))
+                menu.addAction(
+                    f"Export the environment of {label} as XYZ…"
+                ).triggered.connect(lambda _=False, r=row: self.export_environment(r))
+            menu.addSeparator()
+        show_all = menu.addAction("Show the whole frame again")
+        show_all.setEnabled(self._isolated is not None)
+        show_all.triggered.connect(lambda _=False: self.isolate(None))
+        menu.addAction("Rotate about the centre of the box").triggered.connect(
+            lambda _=False: self.view.center_on_scene())
+        menu.addAction("Reset the view").triggered.connect(self.view.reset_view)
+        return menu
+
+    def isolate(self, row: int | None, shells: int = 1) -> None:
+        """Draw only ``row`` and its neighbour shells at the strip's
+        threshold, or (``None``) the whole frame again."""
+        self._isolated = None if row is None else (int(row), int(shells))
+        # frame what is drawn next: the cluster, or the whole box again
+        self._reframe_next = True
+        if self._isolated is not None:
+            fv = self.frame_view
+            if fv is not None and fv.scene is not None:
+                here = np.flatnonzero(np.asarray(fv.scene.atom_site) == row)
+                if len(here):
+                    self.view.center_on(
+                        np.asarray(fv.scene.atom_position[here[0]], float),
+                        fv.scene.atom_label[here[0]])
+        self.redraw()
+        if self._isolated is not None:
+            self.statusMessage.emit(
+                f"Showing atom row {row} with {shells} shell"
+                f"{'s' if shells != 1 else ''} of neighbours at the "
+                "threshold; the rest is left out. Right-click: show the "
+                "whole frame again.")
+
+    def environment(self, row: int, shells: int = 2):
+        """(keep, shell) of ``row``'s environment at the strip's threshold."""
+        from ..core import bulk
+        from ..core.md_environment import neighbour_shells
+
+        fv = self.frame_view
+        if fv is None or fv.table is None:
+            return None
+        v_bond = self._strip_v_bond()
+        v_bond = fv.v_bond_vu if v_bond is None else v_bond
+        return neighbour_shells(bulk.bonds_at(fv.table, v_bond),
+                                len(fv.frame.elements), row, shells)
+
+    def export_environment(self, row: int, path=None, shells: int = 2):
+        """Write ``row`` with two shells of neighbours as XYZ, unwrapped
+        about it; asks where when ``path`` is None. Returns the path."""
+        from ..core.md_environment import write_environment_xyz
+
+        fv = self.frame_view
+        found = self.environment(row, shells)
+        if fv is None or found is None:
+            self.statusMessage.emit("The frame is drawn without bonds: no "
+                                    "environment to export.")
+            return None
+        keep, shell = found
+        label = f"{fv.frame.elements[row]}{int(fv.frame.atom_id[row])}"
+        if path is None:
+            from PySide6.QtWidgets import QFileDialog
+            path, _ = QFileDialog.getSaveFileName(
+                self.view, f"Environment of {label} as XYZ",
+                f"{label}_environment.xyz", "XYZ (*.xyz)")
+            if not path:
+                return None
+        v_bond = self._strip_v_bond()
+        v_bond = fv.v_bond_vu if v_bond is None else v_bond
+        comment = (f"FACET environment of {label} (frame row {row}), frame "
+                   f"{fv.k}, {shells} shells at v_bond {v_bond:.4f} v.u.; "
+                   f"minimum-image unwrapped about the centre; "
+                   f"{int(keep.sum())} atoms")
+        out = write_environment_xyz(path, fv.frame, keep, row, shell=shell,
+                                    comment=comment)
+        self.statusMessage.emit(f"Wrote {int(keep.sum())} atoms to {out}")
+        return out
+
+    def highlight_from_result(self, rules, words: str = "") -> None:
+        """A double-click on a result: the Highlight tab, with its rows set
+        to the rules that show that result on the frame."""
+        page = self.highlight
+        if page is None:
+            return
+        for row in list(page.rows):
+            page.remove_rule(row)
+        for spec in rules:
+            row = page.add_rule("show-only")
+            for name in ("element", "descriptor", "sense"):
+                box = getattr(row, name, None)
+                if box is not None:
+                    i = box.findText(str(spec.get(name, "")))
+                    if i >= 0:
+                        box.setCurrentIndex(i)
+            spin = getattr(row, "value", None)
+            if spin is not None and "value" in spec:
+                spin.setValue(float(spec["value"]))
+            tick = getattr(row, "tick", None)
+            if tick is not None:
+                tick.setChecked(True)
+        self.show_tab("Highlight")
+        if words:
+            self.statusMessage.emit(f"Highlighting {words}.")
+        self._schedule_redraw()
+
     def _frame_data_at(self, v_bond: float):
         """The FrameData of the frame shown at ``v_bond`` (the strip's),
         with the frame's cached spheres and landscapes carried over from
@@ -1685,9 +1832,12 @@ class ModelController(QObject):
         frame, table, params, v_list = fv.frame, fv.table, fv.params, \
             fv.v_list_vu
         active = [r for r in rules if r.enabled]
+        isolated = self._isolated
 
         def work(progress, cancelled):
-            from .md_highlight import _dim, apply_rules
+            from ..core import bulk
+            from ..core.md_environment import neighbour_shells
+            from .md_highlight import _dim, _hide, _unwrap_about, apply_rules
             from .md_scene import build_md_scene
 
             clock = time.perf_counter()
@@ -1699,6 +1849,15 @@ class ModelController(QObject):
             if element:
                 keep = np.asarray(fd.elements) == element
                 _dim(scene, keep, theme)
+            if isolated is not None:
+                # one atom with its neighbour shells at this threshold; the
+                # rest left out of the scene, not dimmed
+                row, shells = isolated
+                keep, _shell = neighbour_shells(
+                    bulk.bonds_at(table, v_bond), len(frame.elements), row,
+                    shells)
+                _hide(scene, keep)
+                _unwrap_about(scene, frame, row)
             return scene, outcome, time.perf_counter() - clock
 
         job = md_jobs.Job(work, name="highlight")
