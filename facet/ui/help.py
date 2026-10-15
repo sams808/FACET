@@ -417,6 +417,13 @@ table is never silently short.</p>
 <p>The same report from the command line, with no window:</p>
 <pre>py -3.11 -m facet.report structures/ -o report.xlsx
 py -3.11 -m facet.report a.cif b.cif --format html --v-bond 0.10 -o cmp</pre>
+<p>Two more commands run without the window. <code>py -3.11 -m facet.site
+FILE</code> prints one site's analysis (<code>--all</code> for every site,
+<code>--format md</code> or <code>tex</code>). <code>py -3.11 -m
+facet.check</code> recomputes every number the tutorials state for the
+bundled examples on this machine and reports each against its tolerance;
+<code>--parity TABLE TRAJECTORY</code> lays another code's per-atom values
+for one MD frame beside FACET's, descriptor by descriptor.</p>
 """),
 
         ("examples", "The bundled structures", f"""

@@ -1,9 +1,44 @@
 # A hundred improvements worth making
 
-Proposals for FACET, written 2026-10-14 against version 0.9.0. Each one names
-what would change and why it is worth the work; none is scheduled. They are
-grouped by where in the application they land. Items marked **(W)** come from
-Wyatt Kiff's notes after running FACET beside the Pedone group's MD code.
+Proposals for FACET, written 2026-10-14 against version 0.9.0, and
+implemented in version 1.0.0 the same day. Each one names what would change
+and why it was worth the work. They are grouped by where in the application
+they land. Items marked **(W)** come from Wyatt Kiff's notes after running
+FACET beside the Pedone group's MD code.
+
+## Status at 1.0.0
+
+All hundred are in 1.0.0. Where the implementation is narrower than the
+proposal reads, the difference is stated here rather than left to be found:
+
+- **7** (remember the axis): the explorer's axis and options are saved and
+  restored through Edit ▸ Preferences…, not per structure.
+- **38** (populations in Compare): an environments-over-frames population
+  reaches Compare as an analysis output only once a model has a result to
+  attach it to.
+- **44** (more cores): the parallel pass speeds the per-frame valence tables
+  for the non-glass analyses; the glass pass keeps its own single pipeline.
+- **60** (compressed trajectories): gzip, bzip2 and xz are read directly;
+  zstd needs a package FACET does not ship and is left out.
+- **71** (difference map): colours the second crystal of the basket by
+  ΔCN, ΔBVS or Δφ per shared site label; sites of one structure with no
+  label in the other are grey.
+- **81** (self-check): `py -3.11 -m facet.check` recomputes the numbers the
+  tutorials state for the bundled examples and the sum-of-contacts identity
+  on any machine; the comparisons against vitrum, amorphouspy and FEFF stay
+  in the test suite, which needs those packages present.
+- **83** (parity harness): generic, a column-mapped per-atom table from any
+  code (`--parity TABLE TRAJECTORY --map cn=CN,sum=BVS`); it was not run
+  against the Pedone code's own output, which was not available.
+- **89** (every tier): the painter tier is checked on every bundled example
+  by a test; the OpenGL tiers are still checked by hand on a machine with a
+  graphics card.
+- **92** and **94** (dark-theme and keyboard audits): the dark palette and
+  the mnemonics are checked offscreen by tests; the on-screen passes remain
+  manual.
+- **98** (start-up): the MD engine, the report and the Compare workspace
+  import lazily and the bundle is pruned; the splash is shown for at least
+  1.2 s so a fast start does not flash.
 
 ## The cutoff explorer and the Site tab
 

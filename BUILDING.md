@@ -122,6 +122,8 @@ Two hidden imports have to be declared explicitly, and both are recorded in
 1. `py -3.11 -m pytest tests/ -q` — the suite must be green.
 2. Build, then actually run `dist/FACET/FACET.exe` on a structure. A missing
    hidden import is invisible until the application starts.
-3. Check `dist/FACET/licenses/` exists and is populated.
+3. Check `dist/FACET/licenses/` exists and is populated, including
+   `BUILD.txt`, the record of the commit, Python, platform and every package
+   version the build was made from.
 4. Work through the checklist in `THIRD_PARTY_NOTICES.md`.
 5. Attach the installer to a GitHub Release rather than committing it.

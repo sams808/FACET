@@ -305,6 +305,11 @@ pyscal3 and FEFF. No model from the group's own work has been analysed yet.
 
 ## Status
 
+Version 1.0.0 (2026-10-14) implements the hundred proposals of
+`docs/PROPOSALS.md`, which were written against 0.9.0 after a colleague ran
+FACET beside an MD group's own code; the few places where an implementation
+is narrower than its proposal are stated at the top of that file.
+
 `FEATURES.md` tracks 203 features: 131 against CrystalMaker and VESTA, and 72 for
 glass models from molecular dynamics. 181 are done, 12 deliberately out of
 scope, and 10 remain and are listed: 6 partial and 4 planned.
@@ -340,6 +345,14 @@ side.
 ```
 py -3.11 -m pytest tests/ -q
 ```
+
+Three commands run without the window. `py -3.11 -m facet.check` recomputes
+every number the tutorials state for the bundled examples on the machine it
+runs on and reports each against the tolerances in `VERIFICATION.md`;
+`--parity TABLE TRAJECTORY` lays another code's per-atom values for one MD
+frame beside FACET's. `py -3.11 -m facet.report` writes the bond-valence
+report over a set of CIFs, and `py -3.11 -m facet.site FILE` prints one
+site's analysis as text, Markdown or LaTeX.
 
 The suite collected 3 208 tests on 2026-10-07. Tests that depend on the author's
 structure library skip cleanly when it is absent.

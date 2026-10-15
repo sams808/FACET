@@ -353,6 +353,26 @@ No model from the group's own work has been analysed yet.
 | Request file in the Model workspace | **done** | the workspace saves its setup as a request file that `python -m facet.md analyse --request` runs, and loads one back |
 | Running, building or editing molecular dynamics | out of scope | FACET reads MD output; producing it is a different program |
 
+## The 1.0.0 batch
+
+Version 1.0.0 added the hundred items of `docs/PROPOSALS.md` on top of the
+tables above: the explorer's second-site overlay, bookmarks, ECoN line,
+uncertainty band and plateau table; angle arcs, dihedrals, bond picking, a
+legend, depth dimming and a slab in the 3D view; highlight rules on bond
+angles, tetrahedral deviation, rings, channels and neighbour shells, with
+rule sets saved by name; the Environments tab that groups the atoms of an
+MD frame by their surroundings; the parallel analysis pass with a frame
+cache; the authors' bond list, mmCIF assemblies, compressed trajectories
+and multi-block files; reports over two thresholds with templates, figures
+and a provenance sidecar, the Site tab as Markdown or LaTeX, FEFF, CIF and
+extended-XYZ exports of an MD environment; the Compare workspace's
+difference colouring, pinned frames, parameter sets, linked cursors and
+basket in the session file; the self-check and parity commands, the
+reference numbers behind the tutorials, the "est." marks and the build
+record; and preferences, dock layouts, a messages log, threshold undo, a
+first-run tour and Help ▸ Report a problem. The status of each item is in
+that file.
+
 ## What is left
 
 181 of the 203 tracked features are done, 12 are deliberately out of scope,
