@@ -123,12 +123,18 @@ settings that produced it.</p>
 </ul>
 
 <h3 style="margin-bottom:2px">Bond-valence parameters</h3>
-<p style="margin-top:2px">The built-in set is small and is stated as such.
-FACET reads the published compilations from a file you supply — the IUCr
-<code>bvparm</code> distribution, a softBV-style table, or a FACET parameter
-file — under <i>File&nbsp;&rsaquo;&nbsp;Load bond-valence parameters</i>. Those
-compilations are not bundled, because each arrives with its own terms of use.
-Cite whichever set your numbers came from; the name is in every export.</p>
+<p style="margin-top:2px">Two sets ship with FACET. The built-in table is
+Brese &amp; O'Keeffe's 1991 Table&nbsp;2, the set the tutorials and the
+verification are stated against, with the O'Keeffe&ndash;Brese estimator
+behind it for pairs it lacks. <i>Model&nbsp;&rsaquo;&nbsp;Parameters&nbsp;&rsaquo;
+Use the IUCr table</i> switches to I.&nbsp;D. Brown's accumulated table, the
+IUCr <code>bvparm2020.cif</code> distribution carried unchanged under its
+author's notice: 1&nbsp;931 rows from the literature (Brown &amp; Altermatt
+1985, Brese &amp; O'Keeffe 1991, Gagn&eacute; &amp; Hawthorne 2015, Adams,
+Palenik and others), each naming its source. Any other set &mdash; a later
+bvparm release, a softBV-style table, a FACET parameter file &mdash; is read
+from a file under <i>Load&hellip;</i>. Cite whichever set your numbers came
+from; the name is in every export.</p>
 
 <h3 style="margin-bottom:2px">Inspired by</h3>
 <ul style="margin-top:2px">
@@ -1088,9 +1094,14 @@ a note on how to do the replacement.</p>
 <tr><td>Mesa llvmpipe (<code>opengl32sw.dll</code>)</td><td>MIT</td></tr>
 </table>
 <h2>Bond-valence parameters</h2>
-<p>The published compilations — the IUCr <code>bvparm</code> distribution,
-Gagn&eacute; &amp; Hawthorne's tables, softBV — are <b>not</b> bundled, because
-each carries its own terms. FACET reads them from a file you supply and records
+<p>The IUCr <code>bvparm2020.cif</code> table (I.&nbsp;D. Brown, McMaster
+University) is bundled unchanged under its own notice: it may be used and
+distributed without fee for non-profit purposes provided the notice is kept,
+no fee is charged for the table, and any change is recorded in the file.
+FACET makes no change to it. The individually cited rows it draws on
+(Brown &amp; Altermatt 1985, Brese &amp; O'Keeffe 1991, Gagn&eacute; &amp;
+Hawthorne 2015 and the rest) are literature values. The softBV set carries
+terms of its own and is not bundled; it is read from a file. FACET records
 which set produced a given number. Cite the set you used.</p>
 <p {note}>The full text, with the pre-distribution checklist, is
 <code>THIRD_PARTY_NOTICES.md</code> in the repository and beside the
@@ -1538,20 +1549,36 @@ a cluster calculation elsewhere. The bonds are the ones the threshold on
 the strip counts, so the first shell is the coordination the analysis
 reports. <i>Show the whole frame again</i> is in the same menu.</p>
 <p><b>Voids</b> at or above a volume in &Aring;&sup3;, drawn as translucent
-spheres: the empty spheres of the frame (FACET's van der Waals radii), each
-with the radius of a sphere of that volume or more. An elongation above 1
-keeps only the spheres whose void region (merged empty spheres) is at least
-that many times longer than it is wide; it reads the void regions of
-<code>facet.core.md_channels</code> and is greyed with the reason when the
-build lacks them.</p>
+spheres. Each Delaunay tetrahedron of the frame seeds one sphere at its
+circumcentre; the sphere is then moved to the nearest local maximum of the
+clearance to the atom surfaces and its radius measured there against every
+atom image within reach, and the spheres that climb to one maximum are the
+same void, drawn once with the largest radius. The <b>radii</b> subtracted
+are a choice the rule shows: Shannon's ionic radii by the model's oxidation
+states (O<sup>2&minus;</sup> 1.40, Si<sup>4+</sup> 0.40, Ca<sup>2+</sup>
+1.00 &Aring;), the default for an oxide or halide; van der Waals radii,
+which in an ionic solid exceed the bond length and leave most spheres with
+no room; or none. At most 4&nbsp;000 spheres are drawn (the largest first)
+and the count line states how many passed. An elongation above 1 keeps
+only the spheres whose void region (the seed spheres joined where they
+overlap, <code>facet.core.md_channels</code>) is at least that many times
+longer than it is wide; greyed with the reason when the build lacks it.</p>
 <p><b>Channels</b>, three ways of measuring where a mobile ion has room, each
 reading <code>facet.core.md_channels</code> on the frame shown:</p>
 <ul>
 <li><b>by charge</b>: the bond-valence landscape of the probe ion (its sum on
 a grid of the stated spacing, from the anions within <i>r</i><sub>cut</sub>),
-the regions where the mismatch to the probe's valence is at most &Delta;,
-and the isosurface at &Delta; drawn in the view; the count line states the
-regions, the fraction of the box they fill and which box axes they span.
+the regions where the mismatch to the <b>target</b> is at most &Delta;, and
+the isosurface at &Delta; drawn in the view. The target is a choice the
+rule shows: the <i>frame mean</i>, the mean of the same sum at the probe
+element's own atoms in the frame, so the regions follow how the model
+bonds that ion and pass through its sites (a Pedone-potential glass leaves
+Ca at a sum near 1.7 against a formal 2, and against the formal charge a
+tight &Delta; admits none of the Ca sites); or the <i>formal charge</i>, the
+original form. <i>&Delta; from spread</i> sets &Delta; to twice the
+standard deviation of those sums. The count line states the target, the
+regions, the fraction of the box they fill, which box axes they span and
+how many of the probe's atoms lie inside a region.
 Only the regions of at least the rule's &ldquo;draw &ge;&rdquo; volume are
 drawn as a surface (the largest always is, and the surface grid is
 subsampled when the mesh would exceed the triangle budget) &mdash; a drawing

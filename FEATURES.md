@@ -96,7 +96,7 @@ says what is missing; what remains planned is listed as such.
 | Uncertainty on the bond-valence sum | – | – | **done** | systematic (R0) and random (coordinates) reported separately |
 | Structure health checks | – | – | **done** | impossible contacts, split sites, charge, esds, valence |
 | Bond strain index | – | – | **done** | |
-| Void / free-volume analysis | ✓ | ✓ | **partial** | the void cone half-angle; no cavity mapping |
+| Void / free-volume analysis | ✓ | ✓ | **done** | the void cone half-angle on a site; for an MD frame the empty spheres (Delaunay seeds moved to the maxima of the clearance, Shannon ionic radii by the model's oxidation states, one sphere per maximum) and the void regions they join into |
 | Centroid and eccentricity | ✓ | ✓ | **done** | |
 
 ## 6. Coordination analysis — where FACET goes past both
@@ -375,11 +375,11 @@ that file.
 
 ## What is left
 
-181 of the 203 tracked features are done, 12 are deliberately out of scope,
-and 10 remain: 6 partial and 4 planned. Sections 1–13 hold 131 of the rows
-(113 done, 4 partial, 4 planned, 10 out of scope); §14 holds 72 (68 done,
+182 of the 203 tracked features are done, 12 are deliberately out of scope,
+and 9 remain: 5 partial and 4 planned. Sections 1–13 hold 131 of the rows
+(114 done, 3 partial, 4 planned, 10 out of scope); §14 holds 72 (68 done,
 2 partial, 2 out of scope). Every feature selected for implementation is
-implemented, the six partial ones in part; the rest are listed so that what is
+implemented, the five partial ones in part; the rest are listed so that what is
 missing stays visible rather than being discovered. (Counted from the tables,
 one row per feature.)
 
@@ -388,8 +388,6 @@ one row per feature.)
 - *Wireframe* draws as thin sticks rather than as true lines. Cosmetic.
 - *Boundary modes*: periodic images are drawn where they close a bond, but there
   is no whole-molecule or whole-polyhedron completion mode.
-- *Void analysis* reports and now draws the void cone half-angle, which is what
-  a lone pair needs, but does not map cavities.
 - *CrystalMaker files*: `.cmtx` text is read. `.cmdf` is an undocumented binary
   and is refused with an explanation rather than guessed at.
 - *3D view of an MD frame* (§14): drawn on every tier from the bulk engine's

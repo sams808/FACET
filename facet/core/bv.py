@@ -411,9 +411,13 @@ class ParameterSet:
                  allow_estimated: bool = True,
                  fitted_b: dict[tuple[str, int, str], float] | None = None,
                  anion_ox: dict[str, int] | None = None,
-                 notes: list[str] | None = None):
+                 notes: list[str] | None = None,
+                 pair_sources: dict[tuple[str, int, str], str] | None = None):
         self.name = name
         self.source = source
+        # a compilation names the paper behind each row; kept per pair so a
+        # parameter's provenance is the row it came from, not only the file
+        self._pair_sources = dict(pair_sources or {})
         self.b = b
         self.allow_estimated = allow_estimated
         # Two layers for the built-in set: the hand-entered pairs, and the
@@ -446,8 +450,12 @@ class ParameterSet:
 
         r0 = self._fitted.get(key)
         if r0 is not None:
+            source = self.source
+            row = self._pair_sources.get(key)
+            if row:
+                source = f"{row} [{self.source}]"
             return BVParam(c, int(ox), a, self._anion_charge(a), r0,
-                           self._fitted_b.get(key, self.b), self.source, True)
+                           self._fitted_b.get(key, self.b), source, True)
 
         row = self._table2.get((c, int(ox)))
         if row is not None and a in row:

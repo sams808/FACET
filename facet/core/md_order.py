@@ -2007,9 +2007,24 @@ class EmptySpheres:
     box_volume_ang3: float
     n_degenerate: int
     notes: tuple[str, ...] = ()
+    # with refine=True (the default): the circumcentre moved to the nearest
+    # local maximum of the clearance, its radius there, how far it moved,
+    # and whether it is the largest of the spheres that met at that maximum
+    # (the others are the same void seen from neighbouring tetrahedra)
+    seed_centre_frac: np.ndarray | None = None
+    seed_radius_ang: np.ndarray | None = None
+    moved_ang: np.ndarray | None = None
+    representative: np.ndarray | None = None
 
     def __len__(self) -> int:
         return int(self.radius_ang.shape[0])
+
+    @property
+    def n_voids(self) -> int:
+        """The distinct voids: one sphere per local maximum."""
+        if self.representative is None:
+            return len(self)
+        return int(np.count_nonzero(self.representative))
 
     @property
     def method_parameters(self) -> dict:
@@ -2086,16 +2101,29 @@ def _delaunay_in_box(frame: Frame, margin: float):
 
 def empty_spheres(frame: Frame, radii_ang: Mapping[str, float], *,
                   radii_source: str,
-                  margin_ang: float | None = None) -> EmptySpheres:
-    """The empty sphere at the circumcentre of every Delaunay tetrahedron.
+                  margin_ang: float | None = None,
+                  refine: bool = True) -> EmptySpheres:
+    """The empty sphere of every Delaunay tetrahedron: seeded at the
+    circumcentre and, with ``refine`` (the default), moved to the nearest
+    local maximum of the clearance.
 
     ``radii_ang`` (element -> Å) and ``radii_source`` are required: no radius
-    is assumed (:func:`vdw_radii_ang` gives FACET's van der Waals radii and
-    :data:`VDW_RADII_SOURCE` their source). Radii of 0 give the circumradii.
-    ValueError when the tetrahedra do not fill the box volume within
-    :data:`VOLUME_LAW_TOL`, and for an atom that lies on another one (it is
-    a vertex of no tetrahedron); a contact closer than ``bulk.D_MIN_ANG`` is
-    noted.
+    is assumed (:func:`ionic_radii_ang` gives Shannon's ionic radii by the
+    model's oxidation states, :func:`vdw_radii_ang` FACET's van der Waals
+    radii). Radii of 0 give the circumradii. ValueError when the tetrahedra
+    do not fill the box volume within :data:`VOLUME_LAW_TOL`, and for an
+    atom that lies on another one (it is a vertex of no tetrahedron); a
+    contact closer than ``bulk.D_MIN_ANG`` is noted.
+
+    Why refine: the circumcentre is the point farthest from the four
+    vertices' *centres*; with unequal radii the point farthest from their
+    *surfaces* lies elsewhere, so for an oxide (O 1.40 Å against Si 0.40 Å)
+    the circumsphere clearance understates every void and, with van der
+    Waals radii, most come out negative. The ascent (``_refine_centres``)
+    moves each seed away from the nearest surface until no step gains, then
+    measures the clearance against every atom image within reach. Spheres
+    whose seeds climb to the same maximum are the same void; the largest
+    is marked ``representative`` and the others keep their numbers.
     """
     from scipy.spatial import cKDTree
 
@@ -2172,6 +2200,60 @@ def empty_spheres(frame: Frame, radii_ang: Mapping[str, float], *,
         notes.append(f"{int(inside.sum())} of {circum.size} circumcentres lie "
                      "inside an atom sphere; their radius is negative, the "
                      "depth inside")
+    seed_frac = centre_frac
+    seed_radius = clearance.copy()
+    moved = None
+    representative = None
+    if refine and circum.size:
+        radii_q = np.asarray([radii[str(s)] for s in symbols], np.float64)
+        tree_all = cKDTree(points_q)
+        refined, refined_clear, _steps = _refine_centres(
+            np.asarray(centre, np.float64), points_q, radii_q, tree_all,
+            reach, spacing, limit=np.asarray(circum, np.float64))
+        # a refined centre may leave the box: wrap it, keep the clearance
+        frac_r = _frac_of(refined, frame.box_ang) % 1.0
+        moved = np.linalg.norm(refined - centre, axis=1)
+        # the spheres that met at one maximum: joined when their centres
+        # lie within 0.05 Å (periodic), so a translation of the frame
+        # changes no grouping, which a grid of cells would
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+        cart_r = frac_r @ frame.box_ang
+        n_s = cart_r.shape[0]
+        _tree_s = cKDTree(cart_r)
+        near_pairs = _tree_s.query_pairs(0.05, output_type="ndarray")
+        # across the box faces as well
+        corner = np.array(list(itertools.product((-1, 0, 1), repeat=3)))
+        corner = corner[np.any(corner != 0, axis=1)]
+        shifted = (frac_r[:, None, :] + corner[None, :, :]).reshape(-1, 3) @ frame.box_ang
+        owner = np.repeat(np.arange(n_s), corner.shape[0])
+        found = _tree_s.query_ball_point(shifted, 0.05)
+        extra = [(owner[a], b) for a, hits in enumerate(found) for b in hits
+                 if owner[a] != b]
+        if extra:
+            extra = np.asarray(extra, np.int64)
+            near_pairs = np.vstack([near_pairs.reshape(-1, 2), extra]) \
+                if near_pairs.size else extra
+        if near_pairs.size:
+            graph = coo_matrix((np.ones(near_pairs.shape[0]),
+                                (near_pairs[:, 0], near_pairs[:, 1])), shape=(n_s, n_s))
+            _n, group = connected_components(graph, directed=False)
+        else:
+            group = np.arange(n_s)
+        group = np.asarray(group).reshape(-1)
+        order = np.lexsort((-refined_clear, group))
+        first = np.ones(order.size, bool)
+        first[1:] = group[order][1:] != group[order][:-1]
+        representative = np.zeros(order.size, bool)
+        representative[order[first]] = True
+        n_rep = int(representative.sum())
+        notes.append(
+            f"refined: every circumcentre moved to the nearest local maximum "
+            f"of the clearance (median move {float(np.median(moved)):.3g} Å, "
+            f"largest {float(moved.max()):.3g} Å); {n_rep} distinct voids "
+            f"among {circum.size} spheres (the rest share a maximum)")
+        centre_frac = frac_r
+        clearance = refined_clear
     return EmptySpheres(
         vertices=_frozen(verts), vertex_image=_frozen(images),
         centre_frac=_frozen(centre_frac), circumradius_ang=_frozen(circum),
@@ -2179,7 +2261,9 @@ def empty_spheres(frame: Frame, radii_ang: Mapping[str, float], *,
         radii_ang=dict(radii), radii_source=radii_source.strip(),
         margin_ang=float(margin), volume_sum_ang3=total,
         box_volume_ang3=box_volume, n_degenerate=n_degenerate,
-        notes=tuple(notes))
+        notes=tuple(notes),
+        seed_centre_frac=seed_frac, seed_radius_ang=seed_radius,
+        moved_ang=moved, representative=representative)
 
 
 # ---------------------------------------------------------------------------
@@ -2766,6 +2850,178 @@ def free_volume(frame: Frame, radii_ang: Mapping[str, float], *,
         probe_occupiable_fraction=n_occupiable / total,
         box_volume_ang3=frame.volume_ang3, radii_ang=dict(radii),
         radii_source=radii_source.strip(), notes=tuple(notes))
+
+
+
+# ---------------------------------------------------------------------------
+# ionic radii
+# ---------------------------------------------------------------------------
+
+IONIC_RADII_SOURCE = ("Shannon (1976) Acta Cryst. A32, 751-767, effective "
+                      "ionic radii at coordination number 6 (high spin where "
+                      "it applies), transcribed into IONIC_RADII_ANG")
+
+# (element, charge) -> effective ionic radius in Å at coordination 6, from
+# Shannon's Table 1. Where the paper lists several spin states the high-spin
+# value is taken; the few ions whose CN-6 value the paper lacks take the
+# nearest listed coordination, named in the comment.
+IONIC_RADII_ANG: dict[tuple[str, int], float] = {
+    ("O", -2): 1.40, ("F", -1): 1.33, ("Cl", -1): 1.81, ("Br", -1): 1.96,
+    ("I", -1): 2.20, ("S", -2): 1.84, ("Se", -2): 1.98, ("Te", -2): 2.21,
+    ("N", -3): 1.46, ("OH", -1): 1.37,
+    ("H", 1): -0.18,          # Shannon lists H+ at -0.18 (CN 2); a proton
+    ("Li", 1): 0.76, ("Na", 1): 1.02, ("K", 1): 1.38, ("Rb", 1): 1.52,
+    ("Cs", 1): 1.67, ("Ag", 1): 1.15, ("Cu", 1): 0.77, ("Tl", 1): 1.50,
+    ("Be", 2): 0.45, ("Mg", 2): 0.72, ("Ca", 2): 1.00, ("Sr", 2): 1.18,
+    ("Ba", 2): 1.35, ("Zn", 2): 0.74, ("Cd", 2): 0.95, ("Hg", 2): 1.02,
+    ("Pb", 2): 1.19, ("Sn", 2): 1.22, ("Mn", 2): 0.83, ("Fe", 2): 0.78,
+    ("Co", 2): 0.745, ("Ni", 2): 0.69, ("Cu", 2): 0.73, ("Eu", 2): 1.17,
+    ("Cr", 2): 0.80, ("V", 2): 0.79, ("Pd", 2): 0.86, ("Pt", 2): 0.80,
+    ("B", 3): 0.27, ("Al", 3): 0.535, ("Ga", 3): 0.62, ("In", 3): 0.80,
+    ("Tl", 3): 0.885, ("Sc", 3): 0.745, ("Y", 3): 0.90, ("La", 3): 1.032,
+    ("Ce", 3): 1.01, ("Pr", 3): 0.99, ("Nd", 3): 0.983, ("Sm", 3): 0.958,
+    ("Eu", 3): 0.947, ("Gd", 3): 0.938, ("Tb", 3): 0.923, ("Dy", 3): 0.912,
+    ("Ho", 3): 0.901, ("Er", 3): 0.89, ("Tm", 3): 0.88, ("Yb", 3): 0.868,
+    ("Lu", 3): 0.861, ("Bi", 3): 1.03, ("Sb", 3): 0.76, ("As", 3): 0.58,
+    ("Fe", 3): 0.645, ("Cr", 3): 0.615, ("Mn", 3): 0.645, ("Co", 3): 0.61,
+    ("V", 3): 0.64, ("Ti", 3): 0.67, ("Ni", 3): 0.60, ("Rh", 3): 0.665,
+    ("Ru", 3): 0.68, ("Ir", 3): 0.68, ("Au", 3): 0.85, ("P", 3): 0.44,
+    ("Si", 4): 0.40, ("Ge", 4): 0.53, ("Ti", 4): 0.605, ("Zr", 4): 0.72,
+    ("Hf", 4): 0.71, ("Sn", 4): 0.69, ("Pb", 4): 0.775, ("Ce", 4): 0.87,
+    ("Th", 4): 0.94, ("U", 4): 0.89, ("Mn", 4): 0.53, ("V", 4): 0.58,
+    ("Mo", 4): 0.65, ("W", 4): 0.66, ("Te", 4): 0.97, ("Se", 4): 0.50,
+    ("Ru", 4): 0.62, ("Ir", 4): 0.625, ("Pt", 4): 0.625, ("C", 4): 0.16,
+    ("Nb", 4): 0.68, ("Ta", 4): 0.68, ("Tb", 4): 0.76, ("Pr", 4): 0.85,
+    ("P", 5): 0.38, ("V", 5): 0.54, ("Nb", 5): 0.64, ("Ta", 5): 0.64,
+    ("As", 5): 0.46, ("Sb", 5): 0.60, ("Bi", 5): 0.76, ("Mo", 5): 0.61,
+    ("W", 5): 0.62, ("U", 5): 0.76, ("Re", 5): 0.58, ("I", 5): 0.95,
+    ("N", 5): 0.13, ("Cr", 5): 0.49, ("Mn", 5): 0.33,
+    ("S", 6): 0.29, ("Se", 6): 0.42, ("Te", 6): 0.56, ("Mo", 6): 0.59,
+    ("W", 6): 0.60, ("Cr", 6): 0.44, ("U", 6): 0.73, ("Re", 6): 0.55,
+    ("Mn", 7): 0.46, ("Re", 7): 0.53, ("I", 7): 0.53, ("Cl", 7): 0.27,
+}
+
+
+def ionic_radii_ang(frame: Frame, ox_atom=None) -> tuple[dict[str, float], str]:
+    """Shannon's effective ionic radius of each element of the frame, in Å,
+    by the oxidation state the model assigns it (``ox_atom`` per atom; the
+    most common state of each element is used, or ``elements.COMMON_OX``
+    when none is given), with the source line to pass as ``radii_source``.
+    An ion the table lacks takes FACET's van der Waals radius for the
+    element, and the source line names it, so that the fallback is never
+    silent. The proton's listed radius is negative and is set to 0.
+    """
+    if isinstance(frame, Frame):
+        symbols = np.asarray(frame.elements)
+        species = frame.species
+    else:
+        symbols = np.asarray(list(frame))
+        species = sorted(set(str(s) for s in symbols))
+    charge: dict[str, int] = {}
+    if ox_atom is not None:
+        ox = np.asarray(ox_atom)
+        for s in species:
+            rows = symbols == s
+            if rows.any():
+                values, counts = np.unique(ox[rows], return_counts=True)
+                charge[str(s)] = int(values[np.argmax(counts)])
+    out: dict[str, float] = {}
+    fallback: list[str] = []
+    for s in species:
+        s = str(s)
+        q = charge.get(s, element_data.COMMON_OX.get(s))
+        r = IONIC_RADII_ANG.get((s, int(q))) if q is not None else None
+        if r is None:
+            r = vdw_radii_ang([s])[s]
+            fallback.append(f"{s}{q:+d}" if q is not None else s)
+        out[s] = max(float(r), 0.0)
+    source = IONIC_RADII_SOURCE
+    if fallback:
+        source += (f"; no ionic radius tabulated for {', '.join(fallback)}: "
+                   f"the van der Waals radius is used ({VDW_RADII_SOURCE})")
+    return out, source
+
+
+def _refine_centres(centre: np.ndarray, points: np.ndarray, radii: np.ndarray,
+                    tree, reach: float, spacing: float, limit: np.ndarray,
+                    k: int = 24, iterations: int = 40
+                    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Move every sphere centre to a local maximum of the clearance
+    ``min_i(|c - x_i| - r_i)`` over the atom images ``points`` with radii
+    ``radii``, within ``limit`` of where it started (its circumradius: the
+    void a tetrahedron seeds is the one about it, not one across the box).
+
+    The ascent direction is away from the atoms whose surfaces are nearest
+    (every surface within 0.02 Å of the nearest: at a circumcentre of equal
+    radii four surfaces tie, and their unit vectors cancel, which is how a
+    seed that is already a maximum stays put); the step halves where it
+    does not gain. The neighbours are looked up again at every step, so a
+    centre never reads a clearance against atoms it has walked away from.
+    Returns (centres, clearance, steps taken); the clearance is measured
+    against the k nearest images of the final position.
+    """
+    n = centre.shape[0]
+    if n == 0:
+        return centre, np.zeros(0), np.zeros(0, int)
+    kk = min(int(k), points.shape[0])
+    rows = np.arange(n)
+
+    def surfaces(c):
+        _d, idx = tree.query(c, k=kk)
+        idx = np.asarray(idx).reshape(n, kk)
+        near = points[idx]
+        d = np.linalg.norm(near - c[:, None, :], axis=2) - radii[idx]
+        return d, near
+
+    c = centre.copy()
+    d, near = surfaces(c)
+    best = d.min(axis=1)
+    step = np.full(n, 0.35 * spacing)
+    taken = np.zeros(n, int)
+    limit = np.asarray(limit, np.float64)
+    def surfaces_of(c_sub, m):
+        _d, idx = tree.query(c_sub, k=kk)
+        idx = np.asarray(idx).reshape(m, kk)
+        near_s = points[idx]
+        d_s = np.linalg.norm(near_s - c_sub[:, None, :], axis=2) - radii[idx]
+        return d_s, near_s
+
+    for _ in range(int(iterations)):
+        live = np.flatnonzero(step > 1e-3 * spacing)
+        if live.size == 0:
+            break
+        m = live.size
+        d_l, near_l, c_l, best_l = d[live], near[live], c[live], best[live]
+        active = d_l <= (best_l[:, None] + 0.02)
+        away = c_l[:, None, :] - near_l                     # (m, k, 3)
+        norm = np.linalg.norm(away, axis=2)
+        norm[norm < 1e-12] = 1.0
+        unit = away / norm[..., None]
+        direction = (unit * active[..., None]).sum(axis=1)
+        length = np.linalg.norm(direction, axis=1)
+        stuck = length < 1e-6
+        length[stuck] = 1.0
+        trial = c_l + (direction / length[:, None]) * step[live][:, None]
+        # within the circumradius of the seed
+        seed_l = centre[live]
+        offset = trial - seed_l
+        far = np.linalg.norm(offset, axis=1)
+        lim = limit[live]
+        over = far > lim
+        trial[over] = seed_l[over] + offset[over] * (lim[over] / far[over])[:, None]
+        d_t, near_t = surfaces_of(trial, m)
+        trial_best = d_t.min(axis=1)
+        gain = (trial_best > best_l + 1e-12) & ~stuck
+        rows_gain = live[gain]
+        c[rows_gain] = trial[gain]
+        best[rows_gain] = trial_best[gain]
+        d[rows_gain] = d_t[gain]
+        near[rows_gain] = near_t[gain]
+        taken[rows_gain] += 1
+        step[live[~gain & ~stuck]] *= 0.5
+        step[live[stuck]] = 0.0
+    d, _near = surfaces(c)
+    return c, d.min(axis=1), taken
 
 
 def vdw_radii_ang(symbols) -> dict[str, float]:

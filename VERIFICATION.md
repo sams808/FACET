@@ -911,6 +911,47 @@ after their fixes, and every one of those reads found more:
 
 ---
 
+### Added in 1.0.1: voids, channel targets, the arcs of a cluster
+
+Three faults a 12 811-atom soda-lime silicate model (Pedone potentials)
+showed, with the checks that now hold them:
+
+* **Voids.** The empty spheres subtracted van der Waals radii (O 1.52 Å,
+  Na 2.27 Å), which in an ionic solid exceed the bond length: 61 spheres of
+  the frame's 89 981 had a volume of 1 Å³ or more, and most had none. The
+  rule now subtracts Shannon's ionic radii by the model's oxidation states
+  (O²⁻ 1.40, Si⁴⁺ 0.40, Ca²⁺ 1.00, Na⁺ 1.02 Å; van der Waals and none stay as
+  choices), and each circumcentre is moved to the nearest local maximum of
+  the clearance, within its circumradius, before the radius is measured. On
+  the same frame: 37 317 voids of 1 Å³ or more, the largest 2.10 Å in radius
+  against 1.96 Å at the seeds. Checked: every refined radius equals a brute
+  force `min(|c − x| − r)` over every atom and 27 images to 1e-9 Å
+  (`test_md_fixes_batch.py`, `test_md_order.py`); no refined radius is below
+  its seed's; no centre moves farther than its circumradius; the seeds keep
+  the circumsphere property; a translated frame gives the same number of
+  distinct voids and the same radii to 2e-3 Å; the void regions are built
+  from the seed spheres, the Delaunay construction the crystal tests pin
+  (`test_md_channels.py`, unchanged).
+* **Channels by charge.** The mismatch was measured against the formal
+  valence; in that model the Ca atoms sum to 1.72 ± 0.20 v.u., so
+  |V − 2| ≤ 0.3 admitted 897 of 1 366 Ca sites and the regions missed the
+  modifiers. The target is now a stated choice, the frame mean of the sum
+  at the probe's own atoms by default (1 043 of 1 366 inside at Δ = 0.3,
+  1 301 at Δ = 0.5), with the formal charge one click away and "Δ from
+  spread" setting Δ to twice the standard deviation. Checked: the probe sums
+  equal the landscape at the atoms' positions, the mismatch is
+  |V − target| point by point, a probe the frame lacks falls back to the
+  formal valence and says so, and on a jittered quartz the frame target
+  puts at least 90 % of the Si inside a region at Δ = 2σ.
+* **Angle arcs of an isolated environment.** Leaving atoms out of the scene
+  dropped their rows but left `bond_atoms` numbered for the whole frame, so
+  the arcs of a cluster found no bond at the hub (and the vector sums of a
+  cluster read the wrong atoms). The endpoints are now renumbered with the
+  atoms, and with the images that unwrap onto a kept copy. Checked: after
+  hiding, every endpoint is a live index and the hub keeps its bond count,
+  and the view's own `hub_angles` returns n(n − 1)/2 pairs; reproduced on
+  the 15 486-atom model (36 pairs at a nine-bonded Ca, from 0).
+
 ### What is not verified
 
 **No model from the group has been analysed yet.** Every number above measured

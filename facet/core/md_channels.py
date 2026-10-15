@@ -57,6 +57,17 @@ What is computed here, exactly:
   parameter contributes nothing and is named in the notes. The mismatch
   itself is kept, in valence units: no energy scaling is applied, so no
   barrier in eV can be read from it;
+* the **target** the sum is matched to is a choice, stated in the result
+  (``target``). ``'formal'`` is the formal valence n of the probe, the
+  original form [1]. ``'frame'`` is the mean of the same sum evaluated at
+  the probe element's own atoms in the frame (``probe_sums_vu``, computed
+  with the same parameters, anions and r_cut), so the pathways are read
+  against how the frame actually bonds that ion: in a model whose
+  potentials leave Ca at a sum of 1.5 v.u., |V - 2| <= 0.3 admits none of
+  the Ca sites and the regions miss the modifiers, while |V - 1.5| <= 0.3
+  passes through them. A number gives the target directly. With ``'frame'``
+  and no atom of the probe element, the formal valence is used and the
+  notes say so;
 * ``r_cut_ang`` is required. The valence a contact carries at r_cut is
   stated per parameter, so the person who chose it can see what is left out
   (Na-O at 6 Å with R0 = 1.80 Å, b = 0.37 Å carries 1.2e-5 v.u.);
@@ -765,6 +776,9 @@ class Landscape:
     frac: np.ndarray
     frame_digest: str
     notes: tuple[str, ...] = ()
+    target: float = 0.0                 # 0: the formal valence (property)
+    target_mode: str = "formal"         # 'formal' | 'frame' | 'given'
+    probe_sums_vu: np.ndarray | None = None   # V at the probe's own atoms
 
     @property
     def n_points(self) -> int:
@@ -776,8 +790,9 @@ class Landscape:
 
     @property
     def target_vu(self) -> float:
-        """|probe_ox|, the sum the probe matches."""
-        return float(abs(self.probe_ox))
+        """The sum the probe is matched to: the formal valence |probe_ox|,
+        or the target chosen (module docstring)."""
+        return float(self.target) if self.target > 0 else float(abs(self.probe_ox))
 
     @property
     def probe_label(self) -> str:
@@ -786,6 +801,8 @@ class Landscape:
     @property
     def method_parameters(self) -> dict:
         out = {"probe": self.probe_label,
+               "target (v.u.)": self.target_vu,
+               "target chosen as": self.target_mode,
                "grid spacing requested (Å)": self.grid_spacing_ang,
                "grid spacing (Å)": self.spacing_ang,
                "grid shape": self.shape,
@@ -806,12 +823,60 @@ class Landscape:
         return np.sort(self.mismatch_vu[~self.excluded])
 
 
+def probe_sums(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
+               r_cut_ang: float, params: bv.ParameterSet | None = None
+               ) -> np.ndarray:
+    """The sum V the landscape would give at each atom of the probe element
+    of the frame (the same parameters, anions and r_cut as
+    :func:`bv_landscape`, without the grid): what ``target='frame'`` takes
+    the mean of, and what its spread is read from. Empty when the frame
+    holds no such atom."""
+    from scipy.spatial import cKDTree
+
+    frame = _check_frame(frame)
+    params = params or bv.DEFAULT
+    symbols = frame.elements
+    ox = bulk._ox_array(ox_atom, symbols)
+    probe = validate_symbol(probe)
+    r_cut = _positive(r_cut_ang, "r_cut_ang")
+    rows = np.flatnonzero(symbols == probe)
+    if rows.size == 0:
+        return np.zeros(0)
+    is_anion = ox < 0
+    parameters = {}
+    for element in sorted({str(s) for s in symbols[is_anion]}):
+        p = params.get(probe, int(probe_ox), element)
+        if p is not None:
+            parameters[element] = p
+    if not parameters:
+        return np.zeros(rows.size)
+    atom, _, position = bulk._image_points(frame, r_cut)
+    use = is_anion[atom] & np.isin(symbols[atom], list(parameters))
+    position = position[use]
+    codes = {e: c for c, e in enumerate(parameters)}
+    img_code = np.array([codes[str(s)] for s in symbols[atom[use]]], np.int64)
+    tree = cKDTree(position)
+    own = bulk._lattice(frame.frac[rows], frame.box_ang)
+    found = cKDTree(own).sparse_distance_matrix(tree, r_cut, output_type="ndarray")
+    sums = np.zeros(rows.size)
+    if found.shape[0]:
+        i, j, d = found["i"], found["j"], found["v"]
+        code = img_code[j]
+        for element, p in parameters.items():
+            sel = code == codes[element]
+            if sel.any():
+                sums += np.bincount(i[sel], weights=p.valence(d[sel]),
+                                    minlength=rows.size)
+    return sums
+
+
 def bv_landscape(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
                  grid_spacing_ang: float, r_cut_ang: float,
                  params: bv.ParameterSet | None = None,
                  repulsion: Repulsion | None = None,
                  cancelled: Callable[[], bool] | None = None,
-                 max_grid_points: int | None = None) -> Landscape:
+                 max_grid_points: int | None = None,
+                 target: str | float = "formal") -> Landscape:
     """The bond-valence sum a probe ``probe``^``probe_ox`` would have at every
     point of a periodic grid over the frame, and its mismatch |V - n|.
 
@@ -827,6 +892,9 @@ def bv_landscape(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
     the computation with :class:`AnalysisCancelled`; a grid of more than
     ``max_grid_points`` points (:data:`MAX_GRID_POINTS` when None) is
     refused with the numbers before anything is allocated (grid_guard).
+    ``target`` is what the sum is matched to: ``'formal'`` (|probe_ox|),
+    ``'frame'`` (the mean sum at the probe's own atoms) or a number (module
+    docstring).
     """
     from scipy.spatial import cKDTree
 
@@ -948,7 +1016,54 @@ def bv_landscape(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
             dist, _ = tree_c.query(points, k=1,
                                    distance_upper_bound=repulsion.r_excl_ang)
             excluded[start:stop] = dist < repulsion.r_excl_ang
-    target = float(abs(probe_ox))
+    # the same sum at the probe element's own atoms, exactly
+    probe_rows = np.flatnonzero(symbols == probe)
+    probe_sums = np.zeros(probe_rows.size)
+    if probe_rows.size:
+        own = bulk._lattice(frame.frac[probe_rows], box)
+        found = cKDTree(own).sparse_distance_matrix(
+            tree, r_cut, output_type="ndarray")
+        if found.shape[0]:
+            i, j, d = found["i"], found["j"], found["v"]
+            code = img_code[j]
+            for p, c in param_list:
+                sel = code == c
+                if sel.any():
+                    probe_sums += np.bincount(i[sel], weights=p.valence(d[sel]),
+                                              minlength=probe_rows.size)
+    formal = float(abs(probe_ox))
+    target_notes: list[str] = []
+    if isinstance(target, str):
+        mode = target.strip().lower()
+        if mode not in ("formal", "frame"):
+            raise ValueError(f"target {target!r}: 'formal', 'frame' or a number")
+        if mode == "frame" and probe_rows.size:
+            target_value = float(probe_sums.mean())
+            target_notes.append(
+                f"target {target_value:.4g} v.u.: the mean of V at the "
+                f"{probe_rows.size} {probe} atoms of the frame (standard "
+                f"deviation {float(probe_sums.std()):.3g}, range "
+                f"{float(probe_sums.min()):.3g} to {float(probe_sums.max()):.3g} "
+                f"v.u.); the formal valence is {formal:g}")
+        else:
+            if mode == "frame":
+                target_notes.append(
+                    f"target asked as the frame's mean, but the frame holds "
+                    f"no {probe} atom: the formal valence {formal:g} is used")
+                mode = "formal"
+            target_value = formal
+    else:
+        target_value = _positive(target, "target")
+        mode = "given"
+        target_notes.append(f"target {target_value:g} v.u. given; the formal "
+                            f"valence is {formal:g}")
+    if probe_rows.size and mode != "frame":
+        target_notes.append(
+            f"V at the {probe_rows.size} {probe} atoms of the frame: mean "
+            f"{float(probe_sums.mean()):.4g}, standard deviation "
+            f"{float(probe_sums.std()):.3g}, range {float(probe_sums.min()):.3g} "
+            f"to {float(probe_sums.max()):.3g} v.u.")
+    target = target_value
     mismatch = np.abs(bvs - target)
     spacing = tuple(float(v) for v in np.linalg.norm(box, axis=1) / shape)
     voxel = frame.volume_ang3 / n_points
@@ -969,8 +1084,9 @@ def bv_landscape(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
         f"a, b, c ({h:g} Å asked for); point (i, j, k) at fractional "
         f"(i/{shape[0]}, j/{shape[1]}, k/{shape[2]}), the point of index 0 at "
         f"the box corner; voxel volume {voxel:.6g} Å^3",
-        f"the mismatch is |V - {target:g}| in valence units: no energy scaling "
-        "is applied, and no barrier can be read from it",
+        f"the mismatch is |V - {target:.4g}| in valence units: no energy "
+        "scaling is applied, and no barrier can be read from it",
+        *target_notes,
         f"lowest mismatch on the grid {float(mismatch.min()):.4g} v.u., "
         f"median {float(np.median(mismatch)):.4g} v.u.; V ranges "
         f"{float(bvs.min()):.4g} to {float(bvs.max()):.4g} v.u.",
@@ -1007,7 +1123,8 @@ def bv_landscape(frame: Frame, ox_atom, probe: str, probe_ox: int, *,
         anions_without_parameter=tuple(missing), repulsion=repulsion,
         repulsion_elements=rep_elements, elements=frame.elements,
         frac=frame.frac, frame_digest=bulk._frame_digest(frame),
-        notes=tuple(notes))
+        notes=tuple(notes), target=float(target), target_mode=mode,
+        probe_sums_vu=_frozen(probe_sums))
 
 
 def _check_landscape(landscape) -> Landscape:
@@ -2039,13 +2156,23 @@ def void_regions(frame: Frame, spheres: EmptySpheres, *, probe_radius_ang: float
     mean_spacing = (volume / n) ** (1.0 / 3.0)
     tol = md_order.DEGENERATE_REL_TOL * mean_spacing
 
-    radius_all = np.asarray(spheres.radius_ang, dtype=np.float64)
+    # the seed spheres: the circumcentres and their clearance. A refined
+    # set (md_order.empty_spheres, refine=True) carries both; the regions
+    # are built from the seeds, the construction the tests pin (one sphere
+    # per tetrahedron, joined where they overlap), and the Voids rule maps
+    # its drawn spheres onto them by row.
+    seed_radius = getattr(spheres, "seed_radius_ang", None)
+    seed_centre = getattr(spheres, "seed_centre_frac", None)
+    radius_all = np.asarray(spheres.radius_ang if seed_radius is None
+                            else seed_radius, dtype=np.float64)
+    centre_all = np.asarray(spheres.centre_frac if seed_centre is None
+                            else seed_centre, dtype=np.float64)
     keep = (radius_all > 0.0) & (radius_all >= probe)
     rows = np.flatnonzero(keep)
     n_left_out = int(radius_all.shape[0] - rows.size)
     n_coincident = 0
     if rows.size:
-        cf = np.asarray(spheres.centre_frac, dtype=np.float64)[rows]
+        cf = centre_all[rows]
         r = radius_all[rows]
         home = bulk._lattice(cf, box)
         idx, image, pos = _images_within(cf, box, tol)
@@ -2111,7 +2238,7 @@ def void_regions(frame: Frame, spheres: EmptySpheres, *, probe_radius_ang: float
             notes=tuple(base_notes + ["no empty sphere reaches the probe "
                                       "radius; there is no void region"]))
 
-    cf = np.asarray(spheres.centre_frac, dtype=np.float64)[rows]
+    cf = centre_all[rows]
     r = radius_all[rows]
     rp = r - probe
     S = rows.size

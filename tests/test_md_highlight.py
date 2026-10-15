@@ -226,7 +226,9 @@ def test_void_spheres_are_drawn_once_at_the_volume_typed(quartz):
     volume = round(4 / 3 * np.pi * r_70 ** 3, 4)
     r_min = radius_for_volume(volume)
     assert abs(4 / 3 * np.pi * r_min ** 3 - volume) < 1e-9
-    expected = int((radii >= r_min).sum())
+    # one sphere per void: the spheres that climbed to one maximum are drawn once
+    representative = np.asarray(fd.spheres.representative, bool)
+    expected = int(((radii >= r_min) & representative).sum())
     assert 0 < expected < len(radii)
     rule = Rule("voids", min_volume_ang3=volume)
     scene = _scene(fd)
@@ -237,10 +239,10 @@ def test_void_spheres_are_drawn_once_at_the_volume_typed(quartz):
     assert voids[0].n_parts == expected
     assert voids[0].n_triangles == 80 * expected
     assert len(voids[0].part_of) == voids[0].n_triangles
-    assert f"{expected} empty spheres ≥ {volume:g} Å³ (radius ≥ " \
+    assert f"{expected} voids ≥ {volume:g} Å³ (radius ≥ " \
         f"{r_min:.2f} Å)" in result.note
     # the sphere centres are the empty-sphere centres, in the scene's frame
-    chosen = radii >= r_min
+    chosen = (radii >= r_min) & representative
     assert np.allclose(voids[0].anchors, fd.sphere_centres_ang()[chosen],
                        atol=1e-4)
     # again on the same scene: replaced, not doubled
@@ -258,7 +260,7 @@ def test_void_spheres_are_drawn_once_at_the_volume_typed(quartz):
                          dim_rest=True)
     assert result.n_spheres == 0
     assert not [m for m in scene.overlay_meshes if m.label == "voids"]
-    assert "0 empty spheres ≥ 1e+06 Å³" in result.note
+    assert "0 voids ≥ 1e+06 Å³" in result.note
 
 
 def test_colour_by_bvs_cn_and_phi_match_the_crystal_path(quartz):
@@ -345,8 +347,9 @@ def test_channels_by_charge_draw_the_regions_of_a_probe(quartz):
     result = apply_rules(scene, fd, [rule], dim_rest=True,
                          colour_by="channel membership")
     assert not result.problems, result.problems
-    assert "channels by charge: Na1+ probe, mismatch ≤ 0.5 v.u. on a 1.5 Å " \
-        "grid (r_cut 4 Å)" in result.note
+    assert "channels by charge: Na1+ probe, |V − target| ≤ 0.5 v.u., " \
+        "target" in result.note
+    assert "on a 1.5 Å grid (r_cut 4 Å)" in result.note
     assert "colour: channel membership" in result.note
     landscape = fd.landscape("Na", 1.5, 4.0)
     assert landscape.probe == "Na" and landscape.probe_ox == 1
@@ -403,7 +406,9 @@ def test_void_regions_filter_by_elongation_when_the_build_has_them(quartz):
         keep[np.asarray(regions.sphere_region)]]
     from facet.ui.md_highlight import radius_for_volume
 
-    expected = int((radii[rows] >= radius_for_volume(volume)).sum())
+    representative = np.asarray(fd.spheres.representative, bool)
+    expected = int(((radii[rows] >= radius_for_volume(volume))
+                    & representative[rows]).sum())
     assert elongated.n_spheres == expected
     # the channel rule by voids
     scene = _scene(fd)

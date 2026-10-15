@@ -286,11 +286,8 @@ class PreviewWindow(QMainWindow):
             self.load(path)
         elif prefs.get("restore_session", False):
             QTimer.singleShot(0, self._reopen_last_session)
-        # the tour is offered by the application's own start (app.main), not
-        # by every window a test or a script builds
-        if offer_tour and not path and prefs.get("offer_tour", True) \
-                and not prefs.get("tour_offered", False):
-            QTimer.singleShot(400, self._offer_tour)
+        # offer_tour is accepted for compatibility and does nothing: no
+        # window pops a question at start; the tutorials sit under Help
 
     # -- the active structure ----------------------------------------------
     @property
@@ -682,13 +679,22 @@ class PreviewWindow(QMainWindow):
             "O'Keeffe table, or a published set read from a file.")
         load_params = QAction("&Load…", self)
         load_params.setToolTip(
-            "Read a published parameter set: the IUCr bvparm distribution, a "
-            "softBV-style table, or a FACET parameter file. FACET does not ship "
-            "the large compilations, because each comes with its own terms.")
+            "Read a parameter set from a file: a bvparm distribution, a "
+            "softBV-style table, or a FACET parameter file.")
         load_params.triggered.connect(self._load_parameters)
-        reset_params = QAction("Use the &built-in", self)
-        reset_params.setToolTip("Back to the parameter set FACET ships.")
+        reset_params = QAction("Use the &built-in (Brese & O'Keeffe 1991)", self)
+        reset_params.setToolTip("The table the tutorials and the verification "
+                                "are stated against, with the estimator "
+                                "behind it.")
         reset_params.triggered.connect(self._reset_parameters)
+        iucr_params = QAction("Use the &IUCr table (bvparm 2020)", self)
+        iucr_params.setToolTip(
+            "I. D. Brown's accumulated table, bundled with FACET: 1 931 rows "
+            "from the literature (Brown & Altermatt, Brese & O'Keeffe, Gagné & "
+            "Hawthorne, Adams, Palenik and others), each naming its source; "
+            "the first row of a pair is used, the file's own order.")
+        iucr_params.triggered.connect(self._use_bundled_parameters)
+        params.addAction(iucr_params)
         save_params = QAction("&Save…", self)
         save_params.setToolTip("Write the set in use as a FACET parameter "
                                "file, so an edited one can be passed on.")
@@ -3226,6 +3232,12 @@ class PreviewWindow(QMainWindow):
     def _apply_saved_preferences(self) -> None:
         """The theme, the explorer's choices, the layout: as they were left."""
         data = prefs.load()
+        if data.get("parameter_set") == "bvparm2020":
+            from ..core import bv_files
+            try:
+                self.project.set_parameters(bv_files.bundled_compilation())
+            except (OSError, ValueError):
+                pass
         if not data.get("remember_layout", True):
             return
         name = data.get("theme")
@@ -3430,16 +3442,6 @@ class PreviewWindow(QMainWindow):
         dialog.show()
         dialog.raise_()
 
-    def _offer_tour(self) -> None:
-        prefs.set("tour_offered", True)
-        answer = QMessageBox.question(
-            self, "First run",
-            "Six short tutorials walk the bundled structures. Open Tutorial "
-            "1, a coordination number you can trust, now?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-        if answer == QMessageBox.Yes:
-            self._show_manual("tut-quartz")
-
     def _push_threshold_history(self) -> None:
         self.history.push(f"moved the threshold to {self.project.v_bond:.4f}",
                           self._snapshot())
@@ -3447,15 +3449,10 @@ class PreviewWindow(QMainWindow):
 
     # -- bond-valence parameters -------------------------------------------
     def _load_parameters(self) -> None:
-        """Read a published parameter set from wherever the user obtained it.
-
-        FACET ships the small Brese and O'Keeffe table it needs and the
-        O'Keeffe-Brese estimator, and nothing larger: the IUCr bvparm file,
-        Gagne and Hawthorne's tables and the softBV set each come with their own
-        terms, and bundling them in an application that gets passed around a
-        research group is not something to do casually. Loading one instead keeps
-        the user's own copy the source, and every parameter used afterwards
-        carries that file's name as its provenance.
+        """Read a parameter set from a file the user obtained: a later
+        bvparm release, a softBV-style table (softBV's terms keep it out of
+        the bundle), or a FACET parameter file. Every parameter used
+        afterwards carries that file's name as its provenance.
         """
         from ..core import bv_files
 
@@ -3482,6 +3479,24 @@ class PreviewWindow(QMainWindow):
             "table names them as the source.")
         self.statusBar().showMessage(
             f"bond-valence parameters: {report.name} ({report.pairs} pairs)",
+            12000)
+
+    def _use_bundled_parameters(self) -> None:
+        """The IUCr accumulated table that ships with FACET."""
+        from ..core import bv_files
+        try:
+            params = bv_files.bundled_compilation()
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, "Could not read the bundled table",
+                                str(error))
+            return
+        self.project.set_parameters(params)
+        for entry in self.project.entries:
+            entry.invalidate()
+        self._fill_site_list()
+        self._rebuild()
+        self.statusBar().showMessage(
+            f"bond-valence parameters: {params.name} ({params.n_fitted} pairs)",
             12000)
 
     def _reset_parameters(self) -> None:

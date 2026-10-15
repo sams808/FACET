@@ -81,6 +81,16 @@ CHANNEL_MODES = ("by charge", "by modifier density", "by voids")
 # dimmed atom keeps a fifth of its colour over the background and 40 % of
 # its radius, a bond 35 %; measured on the prototype as what keeps the box
 # readable while the kept atoms stand out.
+# the atom radii a void rule can subtract: key -> (menu text, words)
+VOID_RADII = {
+    "ionic": ("ionic (Shannon)", "Shannon's ionic radii by the model's "
+              "oxidation states"),
+    "vdw": ("van der Waals", "FACET's van der Waals radii"),
+    "none": ("none", "no atom radius, spheres to the atom centres"),
+}
+# at most this many void spheres are drawn (the largest first; the note
+# states how many passed the volume), 80 triangles each: a drawing choice
+VOID_DRAW_BUDGET = 4000
 VOID_COLOUR = (0.98, 0.72, 0.20)
 VOID_ALPHA = 0.38
 CHANNEL_COLOUR = (0.20, 0.55, 0.85)
@@ -308,19 +318,36 @@ class FrameData:
         out = tuple(s for s in self.cations if s not in self.formers)
         return out or self.cations
 
+    def spheres_with(self, radii: str = "ionic"):
+        """The empty spheres of the frame under one choice of atom radii
+        (:data:`VOID_RADII`), computed once per choice and refined to the
+        local maxima of the clearance (md_order.empty_spheres)."""
+        radii = str(radii or "ionic")
+        if radii not in VOID_RADII:
+            raise ValueError(f"radii {radii!r}: one of {tuple(VOID_RADII)}")
+        if not isinstance(self._spheres, dict):
+            self._spheres = {}
+        if radii not in self._spheres:
+            if radii == "ionic":
+                table, source = md_order.ionic_radii_ang(self.frame, self.ox_atom)
+            elif radii == "vdw":
+                table, source = (md_order.vdw_radii_ang(self.frame),
+                                 md_order.VDW_RADII_SOURCE)
+            else:
+                table = {s: 0.0 for s in self.frame.species}
+                source = "no atom radius: the spheres reach the atom centres"
+            self._spheres[radii] = md_order.empty_spheres(
+                self.frame, table, radii_source=source)
+        return self._spheres[radii]
+
     @property
     def spheres(self):
-        """The empty spheres of the frame (FACET's van der Waals radii),
-        computed on the first call."""
-        if self._spheres is None:
-            self._spheres = md_order.empty_spheres(
-                self.frame, md_order.vdw_radii_ang(self.frame),
-                radii_source=md_order.VDW_RADII_SOURCE)
-        return self._spheres
+        """The empty spheres under ionic radii, the default."""
+        return self.spheres_with("ionic")
 
-    def sphere_centres_ang(self) -> np.ndarray:
+    def sphere_centres_ang(self, radii: str = "ionic") -> np.ndarray:
         box = np.asarray(self.frame.box_ang, np.float64)
-        return np.asarray(self.spheres.centre_frac, np.float64) @ box
+        return np.asarray(self.spheres_with(radii).centre_frac, np.float64) @ box
 
     def descriptor(self, name: str) -> np.ndarray:
         """The per-atom values of a descriptor of :data:`DESCRIPTORS`
@@ -408,8 +435,31 @@ class FrameData:
         _keep, shell = neighbour_shells(self.bonds, self.n_atoms, centre, depth)
         return shell
 
+    def probe_sum_spread(self, probe: str, r_cut_ang: float):
+        """(mean, standard deviation, count) of the landscape's sum at the
+        probe element's own atoms (:func:`facet.core.md_channels.probe_sums`),
+        kept per (probe, r_cut); (nan, nan, 0) without such an atom."""
+        from ..core import md_channels
+
+        key = ("spread", str(probe), float(r_cut_ang))
+        if key not in self._landscapes:
+            rows = self.elements == probe
+            if rows.any():
+                probe_ox = int(self.ox_atom[rows][0])
+            else:
+                probe_ox = element_data.COMMON_OX.get(str(probe))
+            if probe_ox is None or not rows.any():
+                self._landscapes[key] = (float("nan"), float("nan"), 0)
+            else:
+                sums = md_channels.probe_sums(
+                    self.frame, self.ox_atom, str(probe), probe_ox,
+                    r_cut_ang=float(r_cut_ang), params=self.params)
+                self._landscapes[key] = (float(sums.mean()), float(sums.std()),
+                                         int(sums.size))
+        return self._landscapes[key]
+
     def landscape(self, probe: str, grid_spacing_ang: float,
-                  r_cut_ang: float, cancelled=None):
+                  r_cut_ang: float, cancelled=None, target: str = "formal"):
         """The bond-valence landscape of ``probe`` on this frame
         (:func:`facet.core.md_channels.bv_landscape`), kept per
         (probe, spacing, r_cut). ``cancelled`` (a ``() -> bool`` hook) is
@@ -419,7 +469,8 @@ class FrameData:
         stops when its job is cancelled."""
         from ..core import md_channels
 
-        key = (str(probe), float(grid_spacing_ang), float(r_cut_ang))
+        key = (str(probe), float(grid_spacing_ang), float(r_cut_ang),
+               str(target))
         if key not in self._landscapes:
             rows = self.elements == probe
             if rows.any():
@@ -433,11 +484,11 @@ class FrameData:
                 self.frame, self.ox_atom, str(probe), probe_ox,
                 grid_spacing_ang=float(grid_spacing_ang),
                 r_cut_ang=float(r_cut_ang), params=self.params,
-                cancelled=_cancel_hook(cancelled))
+                cancelled=_cancel_hook(cancelled), target=str(target))
         return self._landscapes[key]
 
     def regions(self, probe: str, grid_spacing_ang: float, r_cut_ang: float,
-                delta_vu: float, cancelled=None):
+                delta_vu: float, cancelled=None, target: str = "formal"):
         """The accessible regions of :meth:`landscape` at ``delta_vu``
         (:func:`facet.core.md_channels.accessible_regions`), kept per
         (probe, spacing, r_cut, Delta) -- the landscape and its regions do
@@ -445,10 +496,10 @@ class FrameData:
         from ..core import md_channels
 
         key = (str(probe), float(grid_spacing_ang), float(r_cut_ang),
-               float(delta_vu))
+               float(delta_vu), str(target))
         if key not in self._regions:
             landscape = self.landscape(probe, grid_spacing_ang, r_cut_ang,
-                                       cancelled)
+                                       cancelled, target=target)
             try:
                 self._regions[key] = md_channels.accessible_regions(
                     landscape, float(delta_vu),
@@ -550,7 +601,7 @@ def landscape_status_note(fd, rules, previous: str = "") -> str:
         if not probe or rule.grid_spacing_ang <= 0 or rule.r_cut_ang <= 0:
             continue
         key = (str(probe), float(rule.grid_spacing_ang),
-               float(rule.r_cut_ang))
+               float(rule.r_cut_ang), str(rule.target))
         if key in fd._landscapes:
             continue
         try:
@@ -607,6 +658,7 @@ class Rule:
     rows_label: str = ""            # what those rows are ('Si Q3 environment 1')
     min_volume_ang3: float = 0.0
     min_elongation: float | None = None
+    radii: str = "ionic"            # voids: the atom radii subtracted (VOID_RADII)
     channel_by: str = "by charge"
     threshold: float = 0.0
     probe: str = ""
@@ -616,6 +668,9 @@ class Rule:
     # CHANNEL_MESH_MIN_VOLUME_ANG3); a method choice about the picture, the
     # numbers always come from the full grid
     mesh_min_volume_ang3: float | None = None
+    # by charge only: what the sum is matched to, 'frame' (the mean sum at
+    # the probe's own atoms) or 'formal' (its formal valence); md_channels
+    target: str = "frame"
 
 
 @dataclass(frozen=True)
@@ -705,7 +760,7 @@ def _channel_mesh_arrays(fd: FrameData, rule: Rule, regions,
 
     key = (str(rule.probe), float(rule.grid_spacing_ang),
            float(rule.r_cut_ang), float(rule.threshold), float(floor_ang3),
-           int(CHANNEL_MESH_TRIANGLE_BUDGET))
+           int(CHANNEL_MESH_TRIANGLE_BUDGET), str(rule.target))
     hit = fd._channel_meshes.get(key)
     if hit is not None:
         return hit
@@ -717,7 +772,7 @@ def _channel_mesh_arrays(fd: FrameData, rule: Rule, regions,
         if regions.n_regions else 0
     label = np.asarray(regions.label_grid)
     landscape = fd.landscape(rule.probe, rule.grid_spacing_ang,
-                             rule.r_cut_ang)
+                             rule.r_cut_ang, target=rule.target)
     grid = md_channels.landscape_grid(landscape, "mismatch")
     # raise the accessible points outside the drawn regions above the level,
     # so their surface is not meshed; the numbers never read this field
@@ -777,7 +832,7 @@ def _channels_by_charge(fd: FrameData, rule: Rule):
                                  "r_cut above 0 (both are shown in the rule)")
     rule = replace(rule, probe=probe)
     regions = fd.regions(probe, rule.grid_spacing_ang, rule.r_cut_ang,
-                         rule.threshold)
+                         rule.threshold, target=rule.target)
     floor = CHANNEL_MESH_MIN_VOLUME_ANG3 \
         if rule.mesh_min_volume_ang3 is None \
         else max(float(rule.mesh_min_volume_ang3), 0.0)
@@ -785,15 +840,32 @@ def _channels_by_charge(fd: FrameData, rule: Rule):
         fd, rule, regions, floor)
     mesh = OverlayMesh(tri_vertices, tri_normals, tuple(CHANNEL_COLOUR),
                        float(CHANNEL_ALPHA), label="channels")
-    landscape = fd.landscape(probe, rule.grid_spacing_ang, rule.r_cut_ang)
+    landscape = fd.landscape(probe, rule.grid_spacing_ang, rule.r_cut_ang,
+                             target=rule.target)
     fraction = float(regions.accessible_fraction)
     spans = "".join(axis for axis, on in zip("abc", regions.percolates)
                     if bool(on))
-    note = (f"channels by charge: {landscape.probe_label} probe, mismatch "
-            f"≤ {rule.threshold:g} v.u. on a {rule.grid_spacing_ang:g} Å "
-            f"grid (r_cut {rule.r_cut_ang:g} Å): {regions.n_regions} "
-            f"region(s), {100 * fraction:.1f} % of the box"
+    region_of_atom = np.asarray(regions.region_of_atom)
+    probe_rows = np.asarray(fd.elements) == probe
+    n_probe = int(probe_rows.sum())
+    inside = int((region_of_atom[probe_rows] >= 0).sum()) if n_probe else 0
+    sums = landscape.probe_sums_vu
+    if landscape.target_mode == "frame" and sums is not None and len(sums):
+        target_text = (f"target {landscape.target_vu:.3g} v.u. = the mean sum "
+                       f"at the frame's {n_probe} {probe} atoms (spread "
+                       f"{float(np.std(sums)):.2g}; formal {abs(landscape.probe_ox):g})")
+    else:
+        target_text = f"target {landscape.target_vu:.3g} v.u. (the formal valence)"
+        if sums is not None and len(sums):
+            target_text += (f"; the frame's {n_probe} {probe} atoms sum to "
+                            f"{float(np.mean(sums)):.3g} ± {float(np.std(sums)):.2g}")
+    note = (f"channels by charge: {landscape.probe_label} probe, |V − target| "
+            f"≤ {rule.threshold:g} v.u., {target_text}, on a "
+            f"{rule.grid_spacing_ang:g} Å grid (r_cut {rule.r_cut_ang:g} Å): "
+            f"{regions.n_regions} region(s), {100 * fraction:.1f} % of the box"
             + (f", spanning {spans}" if spans else ", none spanning the box")
+            + (f"; {inside} of {n_probe} {probe} atoms lie inside a region"
+               if n_probe else "")
             + (f"; {policy}" if policy else ""))
     return np.asarray(regions.region_of_atom), int(regions.n_regions), mesh, \
         note
@@ -1016,11 +1088,26 @@ _PER_BOND = ("bond_a", "bond_b", "bond_radius", "bond_color_a",
              "bond_cation", "bond_occupancy", "_bond_base_a", "_bond_base_b")
 
 
+def _renumber_bond_atoms(scene, new_index: np.ndarray) -> None:
+    """``bond_atoms`` names scene atoms by index; after atoms are dropped
+    or merged the indices move, and ``new_index[old]`` says where (-1 for
+    an atom that is gone). Without this the arcs, the bond-valence vectors
+    and the picking of a cluster read the wrong atoms, or none."""
+    if not scene.n_bonds or len(scene.bond_atoms) == 0:
+        return
+    ends = np.asarray(scene.bond_atoms, int)
+    valid = (ends >= 0) & (ends < len(new_index))
+    out = np.where(valid, new_index[np.clip(ends, 0, len(new_index) - 1)], -1)
+    scene.bond_atoms = out.astype(np.int32)
+
+
 def _hide(scene, keep_rows: np.ndarray) -> None:
     """Leave the atoms outside ``keep_rows`` (and the bonds to them) out of
     the scene's arrays; the centre and radius are kept, so the camera
-    stays."""
+    stays. The bond endpoints are renumbered to the atoms that remain."""
     keep = keep_rows[np.asarray(scene.atom_site, int)]
+    new_index = np.full(len(keep), -1, np.int64)
+    new_index[keep] = np.arange(int(keep.sum()))
     for name in _PER_ATOM:
         value = getattr(scene, name)
         if len(value) == len(keep):
@@ -1041,6 +1128,7 @@ def _hide(scene, keep_rows: np.ndarray) -> None:
             value = getattr(scene, name)
             if len(value) == len(bond_keep):
                 setattr(scene, name, np.asarray(value)[bond_keep])
+        _renumber_bond_atoms(scene, new_index)
     scene.selected_atom = None
 
 
@@ -1072,12 +1160,19 @@ def _unwrap_about(scene, frame, centre_row: int) -> None:
     scene.center = new.mean(axis=0).astype(np.float32)
     scene.radius = float(np.linalg.norm(new - new.mean(axis=0), axis=1).max()
                          + 2.0)
-    # the images of a kept atom now coincide with it: keep each once
-    _, first = np.unique(np.round(new, 3), axis=0, return_index=True)
+    # the images of a kept atom now coincide with it: keep each once, and
+    # point the bonds of a dropped image at the copy that stays
+    _, first, inverse = np.unique(np.round(new, 3), axis=0,
+                                  return_index=True, return_inverse=True)
+    inverse = np.asarray(inverse).reshape(-1)
     keep = np.zeros(len(new), bool)
     keep[np.sort(first)] = True
     if keep.all():
         return
+    survivor = np.full(len(new), -1, np.int64)
+    survivor[keep] = np.arange(int(keep.sum()))
+    new_index = survivor[first[inverse]]
+    _renumber_bond_atoms(scene, new_index)
     for name in _PER_ATOM:
         value = getattr(scene, name)
         if len(value) == len(keep):
@@ -1110,12 +1205,15 @@ def _channel_distance(fd: FrameData) -> np.ndarray | None:
         return None
     points = []
     for key, regions in list(fd._regions.items()):
-        landscape = fd._landscapes.get(key[:3]) if isinstance(key, tuple) else None
-        if landscape is None:
-            # the landscape is cached under the first three parts of the key
+        landscape = None
+        if isinstance(key, tuple) and len(key) >= 5:
+            # regions are kept per (probe, spacing, r_cut, delta, target),
+            # landscapes per (probe, spacing, r_cut, target)
+            landscape = fd._landscapes.get((key[0], key[1], key[2], key[4]))
+        if landscape is None and isinstance(key, tuple):
             for lk, lv in fd._landscapes.items():
-                if isinstance(key, tuple) and isinstance(lk, tuple) \
-                        and lk == key[:len(lk)]:
+                if isinstance(lk, tuple) and lk[:3] == key[:3] \
+                        and not isinstance(lv, tuple):
                     landscape = lv
                     break
         if landscape is None:
@@ -1235,12 +1333,18 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
     n_spheres = 0
     for rule in [r for r in active if r.kind == "voids"]:
         r_min = radius_for_volume(rule.min_volume_ang3)
+        mode = rule.radii if rule.radii in VOID_RADII else "ionic"
         try:
-            radii = np.asarray(fd.spheres.radius_ang, np.float64)
+            spheres = fd.spheres_with(mode)
+            radii = np.asarray(spheres.radius_ang, np.float64)
         except ValueError as error:
             problems.append(f"voids: {error}")
             continue
         chosen = radii >= r_min
+        if spheres.representative is not None:
+            # one sphere per void: the spheres that climbed to the same
+            # maximum are the same void seen from neighbouring tetrahedra
+            chosen &= np.asarray(spheres.representative, bool)
         if rule.min_elongation is not None and rule.min_elongation > 1.0:
             # a sphere is drawn when its own volume passes and the void
             # region it belongs to (md_channels, probe radius 0) is at
@@ -1257,13 +1361,24 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
             except (ChannelUnavailable, AttributeError, ValueError) as error:
                 problems.append(f"voids, elongation ≥ "
                                 f"{rule.min_elongation:g}: {error}")
-        centres = fd.sphere_centres_ang()[chosen]
         count = int(chosen.sum())
         n_spheres += count
+        drawn = chosen
+        if count > VOID_DRAW_BUDGET:
+            # the largest within the budget; the numbers above are the full count
+            order = np.argsort(-radii)
+            keep_idx = order[chosen[order]][:VOID_DRAW_BUDGET]
+            drawn = np.zeros(len(radii), bool)
+            drawn[keep_idx] = True
+        centres = fd.sphere_centres_ang(mode)[drawn]
         if count:
-            scene.overlay_meshes.append(sphere_mesh(centres, radii[chosen]))
-        parts.append(f"{count} empty spheres ≥ {rule.min_volume_ang3:g} Å³ "
-                     f"(radius ≥ {r_min:.2f} Å)"
+            scene.overlay_meshes.append(sphere_mesh(centres, radii[drawn]))
+        largest = float(radii.max()) if radii.size else float("nan")
+        parts.append(f"{count} voids ≥ {rule.min_volume_ang3:g} Å³ "
+                     f"(radius ≥ {r_min:.2f} Å) with {VOID_RADII[mode][1]}; "
+                     f"largest {largest:.2f} Å"
+                     + (f"; the largest {VOID_DRAW_BUDGET} drawn"
+                        if count > VOID_DRAW_BUDGET else "")
                      + (f", elongation ≥ {rule.min_elongation:g}"
                         if rule.min_elongation is not None
                         and rule.min_elongation > 1.0 else "")
@@ -1508,14 +1623,31 @@ class VoidsRow(RuleRow):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.volume = _spin(8.0, 0.0, 100000.0, 1.0, 1, " Å³")
-        self.volume.setToolTip("Empty spheres (vdW radii) of the frame at "
-                               "or above this volume, drawn as translucent "
-                               "spheres.")
+        self.volume.setToolTip("The voids of the frame at or above this "
+                               "volume: the largest empty sphere at each "
+                               "local maximum of the clearance to the atom "
+                               "surfaces, drawn translucent.")
+        self.radii = _combo([v[0] for v in VOID_RADII.values()], 0)
+        self.radii.setToolTip(
+            "The atom radius subtracted from the distance to each atom "
+            "centre. Ionic: Shannon's radii by the model's oxidation states "
+            "(O2- 1.40 Å, Si4+ 0.40 Å, Ca2+ 1.00 Å), the choice for an oxide "
+            "or halide. Van der Waals: gemmi's radii, larger than a bond "
+            "length in an ionic solid, so most of its voids come out "
+            "negative. None: the spheres reach the atom centres.")
         self.elongation = _spin(1.0, 1.0, 50.0, 0.1, 1)
         self.elongation.setToolTip("Length over width of a void region "
                                    "(merged empty spheres, md_channels); "
                                    "1.0 keeps every shape.")
         self._add("Voids ≥", self.volume, "elongation ≥", self.elongation)
+        extra = QHBoxLayout()
+        extra.setContentsMargins(22, 0, 0, 0)
+        extra.setSpacing(6)
+        extra.addWidget(QLabel("radii"))
+        extra.addWidget(self.radii)
+        extra.addStretch(1)
+        self.column.insertLayout(1, extra)
+        self.radii.currentIndexChanged.connect(lambda _i: self.changed.emit())
         self.setToolTip("Empty spheres at or above this volume, drawn as "
                         "translucent spheres; the elongation reads the void "
                         "regions of md_channels.")
@@ -1539,9 +1671,11 @@ class VoidsRow(RuleRow):
     def rule(self) -> Rule:
         elongation = float(self.elongation.value()) \
             if self.elongation.isEnabled() else None
+        keys = list(VOID_RADII)
         return Rule("voids", self.tick.isChecked(),
                     min_volume_ang3=float(self.volume.value()),
-                    min_elongation=elongation, grid_spacing_ang=0.5)
+                    min_elongation=elongation, grid_spacing_ang=0.5,
+                    radii=keys[max(0, self.radii.currentIndex())])
 
 
 class ChannelsRow(RuleRow):
@@ -1571,6 +1705,20 @@ class ChannelsRow(RuleRow):
         second = QHBoxLayout()
         second.setContentsMargins(22, 0, 0, 0)
         second.setSpacing(6)
+        self.spread_button = QPushButton("Δ from spread")
+        self.spread_button.setToolTip(
+            "Set the mismatch to twice the standard deviation of the sum "
+            "at the probe's own atoms in this frame (about 95 % of them "
+            "then lie within it of the mean); the note states the numbers.")
+        self.spread_button.clicked.connect(self._delta_from_spread)
+        self.target_label = QLabel("target")
+        self.target = _combo(["frame mean", "formal charge"], 0)
+        self.target.setToolTip(
+            "What the probe's sum is matched to. 'frame mean': the mean of "
+            "the same sum at the probe element's own atoms in this frame, "
+            "so the regions follow how the model bonds that ion and pass "
+            "through its sites; 'formal charge': the ion's formal valence, "
+            "the original Adams form. The note states both numbers.")
         self.probe_label = QLabel("probe")
         self.probe = _combo([""], 0)
         self.probe.setToolTip("by charge: the mobile ion whose landscape is "
@@ -1608,11 +1756,20 @@ class ChannelsRow(RuleRow):
         third.addWidget(self.floor)
         third.addStretch(1)
         self.column.insertLayout(2, third)
+        fourth = QHBoxLayout()
+        fourth.setContentsMargins(22, 0, 0, 0)
+        fourth.setSpacing(6)
+        fourth.addWidget(self.target_label)
+        fourth.addWidget(self.target)
+        fourth.addWidget(self.spread_button)
+        fourth.addStretch(1)
+        self.column.insertLayout(3, fourth)
         self.setToolTip("The regions md_channels measures on the frame "
                         "shown; the atoms outside them are dimmed and, "
                         "under 'channel membership', coloured by region.")
         self.mode.currentIndexChanged.connect(self._on_mode)
         self.probe.currentIndexChanged.connect(lambda _i: self.changed.emit())
+        self.target.currentIndexChanged.connect(lambda _i: self.changed.emit())
         for w in (self.threshold, self.spacing, self.cut, self.floor):
             w.valueChanged.connect(lambda _v: self.changed.emit())
         # the note's grid estimate follows the spacing typed
@@ -1639,11 +1796,35 @@ class ChannelsRow(RuleRow):
         uses_probe = mode != "by voids"
         self.probe_label.setVisible(uses_probe)
         self.probe.setVisible(uses_probe)
+        self.target_label.setVisible(mode == "by charge")
+        self.target.setVisible(mode == "by charge")
+        self.spread_button.setVisible(mode == "by charge")
         self.spacing.setVisible(mode != "by modifier density")
         self.floor_label.setVisible(mode == "by charge")
         self.floor.setVisible(mode == "by charge")
         self._availability()
         self.changed.emit()
+
+    def _delta_from_spread(self) -> None:
+        """Twice the standard deviation of the probe's own sums, into the
+        mismatch spin; a note when the frame cannot say."""
+        fd = self._fd
+        probe = self.probe.currentText()
+        if fd is None or not probe or self.cut.value() <= 0:
+            self.set_note("Δ from spread needs a frame, a probe and an r_cut")
+            return
+        try:
+            mean, sd, n = fd.probe_sum_spread(probe, float(self.cut.value()))
+        except (ValueError, TypeError) as error:
+            self.set_note(f"Δ from spread: {error}")
+            return
+        if not n or not math.isfinite(sd):
+            self.set_note(f"Δ from spread: the frame holds no {probe} atom")
+            return
+        delta = max(0.01, round(2.0 * sd, 2))
+        self.threshold.setValue(delta)
+        self.set_note(f"{probe}: the sum at its {n} atoms is {mean:.3g} ± "
+                      f"{sd:.2g} v.u.; Δ set to 2 × {sd:.2g} = {delta:g} v.u.")
 
     def _availability(self) -> None:
         for i, mode in enumerate(CHANNEL_MODES):
@@ -1684,6 +1865,7 @@ class ChannelsRow(RuleRow):
     def rule(self) -> Rule:
         return Rule("channels", self.tick.isChecked() and self.tick.isEnabled(),
                     channel_by=self.mode.currentText(),
+                    target="formal" if self.target.currentIndex() == 1 else "frame",
                     threshold=float(self.threshold.value()),
                     probe=self.probe.currentText(),
                     grid_spacing_ang=float(self.spacing.value()),
@@ -1839,6 +2021,13 @@ class HighlightPage(QWidget):
                     i = box.findText(str(spec[name]))
                     if i >= 0:
                         box.setCurrentIndex(i)
+            if kind == "voids" and hasattr(row, "radii") and "radii" in spec:
+                keys = list(VOID_RADII)
+                if spec["radii"] in keys:
+                    row.radii.setCurrentIndex(keys.index(spec["radii"]))
+            if kind == "channels" and hasattr(row, "target") and "target" in spec:
+                row.target.setCurrentIndex(
+                    1 if str(spec["target"]) == "formal" else 0)
             for name in ("value", "min_volume_ang3", "threshold",
                          "grid_spacing_ang", "r_cut_ang"):
                 spin = getattr(row, name, None)

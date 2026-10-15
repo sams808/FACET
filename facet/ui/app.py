@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     if path:
         splash.step(f"Opening {Path(path).name}…")
 
-    window = PreviewWindow(path, offer_tour=True)
+    window = PreviewWindow(path)
     window.setWindowIcon(app_icon())
     window.show()
 

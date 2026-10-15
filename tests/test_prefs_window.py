@@ -225,7 +225,9 @@ def test_the_change_log_opens_from_the_bundled_file(window, qapp):
     dialog.close()
 
 
-def test_the_first_run_offers_the_tour_once(qapp):
+def test_the_first_run_asks_nothing(qapp):
+    """No question at start: the tutorials sit under Help, where a reader
+    who wants them finds them."""
     from PySide6.QtWidgets import QMessageBox
     from facet.ui import preview
     asked = []
@@ -234,21 +236,13 @@ def test_the_first_run_offers_the_tour_once(qapp):
     try:
         import time
         win = preview.PreviewWindow(offer_tour=True)
-        end = time.monotonic() + 5
-        while time.monotonic() < end and not asked:
-            qapp.processEvents()
-            time.sleep(0.05)
-        win.close()
-        dispose(win)
-        assert asked and prefs.get("tour_offered") is True
-        again = preview.PreviewWindow(offer_tour=True)
         end = time.monotonic() + 1.5
         while time.monotonic() < end:
             qapp.processEvents()
             time.sleep(0.05)
-        again.close()
-        dispose(again)
-        assert len(asked) == 1
+        win.close()
+        dispose(win)
+        assert asked == []
     finally:
         QMessageBox.question = original
 

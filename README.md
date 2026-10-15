@@ -58,6 +58,15 @@ parameter sets.
 
 ## Parameter provenance
 
+Two sets ship with FACET. The built-in table is Brese & O'Keeffe's 1991
+Table 2, the set every number in the tutorials and the verification is stated
+against. Beside it, bundled unchanged under its author's notice, is the IUCr
+accumulated table `bvparm2020.cif` (I. D. Brown): 1 931 rows from the
+literature, each naming its source, switched on under Model ▸ Parameters, as a
+preference at start, or with `--params bvparm2020` on the report command line.
+Any other set (softBV, a later bvparm release, a FACET parameter file) is read
+from a file. `THIRD_PARTY_NOTICES.md` carries the table's terms.
+
 Every parameter says where it came from, and the distinction survives into every
 exported report.
 
@@ -311,8 +320,8 @@ FACET beside an MD group's own code; the few places where an implementation
 is narrower than its proposal are stated at the top of that file.
 
 `FEATURES.md` tracks 203 features: 131 against CrystalMaker and VESTA, and 72 for
-glass models from molecular dynamics. 181 are done, 12 deliberately out of
-scope, and 10 remain and are listed: 6 partial and 4 planned.
+glass models from molecular dynamics. 182 are done, 12 deliberately out of
+scope, and 9 remain and are listed: 5 partial and 4 planned.
 
 The engine is a generalisation of the validated code behind a 2026 survey of
 105 bismuth sites across 74 structures, which was itself checked by an

@@ -250,6 +250,9 @@ def build_app(clean: bool = True) -> Path:
     changelog = ROOT / "facet" / "data" / "CHANGELOG.md"
     if changelog.exists():
         cmd += ["--add-data", f"{changelog}{os.pathsep}facet/data"]
+    table = ROOT / "facet" / "data" / "bvparm2020.cif"
+    if table.exists():
+        cmd += ["--add-data", f"{table}{os.pathsep}facet/data"]
     examples = ROOT / "facet" / "data" / "examples"
     if examples.is_dir():
         cmd += ["--add-data",

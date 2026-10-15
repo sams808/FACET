@@ -1048,7 +1048,19 @@ def test_empty_spheres_against_brute_force_clearance():
     dist = np.linalg.norm(centre[:, None, :] - images[None, :, :], axis=2)
     assert np.allclose(voids.radius_ang, (dist - r_image).min(axis=1), rtol=0,
                        atol=1e-10)
-    assert (dist.min(axis=1) >= voids.circumradius_ang - 1e-9).all()
+    # the seeds are the circumcentres: no atom centre inside a circumsphere
+    seed = voids.seed_centre_frac @ frame.box_ang
+    dist_seed = np.linalg.norm(seed[:, None, :] - images[None, :, :], axis=2)
+    assert (dist_seed.min(axis=1) >= voids.circumradius_ang - 1e-9).all()
+    assert np.allclose(voids.seed_radius_ang, (dist_seed - r_image).min(axis=1),
+                       rtol=0, atol=1e-10)
+    # the refinement never loses clearance, and one sphere per maximum
+    assert (voids.radius_ang >= voids.seed_radius_ang - 1e-9).all()
+    assert voids.representative.sum() == voids.n_voids <= len(voids)
+    assert any("refined" in n for n in voids.notes)
+    plain = md_order.empty_spheres(frame, radii, radii_source="test", refine=False)
+    assert np.allclose(plain.radius_ang, voids.seed_radius_ang)
+    assert plain.representative is None
     assert voids.volume_sum_ang3 == pytest.approx(frame.volume_ang3, rel=1e-12)
     assert ((voids.centre_frac >= 0) & (voids.centre_frac < 1)).all()
     if (voids.radius_ang < 0).any():

@@ -24,7 +24,8 @@ from ..core import prefs
 
 
 class PreferencesDialog(QDialog):
-    """Remember the session, offer the tour, the explorer's defaults."""
+    """Remember the session, the parameter set at start, the explorer's
+    defaults."""
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -54,9 +55,15 @@ class PreferencesDialog(QDialog):
         self.remember_layout.setChecked(bool(prefs.get("remember_layout", True)))
         form.addRow("", self.remember_layout)
 
-        self.offer_tour = QCheckBox("Offer Tutorial 1 when the application starts empty")
-        self.offer_tour.setChecked(bool(prefs.get("offer_tour", True)))
-        form.addRow("", self.offer_tour)
+        self.parameter_set = QComboBox()
+        self.parameter_set.addItems(["Brese & O'Keeffe 1991 (built-in)",
+                                     "IUCr bvparm 2020 (bundled)"])
+        self.parameter_set.setCurrentIndex(
+            1 if prefs.get("parameter_set") == "bvparm2020" else 0)
+        self.parameter_set.setToolTip(
+            "The bond-valence parameter set in force when the application "
+            "starts; Model ▸ Parameters switches it at any time.")
+        form.addRow("Parameters at start", self.parameter_set)
 
         self.explorer_axis = QComboBox()
         self.explorer_axis.addItems(["distance", "bond valence"])
@@ -83,7 +90,8 @@ class PreferencesDialog(QDialog):
         return {
             "restore_session": self.restore_session.isChecked(),
             "remember_layout": self.remember_layout.isChecked(),
-            "offer_tour": self.offer_tour.isChecked(),
+            "parameter_set": ("bvparm2020" if self.parameter_set.currentIndex() == 1
+                              else "built-in"),
             "explorer_axis": ("distance" if self.explorer_axis.currentIndex() == 0
                               else "valence"),
         }
@@ -103,5 +111,5 @@ class PreferencesDialog(QDialog):
             self.forgot = True
             self.restore_session.setChecked(False)
             self.remember_layout.setChecked(True)
-            self.offer_tour.setChecked(True)
+            self.parameter_set.setCurrentIndex(0)
             self.explorer_axis.setCurrentIndex(0)

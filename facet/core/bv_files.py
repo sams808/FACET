@@ -1,16 +1,20 @@
 """Reading published bond-valence parameter sets.
 
-FACET ships one small table -- the Brese and O'Keeffe 1991 values for the pairs
-it needs -- and the O'Keeffe-Brese electronegativity estimator. It does not ship
-the large compilations, and that is a licensing decision rather than an
-oversight: the IUCr's ``bvparm`` file, Gagné and Hawthorne's 2015 tables and the
-softBV set each come with their own terms, and redistributing them inside an
-application that is passed around a research group is not something to do
-casually.
+FACET ships two sets. The built-in table is Brese and O'Keeffe's 1991 Table 2
+(the values the tutorials and the verification corpus are stated against)
+with the O'Keeffe-Brese electronegativity estimator behind it. Beside it sits
+I. D. Brown's accumulated table, the IUCr ``bvparm2020.cif`` distribution
+(``facet/data/bvparm2020.cif``, :func:`bundled_compilation`): 1 931 rows
+drawn from the literature -- Brown & Altermatt 1985, Brese & O'Keeffe 1991,
+Gagné & Hawthorne 2015, Adams, Palenik and the rest -- each row naming its
+source. The file is distributed under its author's notice (free for
+non-profit use, no fee, the notice kept, changes recorded) and is carried
+unchanged. The softBV set has terms of its own and is not shipped; it is
+read from a file like any other.
 
-So FACET reads them instead. You obtain the file from its publisher, point FACET
-at it, and every parameter it uses afterwards carries that file's name as its
-provenance. Three formats are understood:
+Any other set is read from a file: you obtain it from its publisher, point
+FACET at it, and every parameter used afterwards carries that file's name as
+its provenance. Three formats are understood:
 
 * the IUCr **bvparm.cif** distribution, a CIF with a ``_valence_param_`` loop;
 * **softBV**-style and other plain tables, whitespace- or comma-separated;
@@ -28,6 +32,48 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import bv, elements
+
+BUNDLED_NAME = "IUCr bvparm 2020 (Brown)"
+BUNDLED_KEY = "bvparm2020"
+
+
+def bundled_path() -> Path:
+    """Where the bundled IUCr table is, frozen or from source (the same
+    layout rule as :func:`facet.core.examples.folder`)."""
+    import sys
+    meipass = getattr(sys, "_MEIPASS", None)
+    base = Path(meipass) / "facet" / "data" if meipass \
+        else Path(__file__).resolve().parent.parent / "data"
+    return base / "bvparm2020.cif"
+
+
+_bundled_cache: dict = {}
+
+
+def bundled_compilation(allow_estimated: bool = True) -> bv.ParameterSet:
+    """The IUCr accumulated table as a parameter set, read once. Where a pair
+    has several rows the first is taken, which is the file's own order of
+    reliability; pairs the table lacks fall to the estimator when
+    ``allow_estimated`` is True, and are labelled as estimated."""
+    key = bool(allow_estimated)
+    if key not in _bundled_cache:
+        params, _report = load(bundled_path(), name=BUNDLED_NAME,
+                               allow_estimated=allow_estimated)
+        _bundled_cache[key] = params
+    return _bundled_cache[key]
+
+
+def named_set(name: str | None) -> bv.ParameterSet:
+    """A parameter set by its short name: 'built-in' (or None) for Brese &
+    O'Keeffe 1991, 'bvparm2020' for the bundled IUCr table, else a path to
+    read."""
+    if not name or name == "built-in":
+        return bv.DEFAULT
+    if name == BUNDLED_KEY:
+        return bundled_compilation()
+    params, _report = load(name)
+    return params
+
 
 FILE_FILTER = (
     "Bond-valence parameters (*.cif *.txt *.dat *.csv *.tsv *.json);;"
@@ -137,11 +183,27 @@ def read_bvparm_cif(path) -> tuple[dict, dict, dict, LoadReport]:
             "_valence_param_Ro", "_valence_param_B"]
 
     found_loop = False
+    references: dict[str, str] = {}
+    pair_sources: dict[tuple[str, int, str], str] = {}
     for block in document:
         table = block.find(tags)
         if not len(table):
             continue
         found_loop = True
+        # the file's own list of sources, one letter code per paper
+        try:
+            ref_loop = block.find_loop("_valence_ref_id").get_loop()
+            if ref_loop is not None:
+                text_tag = next((t for t in ref_loop.tags
+                                 if "reference" in t.lower()), None)
+                if text_tag is not None:
+                    ids = block.find_values("_valence_ref_id")
+                    texts = block.find_values(text_tag)
+                    for i in range(min(len(ids), len(texts))):
+                        references[str(ids[i]).strip()] = \
+                            gemmi.cif.as_string(texts[i]).strip()
+        except Exception:                            # noqa: BLE001
+            references = {}
         # the optional columns, looked up by row index so a missing one is fine
         details = block.find_values("_valence_param_details")
         ref = block.find_values("_valence_param_ref_id")
@@ -174,6 +236,13 @@ def read_bvparm_cif(path) -> tuple[dict, dict, dict, LoadReport]:
                 recommended.add(key)
 
             fitted[key] = r0
+            try:
+                code = str(ref[index]).strip() if ref is not None \
+                    and index < len(ref) else ""
+            except Exception:                        # noqa: BLE001
+                code = ""
+            if code and code not in ("?", "."):
+                pair_sources[key] = references.get(code, f"ref. {code}")
             if b is not None and b <= 0:
                 raise ValueError(
                     f"{path.name}: {cation}{cation_ox:+d}-{anion} is given "
@@ -197,6 +266,7 @@ def read_bvparm_cif(path) -> tuple[dict, dict, dict, LoadReport]:
         name=path.stem, path=str(path), format="IUCr bvparm CIF",
         pairs=len(fitted), skipped=skipped, duplicates=duplicates,
         with_own_b=len(fitted_b))
+    report.pair_sources = pair_sources
     return fitted, fitted_b, anion_ox, report
 
 
@@ -380,7 +450,8 @@ def load(path, name: str | None = None,
     path = Path(path)
     text = ""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")[:4000]
+        # the IUCr header runs to some 170 lines before its loop
+        text = path.read_text(encoding="utf-8", errors="replace")[:60000]
     except OSError as error:
         raise ValueError(f"{path.name}: {error}") from error
 
@@ -406,7 +477,8 @@ def load(path, name: str | None = None,
         allow_estimated=allow_estimated,
         fitted_b=fitted_b,
         anion_ox=anion_ox,
-        notes=notes)
+        notes=notes,
+        pair_sources=getattr(report, "pair_sources", None))
     return params, report
 
 

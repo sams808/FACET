@@ -50,6 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "override it")
     parser.add_argument("--tables", metavar="NAMES",
                         help="comma-separated tables to write (default all)")
+    parser.add_argument("--params", default="built-in", metavar="SET",
+                        help="the bond-valence parameters: 'built-in' (Brese "
+                             "& O'Keeffe 1991, default), 'bvparm2020' (the "
+                             "bundled IUCr table) or a parameter file")
     parser.add_argument("--quiet", action="store_true",
                         help="no progress on stderr")
     return parser
@@ -92,9 +96,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"[{done + 1}/{total}] {name}", file=sys.stderr, flush=True)
         return True
 
-    report = analyse_files(args.paths, v_bond=args.v_bond, v_list=args.v_list,
-                           anions=args.anions, progress=progress,
-                           v_bond_other=args.v_bond_2)
+    from facet.core import bv_files
+    try:
+        params = bv_files.named_set(args.params)
+    except (OSError, ValueError) as error:
+        print(f"parameters: {error}", file=sys.stderr)
+        return 2
+    report = analyse_files(args.paths, params=params, v_bond=args.v_bond,
+                           v_list=args.v_list, anions=args.anions,
+                           progress=progress, v_bond_other=args.v_bond_2)
     if not report.structures:
         print("no CIF files among the paths given", file=sys.stderr)
         return 2

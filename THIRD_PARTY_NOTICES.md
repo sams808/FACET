@@ -62,11 +62,21 @@ carry different terms. FACET is deliberate about this:
   themselves carry. **Estimated parameters are labelled as estimated everywhere
   they are used**, in the interface and in every exported report.
 
-* **Downloaded on request, never bundled.** The full IUCr accumulated table
-  (`bvparm*.cif`), the Gagné & Hawthorne (2015) refit and the softBV set are
-  fetched from their canonical sources by the user, on demand, into the user's
-  own data directory. FACET does not redistribute them. This keeps the
-  distribution clean of any compilation whose terms FACET has not verified.
+* **Bundled under its own notice.** The IUCr accumulated table
+  `bvparm2020.cif` (I. David Brown, Brockhouse Institute for Materials
+  Research, McMaster University; dated 2020-11-25) ships in `facet/data/`
+  exactly as distributed. Its notice allows use and distribution without fee
+  for non-profit purposes provided (1) the notice is included, (2) no fee is
+  charged for the table and (3) any change by anyone other than the copyright
+  owner is recorded in the file. FACET charges no fee, includes the notice
+  (it is the file's own header) and changes nothing in the file. Its rows cite
+  their sources (Brown & Altermatt 1985, Brese & O'Keeffe 1991, Gagné &
+  Hawthorne 2015, Adams 2001, Palenik and others); FACET uses the first row
+  of each pair, the file's own order. **Anyone distributing FACET for a fee,
+  or with the table altered, must consult the copyright owner first.**
+
+* **Read from a file, never bundled.** The softBV set carries its own terms
+  and is read from the user's own copy; so is any later bvparm release.
 
 ## Crystal structure files
 
