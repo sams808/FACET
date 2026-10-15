@@ -2,6 +2,11 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 1.0.4 — 2026-10-15
+
+- Version 1.0.4: the contacts under the threshold can be left undrawn  `c8e764c`  2026-10-15
+- Changelog for 1.0.3  `ebdaac0`  2026-10-15
+
 ## 1.0.3 — 2026-10-15
 
 - Version 1.0.3: polyhedra on their sites, isolation per structure, bond clicks on OpenGL  `e46e8e4`  2026-10-15
