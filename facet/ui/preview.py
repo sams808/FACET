@@ -152,8 +152,9 @@ class PreviewWindow(QMainWindow):
         # the sites whose lone-pair lobe is drawn on their own (right click)
         self.vector_sites: set[int] = set()
         # one drawn atom with its neighbour shells, or None for the whole
-        # structure (right click: isolate)
-        self._isolated: tuple[int, int] | None = None
+        # structure (right click: isolate); kept with the entry it belongs
+        # to, so a switch to another structure draws that one whole
+        self._isolated: tuple[object, int, int] | None = None
         self.show_void_cones = False
         self.vector_scale = 0.6
         self._manual_dialog = None
@@ -1125,11 +1126,14 @@ class PreviewWindow(QMainWindow):
     def _isolate(self, atom_index, shells: int) -> None:
         """One drawn atom with ``shells`` shells of bonded neighbours, or
         (None) the whole structure."""
-        if atom_index is None:
+        if atom_index is None or self._crystal() is None:
             self._isolated = None
         else:
-            self._isolated = (int(atom_index), int(shells))
+            self._isolated = (self._crystal(), int(atom_index), int(shells))
         self._rebuild(reframe=atom_index is not None)
+        self._log_message("isolation: " + (
+            "the whole structure" if self._isolated is None
+            else f"atom {atom_index} with {shells} shell(s)"))
         if self._isolated is None:
             self.statusBar().showMessage("the whole structure is drawn again", 6000)
         else:
@@ -1887,8 +1891,12 @@ class PreviewWindow(QMainWindow):
                       else merge_scenes(scenes, [e.offset for e in entries]))
         if self._isolated is not None:
             from ..gl.scene import isolate_atoms, neighbour_shells_of
-            atom, shells = self._isolated
-            if 0 <= atom < self.scene.n_atoms:
+            owner, atom, shells = self._isolated
+            if owner is not active or len(entries) != 1:
+                # another structure, or several at once: the isolation
+                # belonged to the one it was asked on and is dropped
+                self._isolated = None
+            elif 0 <= atom < self.scene.n_atoms:
                 isolate_atoms(self.scene,
                               neighbour_shells_of(self.scene, atom, shells))
             else:

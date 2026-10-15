@@ -1170,22 +1170,43 @@ def _build_polyhedra(structure: Structure, results: list[SiteResult],
 
     Every symmetry copy of a site gets its own polyhedron, not just the
     representative -- a polyhedral view of a framework is the point, and one
-    polyhedron floating in a cell is not that.
+    polyhedron floating in a cell is not that. Each copy's hull is built
+    from the ligands actually DRAWN about that copy (the far ends of its
+    bonds above the threshold), because the copies of a site are related by
+    the space group's rotations as well as its translations: translating
+    the representative's polyhedron put the corners of a 16c site in I-43d
+    a bond length away from any oxygen.
     """
     verts: list[np.ndarray] = []
     norms: list[np.ndarray] = []
+    n_cell = min(scene.n_atoms, len(structure.atoms))
+    if scene.n_bonds:
+        ends = np.asarray(scene.bond_atoms, int)
+        above = np.asarray(scene.bond_valence, float) >= float(scene.v_bond)
+        bond_a = np.asarray(scene.bond_a, float)
+        bond_b = np.asarray(scene.bond_b, float)
     for site_index in site_indices:
         res = next((r for r in results if r.site_index == site_index), None)
         if res is None or len(res.bonds) < 4:
             continue
-        rep_atoms = structure.atoms_of_site(site_index)
-        if not rep_atoms:
+        atoms = [i for i in range(n_cell) if int(scene.atom_site[i]) == site_index]
+        if not atoms:
             continue
-        origin = structure.atoms[rep_atoms[0]].cart
-        offsets = [structure.atoms[a].cart - origin for a in rep_atoms]
-        base = np.array([origin + c.vector for c in res.bonds], float)
-        for off in offsets:
-            _hull_into(base + off, verts, norms)
+        for i in atoms:
+            ligands = None
+            if scene.n_bonds:
+                first = above & (ends[:, 0] == i)
+                second = above & (ends[:, 1] == i)
+                found = np.vstack([bond_b[first], bond_a[second]]) \
+                    if (first.any() or second.any()) else np.zeros((0, 3))
+                if len(found) >= 4:
+                    ligands = found
+            if ligands is None:
+                # no drawn bonds (atoms-only styles): the representative's
+                # contacts, translated -- exact for the representative itself
+                origin = np.asarray(scene.atom_position[i], float)
+                ligands = np.array([origin + c.vector for c in res.bonds], float)
+            _hull_into(ligands, verts, norms)
 
     scene.poly_vertices = (np.array(verts, np.float32) if verts
                            else np.zeros((0, 3), np.float32))

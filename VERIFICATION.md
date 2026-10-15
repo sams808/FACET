@@ -973,6 +973,31 @@ showed, with the checks that now hold them:
   inside a region, and still equals `md_channels` called directly on each
   frame to 1e-10 (`test_md_analysis.py`).
 
+### Added in 1.0.3: three faults seen in the window
+
+* **Polyhedra off their sites.** The polyhedron of a site was built once,
+  on the representative atom, and copied to the other atoms of the site by
+  translation. The copies of a site are related by the space group's
+  rotations as well, so on a 16c site of I-43d (Bi4Ge3O12, eulytite) the
+  corners of fifteen polyhedra sat a bond length from any oxygen. Each copy's
+  hull is now built from the ligands actually drawn about it (the far ends
+  of its bonds above the threshold). Checked on eulytite: every corner of
+  every one of the 16 Bi polyhedra coincides with a drawn oxygen to 1e-4 Å
+  (`test_crystal_view_fixes.py`). This fault was in every release before
+  1.0.3 for any site whose copies are not pure translations.
+* **An isolation carried over.** Isolating an atom kept a window-level
+  state that the next structure opened was drawn through (one atom in an
+  empty cell). The isolation now belongs to the structure it was asked on
+  and is dropped on a switch; checked with two structures.
+* **A click on a bond answered with the atom behind it.** The OpenGL pick
+  pass draws atoms only, so a click on a stick in a dense structure almost
+  always found an atom behind the stick and the bond readout never came.
+  The stick now wins unless the atom's own silhouette holds the click and
+  the atom is no farther from the eye than the stick where it was hit; the
+  tolerance is the drawn stick's half-width plus two pixels. Checked on
+  quartz: a click on a front stick reports the bond, a click on the atom's
+  centre selects the atom's site.
+
 ### What is not verified
 
 **No model from the group has been analysed yet.** Every number above measured

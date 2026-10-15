@@ -1370,7 +1370,34 @@ class StructureView(QOpenGLWidget):
         if not len(d) or not np.isfinite(d).any():
             return None
         i = int(np.argmin(d))
-        return i if d[i] <= 6.0 * self._view_scale() else None
+        # within the drawn stick, or a few pixels of a thin line
+        mid = 0.5 * (np.asarray(s.bond_a[i], float) + np.asarray(s.bond_b[i], float))
+        with self._in_view(camera, width, height):
+            half = self._screen_radius(mid, float(s.bond_radius[i]))
+        tolerance = max(6.0 * self._view_scale(), half + 2.0)
+        if d[i] > tolerance:
+            return None
+        # the depth of the stick where the click fell, not of its ends
+        z_hit = float(a[i, 2] + (b[i, 2] - a[i, 2]) * t[i])
+        self._last_bond_hit = (i, float(d[i]), z_hit)
+        return i
+
+    def _atom_covers(self, pos, index: int, depth: float) -> bool:
+        """Whether drawn atom ``index`` covers the click: its silhouette holds
+        the point and it is no farther from the eye than ``depth`` (the view
+        z of a bond under the same point). The OpenGL pick pass draws the
+        atoms only, so a click on a stick answers with the atom behind it;
+        this is how the stick wins when it is the thing in front."""
+        s = self.scene
+        target = self._pane_at(pos) if hasattr(pos, "x") else None
+        if s is None or target is None or not (0 <= index < s.n_atoms):
+            return False
+        camera, x, y, width, height = target
+        with self._in_view(camera, width, height):
+            px = self._visible(np.asarray(s.atom_position[index], float)[None, :])[0]
+            r = self._screen_radius(s.atom_position[index], s.atom_radius[index])
+        inside = np.hypot(px[0] - x, px[1] - y) <= max(r, 4.0)
+        return bool(inside and px[2] >= depth - 1e-6)
 
     @property
     def selection(self) -> list[int]:
@@ -1397,9 +1424,15 @@ class StructureView(QOpenGLWidget):
 
     def _handle_select_click(self, pos: QPoint) -> None:
         index = self.pick_at(pos)
+        bond = self.pick_bond_at(pos)
+        if bond is not None and index is not None:
+            # the stick is in front of the atom the pick pass found behind
+            # it, unless the atom's own silhouette holds the click
+            _b, _d, depth = getattr(self, "_last_bond_hit", (bond, 0.0, 0.0))
+            if not self._atom_covers(pos, index, depth):
+                index = None
         self._selected = index
         if index is None:
-            bond = self.pick_bond_at(pos)
             if bond is not None:
                 self.bondPicked.emit(bond)
             self.atomPicked.emit(-1)
