@@ -647,6 +647,11 @@ class PreviewWindow(QMainWindow):
             action = QAction(label, self)
             action.triggered.connect(handler)
             export.addAction(action)
+        site_page = QAction("Site ta&b as HTML…", self)
+        site_page.setToolTip("The Site tab's text with the explorer's picture, "
+                             "as one page.")
+        site_page.triggered.connect(lambda: self.export_site_html())
+        export.addAction(site_page)
         export.addSeparator()
         self.report_action = QAction("&Report on CIFs…", self)
         self.report_action.setToolTip(
@@ -1929,6 +1934,11 @@ class PreviewWindow(QMainWindow):
         menu.addAction("Rotate about the cell centre").triggered.connect(
             self._center_on_cell)
         menu.addSeparator()
+        overlay = menu.addAction("Overlay on the explorer")
+        overlay.setToolTip("Draw this site's staircase over the selected "
+                           "site's, in a second colour.")
+        overlay.triggered.connect(
+            lambda _=False, i=site_index: self.overlay_site(i))
         add = menu.addAction("Add to comparison")
         add.setToolTip(
             "Put this site in the comparison basket (View > Compare "
@@ -2073,7 +2083,122 @@ class PreviewWindow(QMainWindow):
             "name).")
         share.triggered.connect(self._label_bonds_by_share)
         m.addAction(share)
+        m.addSeparator()
+        for text, name, tip in (
+                ("Uncertainty band on the s&um", "show_band",
+                 "The R0 uncertainty, systematic, as a band around the "
+                 "running sum."),
+                ("&ECoN on the CN axis", "show_econ",
+                 "Hoppe's effective coordination number as a line across "
+                 "the staircase.")):
+            act = QAction(text, self)
+            act.setCheckable(True)
+            act.setChecked(getattr(self.explorer, name))
+            act.setToolTip(tip)
+            act.toggled.connect(lambda on, n=name: self.explorer.set_option(n, on))
+            m.addAction(act)
+            self.explorer_option_actions[name] = act
+        self.axis_pair_menu = QMenu("Distance a&xis read against", m)
+        self.axis_pair_menu.aboutToShow.connect(self._fill_axis_pair_menu)
+        m.addMenu(self.axis_pair_menu)
+        self.bookmark_menu = QMenu("Threshold boo&kmarks", m)
+        self.bookmark_menu.aboutToShow.connect(self._fill_bookmark_menu)
+        m.addMenu(self.bookmark_menu)
+        clear_overlay = QAction("Clear the overla&id site", self)
+        clear_overlay.setToolTip("Remove the second staircase overlaid from "
+                                 "a site's right-click menu.")
+        clear_overlay.triggered.connect(lambda: self.explorer.set_second(None))
+        m.addAction(clear_overlay)
         return m
+
+    def _fill_axis_pair_menu(self) -> None:
+        menu = self.axis_pair_menu
+        menu.clear()
+        pairs = self.explorer.pairs()
+        if not pairs:
+            none = menu.addAction("No parameterised contact")
+            none.setEnabled(False)
+            return
+        group = QActionGroup(self)
+        for label in pairs:
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setChecked((self.explorer.axis_pair or pairs[0]) == label)
+            act.triggered.connect(lambda _=False, l=label: self.explorer.set_axis_pair(l))
+            group.addAction(act)
+            menu.addAction(act)
+
+    def _fill_bookmark_menu(self) -> None:
+        menu = self.bookmark_menu
+        menu.clear()
+        add = menu.addAction("&Bookmark this threshold…")
+        add.triggered.connect(self._add_bookmark)
+        if self.explorer.bookmarks:
+            menu.addSeparator()
+            for name, v in sorted(self.explorer.bookmarks.items(), key=lambda t: t[1]):
+                act = menu.addAction(f"{name}  ({v:.4f} v.u.)")
+                act.triggered.connect(lambda _=False, value=v: self.explorer.jump_to(value))
+            menu.addSeparator()
+            for name in sorted(self.explorer.bookmarks):
+                act = menu.addAction(f"Forget {name}")
+                act.triggered.connect(lambda _=False, n=name: self._forget_bookmark(n))
+
+    def _add_bookmark(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(
+            self, "Bookmark this threshold",
+            f"A name for {self.project.v_bond:.4f} v.u.:")
+        if ok and name.strip():
+            self.add_bookmark(name.strip())
+
+    def add_bookmark(self, name: str, v: float | None = None) -> None:
+        self.explorer.add_bookmark(name, v)
+        prefs.set("bookmarks", dict(self.explorer.bookmarks))
+
+    def _forget_bookmark(self, name: str) -> None:
+        self.explorer.remove_bookmark(name)
+        prefs.set("bookmarks", dict(self.explorer.bookmarks))
+
+    def overlay_site(self, site_index: int) -> None:
+        """A second site's staircase on the explorer, from the Sites list."""
+        entry = self.project.current
+        if entry is None:
+            return
+        result = next((r for r in self.project.results_for(entry)
+                       if r.site_index == site_index), None)
+        self.explorer.set_second(result)
+
+    def export_site_html(self, path=None):
+        """The Site tab and the explorer's picture as one HTML page."""
+        r = self._current_result()
+        if r is None:
+            self.statusBar().showMessage("No site selected to export.", 5000)
+            return None
+        if path is None:
+            path = self._ask("Export the Site tab", f"{r.label}_site.html",
+                             "Web page (*.html)")
+            if not path:
+                return None
+        import base64
+        from PySide6.QtCore import QBuffer, QIODevice
+        image = self.explorer.grab().toImage()
+        buffer = QBuffer()
+        buffer.open(QIODevice.WriteOnly)
+        image.save(buffer, "PNG")
+        png = base64.b64encode(bytes(buffer.data())).decode()
+        from ..core.version_info import provenance_lines
+        entry = self._crystal()
+        head = (f"<p style='color:#777;font-size:11px'>{entry.name if entry else ''}"
+                f" &middot; " + " &middot; ".join(provenance_lines()) + "</p>")
+        body = self.analysis.toHtml()
+        page = ("<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                f"<title>{r.label} — FACET</title></head><body>"
+                f"{head}{body}<h4>Cutoff explorer</h4>"
+                f"<img src='data:image/png;base64,{png}' style='max-width:100%'>"
+                "</body></html>")
+        Path(path).write_text(page, encoding="utf-8")
+        self._wrote(path)
+        return Path(path)
 
     def _set_explorer_axis(self, axis: str) -> None:
         self.explorer.set_axis(axis)
@@ -2995,6 +3120,13 @@ class PreviewWindow(QMainWindow):
         column = data.get("running_sum_column")
         if isinstance(column, bool) and hasattr(self, "running_sum_column"):
             self.running_sum_column.setChecked(column)
+        marks = data.get("bookmarks")
+        if isinstance(marks, dict):
+            for name, v in marks.items():
+                try:
+                    self.explorer.add_bookmark(str(name), float(v))
+                except (TypeError, ValueError):
+                    pass
         state = data.get("window_state")
         geometry = data.get("window_geometry")
         from PySide6.QtCore import QByteArray

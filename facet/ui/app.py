@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     window.show()
 
     splash._elapsed = int((time.perf_counter() - started) * 1000)
-    splash.finish_after(window, minimum_ms=2200)
+    splash.finish_after(window, minimum_ms=1200)
     return app.exec()
 
 

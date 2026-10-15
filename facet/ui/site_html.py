@@ -104,6 +104,50 @@ def site_html(r: SiteResult, v_bond: float, muted: str, *,
     else:
         apriori_block = ""
 
+    # the angles at the site: between every pair of bonded contacts
+    angle_row = ""
+    vectors = [c.vector for c in bonded if c.vector is not None]
+    if len(vectors) >= 2:
+        import numpy as np
+        vs = np.asarray(vectors, float)
+        norms = np.linalg.norm(vs, axis=1)
+        angles = []
+        for i in range(len(vs)):
+            for j in range(i + 1, len(vs)):
+                if norms[i] > 0 and norms[j] > 0:
+                    cos = float(vs[i] @ vs[j]) / (norms[i] * norms[j])
+                    angles.append(float(np.degrees(
+                        np.arccos(max(-1.0, min(1.0, cos))))))
+        if angles:
+            qe = r.shape.get("quadratic_elongation")
+            qe_text = ("" if qe is None or qe != qe
+                       else f" &middot; &lambda; {qe:.4f}")
+            angle_row = (
+                "<tr><td>Bond angles at the site</td><td align='right'>"
+                f"mean {sum(angles) / len(angles):.1f}&deg; &middot; "
+                f"{min(angles):.1f}&ndash;{max(angles):.1f}&deg; &middot; "
+                f"spread {float(np.std(angles)):.1f}&deg;{qe_text}</td></tr>")
+
+    # every tread of the staircase, as rows: the whole set of coordination
+    # numbers this site can produce, and over what range of threshold
+    plateau_rows = "".join(
+        f"<tr><td align='right'>{q.cn}</td>"
+        f"<td align='right'>{q.v_low:.4f}&ndash;{q.v_high:.4f}</td>"
+        f"<td align='right'>{q.width_decades:.2f}</td>"
+        f"<td align='right'>{q.width_angstrom:.3f}</td>"
+        f"<td align='center'>{'&#9679;' if q.contains(v) else ''}</td></tr>"
+        for q in sorted(r.plateaus, key=lambda q: q.cn))
+    plateaus_table = ""
+    if plateau_rows:
+        plateaus_table = (
+            "<h4 style='margin-bottom:2px'>Plateaus</h4>"
+            "<table width='100%' cellspacing='0' cellpadding='2' "
+            "style='font-size:11px'>"
+            f"<tr style='color:{muted}'><th align='right'>CN</th>"
+            "<th align='right'>threshold range / v.u.</th>"
+            "<th align='right'>decades</th><th align='right'>gap / Å</th>"
+            f"<th></th></tr>{plateau_rows}</table>")
+
     param = next((c.param for c in r.contacts if c.param), None)
     provenance = ""
     if param is not None:
@@ -144,6 +188,7 @@ def site_html(r: SiteResult, v_bond: float, muted: str, *,
       <tr><td>Spread within the polyhedron</td>
           <td align='right'>{r.shape.get('spread') or float('nan'):.4f} Å</td></tr>
       {plateau_row}
+      {angle_row}
       {apriori_block}
     </table>
     {notes}
@@ -156,5 +201,6 @@ def site_html(r: SiteResult, v_bond: float, muted: str, *,
         <th align='right'>a priori</th><th></th><th></th></tr>
       {rows}
     </table>
+    {plateaus_table}
     {provenance}
     """

@@ -93,6 +93,16 @@ class CutoffExplorer(QWidget):
         self.sum_as_fraction = False  # right axis as % of |charge|
         self.stacked = True           # CN above, the sum in its own pane below
         self.show_bars = True         # one bar per contact under the rail
+        self.show_band = True         # the R0 uncertainty around the sum
+        self.show_econ = True         # ECoN as a line on the CN axis
+        # a second site's staircase, overlaid in its own colour
+        self.second: SiteResult | None = None
+        # which parameter the distance axis is read against: a label such
+        # as 'Bi3+-O', or None for the first parameter found
+        self.axis_pair: str | None = None
+        # named thresholds the cursor can jump to: {name: v}
+        self.bookmarks: dict[str, float] = {}
+        self.setFocusPolicy(Qt.StrongFocus)
 
         self._dragging = False
         self._hover_v: float | None = None
@@ -148,8 +158,10 @@ class CutoffExplorer(QWidget):
         self.update()
 
     def set_option(self, name: str, on: bool) -> None:
-        """One of fill_sum, sum_as_fraction, stacked, show_bars."""
-        if name not in ("fill_sum", "sum_as_fraction", "stacked", "show_bars"):
+        """One of fill_sum, sum_as_fraction, stacked, show_bars, show_band,
+        show_econ."""
+        if name not in ("fill_sum", "sum_as_fraction", "stacked", "show_bars",
+                        "show_band", "show_econ"):
             raise ValueError(f"no explorer option named {name!r}")
         setattr(self, name, bool(on))
         # the stacked panes and the bar strip need their own height, or the
@@ -158,6 +170,96 @@ class CutoffExplorer(QWidget):
                               + (34 if self.show_bars else 0))
         self.updateGeometry()
         self.update()
+
+    def set_second(self, result: SiteResult | None) -> None:
+        """Overlay a second site's staircase, or (None) none."""
+        self.second = result
+        self.update()
+
+    def pairs(self) -> list[str]:
+        """The parameter labels the site's contacts use, first found first."""
+        if self.result is None:
+            return []
+        out = []
+        for c in self.result.contacts:
+            if c.param is not None and c.param.label not in out:
+                out.append(c.param.label)
+        return out
+
+    def set_axis_pair(self, label: str | None) -> None:
+        """Read the distance axis against the parameter with this label."""
+        self.axis_pair = label
+        self.update()
+
+    def add_bookmark(self, name: str, v: float | None = None) -> None:
+        self.bookmarks[name] = float(self.v_bond if v is None else v)
+        self.update()
+
+    def remove_bookmark(self, name: str) -> None:
+        self.bookmarks.pop(name, None)
+        self.update()
+
+    def jump_to(self, v: float) -> None:
+        self.set_threshold(v, emit=True)
+
+    def nudge(self, steps: int) -> None:
+        """Move the threshold by ``steps`` of two per cent, in log valence."""
+        self.set_threshold(self.v_bond * (1.02 ** steps), emit=True)
+
+    def jump_plateau(self, direction: int) -> None:
+        """To the middle of the next plateau up (+1) or down (-1)."""
+        r = self.result
+        if r is None or not r.plateaus:
+            return
+        ordered = sorted(r.plateaus, key=lambda q: q.v_low)
+        here = next((i for i, q in enumerate(ordered) if q.contains(self.v_bond)),
+                    None)
+        if here is None:
+            target = next((q for q in ordered if q.v_low > self.v_bond), None) \
+                if direction > 0 else next(
+                (q for q in reversed(ordered) if q.v_high <= self.v_bond), None)
+        else:
+            k = here + (1 if direction > 0 else -1)
+            target = ordered[k] if 0 <= k < len(ordered) else None
+        if target is None:
+            return
+        self.set_threshold(math.sqrt(target.v_low * target.v_high), emit=True)
+
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        if key == Qt.Key_Left:
+            self.nudge(-1)
+        elif key == Qt.Key_Right:
+            self.nudge(+1)
+        elif key == Qt.Key_Home and self.pin_v is not None:
+            self.jump_to(self.pin_v)
+        elif key == Qt.Key_PageUp:
+            self.jump_plateau(+1)
+        elif key == Qt.Key_PageDown:
+            self.jump_plateau(-1)
+        else:
+            super().keyPressEvent(event)
+            return
+        event.accept()
+
+    def sensitivity(self, index: int) -> tuple[float, float]:
+        """What crossing the cut would do: (change in the bond-valence sum,
+        change in phi) if contact ``index`` moved to the other side."""
+        r = self.result
+        c = r.contacts[index]
+        if not c.has_valence:
+            return 0.0, 0.0
+        bonded = [x for x in r.contacts if x.has_valence and x.valence > self.v_bond]
+        other = [x for x in bonded if x is not c] if c in bonded else bonded + [c]
+
+        def phi_of(rows):
+            if not rows:
+                return float("nan")
+            return bv.phi_index(np.array([x.vector for x in rows]),
+                                [x.valence * x.occupancy for x in rows])[1]
+
+        d_sum = -c.valence * c.occupancy if c in bonded else c.valence * c.occupancy
+        return d_sum, phi_of(other) - phi_of(bonded)
 
     def toggle_axis(self) -> None:
         self.set_axis(AXIS_DISTANCE if self.axis == AXIS_VALENCE
@@ -238,7 +340,11 @@ class CutoffExplorer(QWidget):
         marker off the end of the plot.
         """
         lo, hi = self._data_range()
-        for v in (float(self.v_bond), self.pin_v):
+        extra = [float(self.v_bond), self.pin_v] + list(self.bookmarks.values())
+        if self.second is not None:
+            extra += [c.valence for c in self.second.contacts
+                      if c.has_valence and c.valence > 0]
+        for v in extra:
             if v is not None and v > 0:
                 lo, hi = min(lo, v / 1.05), max(hi, v * 1.05)
         return lo, hi
@@ -300,6 +406,10 @@ class CutoffExplorer(QWidget):
         """The bond-valence parameter to read the distance axis against."""
         if self.result is None:
             return None
+        if self.axis_pair:
+            for c in self.result.contacts:
+                if c.param is not None and c.param.label == self.axis_pair:
+                    return c.param
         for c in self.result.contacts:
             if c.param is not None:
                 return c.param
@@ -618,6 +728,28 @@ class CutoffExplorer(QWidget):
                                   rect.top() - fm.height() - 1, w, fm.height()),
                            Qt.AlignCenter, text)
                 p.setFont(self.font())
+        if self.show_band:
+            # The R0 uncertainty is systematic: it scales the whole sum, by
+            # r0_error / b (0.02 Å / 0.37 Å for a fitted parameter, 0.06 for
+            # an estimated one). Drawn as a band so a gap to the charge
+            # smaller than it can be seen for what it is.
+            param = self._dominant_param()
+            if param is not None:
+                rel = (0.02 if param.fitted else 0.06) / max(float(param.b), 1e-6)
+                hi = self._step_path(shells, lambda s: self._sum_to_y(
+                    self._sum_value((0.0 if s is None else s.sum_after) * (1 + rel)),
+                    s_max))
+                lo = self._step_path(shells, lambda s: self._sum_to_y(
+                    self._sum_value((0.0 if s is None else s.sum_after) * (1 - rel)),
+                    s_max))
+                band = QPainterPath(hi)
+                band.connectPath(lo.toReversed())
+                band.closeSubpath()
+                fill = QColor(self._sum_colour)
+                fill.setAlpha(60)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QBrush(fill))
+                p.drawPath(band)
         p.setBrush(Qt.NoBrush)
         p.setPen(QPen(self._sum_colour, 2.0, Qt.SolidLine, Qt.FlatCap,
                       Qt.MiterJoin))
@@ -629,6 +761,36 @@ class CutoffExplorer(QWidget):
         if not shells:
             return
         cn_max = self._cn_max()
+        r = self.result
+        if self.show_econ and r is not None and r.cn_ecoN == r.cn_ecoN:
+            # ECoN as a line on the CN axis: where Hoppe's count sits against
+            # the staircase, which it never equals exactly
+            y = self._cn_to_y(min(float(r.cn_ecoN), cn_max), cn_max)
+            col = QColor(self._muted)
+            col.setAlpha(160)
+            p.setPen(QPen(col, 1.0, Qt.DashDotLine))
+            p.drawLine(QPointF(self._plot.left(), y),
+                       QPointF(self._plot.right(), y))
+            p.setFont(self._small_font())
+            p.setPen(col)
+            p.drawText(QRectF(self._plot.right() - 90, y - 14, 86, 13),
+                       Qt.AlignRight | Qt.AlignVCenter, f"ECoN {r.cn_ecoN:.2f}")
+            p.setFont(self.font())
+        if self.second is not None:
+            other = shells_mod.shell_curve(self.second, self.axis)
+            if other:
+                col = self._c("#e0a0c8", "#a03070")
+                p.setPen(QPen(col, 1.6, Qt.DashLine, Qt.FlatCap, Qt.MiterJoin))
+                p.setBrush(Qt.NoBrush)
+                p.drawPath(self._step_path(
+                    other, lambda s: self._cn_to_y(
+                        0 if s is None else s.cn_after, cn_max)))
+                p.setFont(self._small_font())
+                p.setPen(col)
+                p.drawText(QRectF(self._plot.left() + 4, self._plot.top() + 2,
+                                  200, 13), Qt.AlignLeft | Qt.AlignVCenter,
+                           f"overlay: {self.second.label}")
+                p.setFont(self.font())
         p.setPen(QPen(self._ink, 2.0, Qt.SolidLine, Qt.FlatCap, Qt.MiterJoin))
         p.setBrush(Qt.NoBrush)
         p.drawPath(self._step_path(
@@ -717,6 +879,9 @@ class CutoffExplorer(QWidget):
         # numbers first shown for it can be found again after a drag
         if self.pin_v is not None and self.pin_v > 0:
             marks.append((self.pin_v, self._pin_label(), self._pin_colour()))
+        for name, v in self.bookmarks.items():
+            if v > 0:
+                marks.append((v, f"⚑ {name}", self._c("#9fc5e8", "#2b6cb0")))
         return sorted(marks, key=lambda m: m[0])
 
     def _pin_label(self) -> str:
@@ -936,11 +1101,15 @@ class CutoffExplorer(QWidget):
         state = ("above the threshold" if c.valence >= self.v_bond
                  else "below the threshold")
         note = "" if (c.param and c.param.fitted) else "  (estimated parameter)"
+        d_sum, d_phi = self.sensitivity(best.index)
+        crossing = (f"across the cut: Σ {d_sum:+.3f} v.u."
+                    + (f", φ {d_phi:+.3f}" if d_phi == d_phi else ""))
         QToolTip.showText(
             event.globalPosition().toPoint(),
             f"{r.label}–{c.label}\n{c.distance:.4f} Å\n"
             f"{c.valence:.4f} v.u. — {state}{note}\n"
-            f"with it: CN {best.cn_after}, Σ {best.sum_after:.3f} v.u.", self)
+            f"with it: CN {best.cn_after}, Σ {best.sum_after:.3f} v.u.\n"
+            f"{crossing}", self)
         self.contactHovered.emit(best.index)
 
     def leaveEvent(self, _event) -> None:
