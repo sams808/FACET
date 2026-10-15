@@ -61,6 +61,21 @@ def neighbour_shells(bonds, n_atoms: int, centre: int, shells: int = 1
     return shell >= 0, shell
 
 
+def slab_mask(frame: Frame, axis: int, centre_fraction: float,
+              thickness_ang: float) -> np.ndarray:
+    """Which atoms lie within a slab normal to box axis ``axis``, centred at
+    ``centre_fraction`` of the box along it, ``thickness_ang`` thick, with
+    the periodic wrap taken into account."""
+    frac = np.asarray(frame.frac, float)[:, axis]
+    length = float(np.linalg.norm(np.asarray(frame.box_ang, float)[axis]))
+    if length <= 0:
+        return np.ones(len(frac), bool)
+    half = 0.5 * float(thickness_ang) / length
+    d = frac - float(centre_fraction)
+    d -= np.round(d)
+    return np.abs(d) <= half + 1e-12
+
+
 def unwrapped_about(frame: Frame, rows: np.ndarray, centre: int) -> np.ndarray:
     """Cartesian positions (Å) of ``rows``, each the minimum image relative
     to the centre atom, so the cluster is one connected piece."""

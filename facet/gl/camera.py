@@ -315,6 +315,16 @@ class Camera:
         numbers as before while the two coincide.
         """
         depth = self.scene_depth()
+        anchor = getattr(self, "fog_anchor", None)
+        if anchor is not None:
+            # depth cueing about one point (the focused atom): what lies
+            # much deeper than it fades, what lies at its depth does not
+            import numpy as _np
+            view, _proj = self.matrices(1.0)
+            p = view @ _np.append(_np.asarray(anchor, float), 1.0)
+            d = -float(p[2])
+            span = max(self.scene_radius * 0.35, 1.0)
+            return d - span * 0.5, d + span * 2.0
         return depth - self.scene_radius * 0.55, depth + self.scene_radius * 1.25
 
     def projection_matrix(self, aspect: float) -> np.ndarray:

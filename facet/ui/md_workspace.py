@@ -69,6 +69,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -374,6 +375,7 @@ class ModelToolbar(QWidget):
     labelsChanged = Signal(object)       # LabelSettings
     boxToggled = Signal(bool)
     orthographicToggled = Signal(bool)
+    slabChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -474,6 +476,36 @@ class ModelToolbar(QWidget):
                                     "lines stay parallel, as in a figure")
         self.ortho_check.toggled.connect(self.orthographicToggled)
         row.addWidget(self.ortho_check)
+        # a slab through the box: only the atoms within a thickness of a
+        # plane normal to one box axis are drawn, so a dense box opens
+        self.slab_check = QCheckBox("Slab")
+        self.slab_check.setToolTip("Draw only the atoms within a slab normal "
+                                   "to a box axis, at a centre given as a "
+                                   "fraction of the box, of a thickness in Å")
+        self.slab_axis = QComboBox()
+        self.slab_axis.addItems(["x", "y", "z"])
+        self.slab_axis.setToolTip("The box axis the slab is normal to")
+        self.slab_centre = QDoubleSpinBox()
+        self.slab_centre.setRange(0.0, 1.0)
+        self.slab_centre.setDecimals(2)
+        self.slab_centre.setSingleStep(0.05)
+        self.slab_centre.setValue(0.5)
+        self.slab_centre.setToolTip("The slab's centre as a fraction of the "
+                                    "box along that axis")
+        self.slab_thickness = QDoubleSpinBox()
+        self.slab_thickness.setRange(0.5, 500.0)
+        self.slab_thickness.setDecimals(1)
+        self.slab_thickness.setSingleStep(1.0)
+        self.slab_thickness.setValue(8.0)
+        self.slab_thickness.setSuffix(" Å")
+        self.slab_thickness.setToolTip("The slab's thickness in Å")
+        for w in (self.slab_check, self.slab_axis, self.slab_centre,
+                  self.slab_thickness):
+            row.addWidget(w)
+        self.slab_check.toggled.connect(lambda _on: self.slabChanged.emit())
+        self.slab_axis.currentIndexChanged.connect(lambda _i: self.slabChanged.emit())
+        self.slab_centre.valueChanged.connect(lambda _v: self.slabChanged.emit())
+        self.slab_thickness.valueChanged.connect(lambda _v: self.slabChanged.emit())
         self.frame_note = _hint("")
         self.frame_note.setWordWrap(False)
         # clipped before it widens the window: a note, not a control
@@ -524,6 +556,13 @@ class ModelToolbar(QWidget):
                          self.frame_box.minimum()), self.frame_box.maximum())
         if wanted != self.frame_box.value():
             self.frame_box.setValue(wanted)       # emits frameRequested
+
+    def slab(self):
+        """(axis 0-2, centre fraction, thickness in Å) or None when off."""
+        if not self.slab_check.isChecked():
+            return None
+        return (self.slab_axis.currentIndex(), float(self.slab_centre.value()),
+                float(self.slab_thickness.value()))
 
     def style(self) -> Style:
         return self.style_box.currentData() or Style.BALL_AND_STICK
@@ -745,6 +784,7 @@ class ModelController(QObject):
         self.toolbar.highlightRequested.connect(self.show_highlight)
         self.toolbar.labelsChanged.connect(self._on_labels)
         self.toolbar.boxToggled.connect(lambda _on: self._schedule_redraw())
+        self.toolbar.slabChanged.connect(lambda: self._schedule_redraw())
         self.toolbar.orthographicToggled.connect(self._on_orthographic)
 
         # the centre: reading, the read panel, the frame, the figure
@@ -1953,10 +1993,11 @@ class ModelController(QObject):
             fv.v_list_vu
         active = [r for r in rules if r.enabled]
         isolated = self._isolated
+        slab = self.toolbar.slab()
 
         def work(progress, cancelled):
             from ..core import bulk
-            from ..core.md_environment import neighbour_shells
+            from ..core.md_environment import neighbour_shells, slab_mask
             from .md_highlight import _dim, _hide, _unwrap_about, apply_rules
             from .md_scene import build_md_scene
 
@@ -1969,6 +2010,9 @@ class ModelController(QObject):
             if element:
                 keep = np.asarray(fd.elements) == element
                 _dim(scene, keep, theme)
+            if slab is not None:
+                keep = slab_mask(frame, *slab)
+                _hide(scene, keep)
             if isolated is not None:
                 # one atom with its neighbour shells at this threshold; the
                 # rest left out of the scene, not dimmed

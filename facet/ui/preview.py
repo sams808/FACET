@@ -135,7 +135,7 @@ class PreviewWindow(QMainWindow):
     # need about 470).
     MODEL_COLUMN = 480
 
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None, *, offer_tour: bool = False):
         super().__init__()
         self.setWindowTitle(f"{NAME} {__version__}")
         self.resize(1420, 900)
@@ -162,6 +162,7 @@ class PreviewWindow(QMainWindow):
         self.view = _WorkspaceView()
         self.view.set_theme(self.theme)
         self.view.sitePicked.connect(self._on_site_picked)
+        self.view.bondPicked.connect(self._on_bond_picked)
         self.view.measured.connect(lambda t: self.statusBar().showMessage(t, 9000))
         self.view.ready.connect(self._on_ready)
         self.view.labelsChanged.connect(self._on_labels_cycled)
@@ -285,7 +286,9 @@ class PreviewWindow(QMainWindow):
             self.load(path)
         elif prefs.get("restore_session", False):
             QTimer.singleShot(0, self._reopen_last_session)
-        if not path and prefs.get("offer_tour", True) \
+        # the tour is offered by the application's own start (app.main), not
+        # by every window a test or a script builds
+        if offer_tour and not path and prefs.get("offer_tour", True) \
                 and not prefs.get("tour_offered", False):
             QTimer.singleShot(400, self._offer_tour)
 
@@ -1746,7 +1749,20 @@ class PreviewWindow(QMainWindow):
     # -- rebuilding --------------------------------------------------------
     def _polyhedron_sites(self) -> list[int]:
         entry = self.project.current
-        if entry is None or self.poly_mode == PolyhedraMode.NONE:
+        if entry is None:
+            return []
+        focus = getattr(self, "focus_polyhedra_action", None)
+        scene = getattr(self, "scene", None)
+        if focus is not None and focus.isChecked() and scene is not None \
+                and scene.focus_atom is not None:
+            mask = scene.focus_mask()
+            if mask is not None:
+                cations = {r.site_index for r in self.project.results_for(entry)}
+                inside = sorted({int(s) for s in np.asarray(scene.atom_site)[mask]
+                                 if int(s) in cations})
+                if inside:
+                    return inside
+        if self.poly_mode == PolyhedraMode.NONE:
             return []
         if self.poly_mode == PolyhedraMode.ALL:
             return [r.site_index for r in self.project.results_for(entry)]
@@ -1826,6 +1842,20 @@ class PreviewWindow(QMainWindow):
     # -- events ------------------------------------------------------------
     def _on_ready(self, caps) -> None:
         self.statusBar().showMessage(f"Renderer: {caps.describe()}", 15000)
+
+    def _on_bond_picked(self, bond: int) -> None:
+        """A click on a bond, on any tier: its two atoms, distance and
+        valence in the status bar."""
+        s = self.scene
+        if s is None or not (0 <= bond < s.n_bonds):
+            return
+        ends = np.asarray(s.bond_atoms, int)
+        a, b = int(ends[bond, 0]), int(ends[bond, 1])
+        la = s.atom_label[a] if a < len(s.atom_label) else str(a)
+        lb = s.atom_label[b] if b < len(s.atom_label) else str(b)
+        self.statusBar().showMessage(
+            f"Bond {la}–{lb}: {float(s.bond_distance[bond]):.4f} Å, "
+            f"{float(s.bond_valence[bond]):.4f} v.u.", 8000)
 
     def _on_site_picked(self, site_index: int) -> None:
         if site_index < 0 or self.structure is None:
@@ -1948,6 +1978,16 @@ class PreviewWindow(QMainWindow):
             lambda _=False, i=site_index: self._add_site_to_compare(i))
         return menu
 
+    def _set_legend(self, on: bool) -> None:
+        self.view.show_legend = bool(on)
+        self.view.update()
+        for controller in self.models:
+            try:
+                controller.view.show_legend = bool(on)
+                controller.view.update()
+            except (AttributeError, RuntimeError):
+                pass
+
     def _focus_target(self):
         """(drawn atom, radius in angstrom) for the focus, or None.
 
@@ -2065,6 +2105,27 @@ class PreviewWindow(QMainWindow):
             "the cursor on the explorer grow and shrink it.")
         self.focus_action.toggled.connect(lambda _on: self._apply_focus())
         m.addAction(self.focus_action)
+        self.focus_polyhedra_action = QAction("Polyhedra &within the focus", self)
+        self.focus_polyhedra_action.setCheckable(True)
+        self.focus_polyhedra_action.setToolTip(
+            "Draw the coordination polyhedra of every cation inside the "
+            "focus sphere, so the connectivity the cut implies is seen.")
+        self.focus_polyhedra_action.toggled.connect(lambda _on: self._rebuild())
+        m.addAction(self.focus_polyhedra_action)
+        self.depth_dim_action = QAction("Fade by depth about the focus", self)
+        self.depth_dim_action.setCheckable(True)
+        self.depth_dim_action.setToolTip(
+            "Depth cueing about the focused atom: what lies deeper fades, so "
+            "the inside of a dense box reads (OpenGL tiers).")
+        self.depth_dim_action.toggled.connect(self.view.set_depth_dim_focus)
+        m.addAction(self.depth_dim_action)
+        self.legend_action = QAction("Colour &legend on the view", self)
+        self.legend_action.setCheckable(True)
+        self.legend_action.setChecked(True)
+        self.legend_action.setToolTip(
+            "A colour bar with its range when atoms are coloured by a value.")
+        self.legend_action.toggled.connect(self._set_legend)
+        m.addAction(self.legend_action)
         m.addSeparator()
 
         self.running_sum_column = QAction("&Running-sum column in the Site tab", self)
@@ -2793,6 +2854,12 @@ class PreviewWindow(QMainWindow):
         if renderer is not None:
             renderer.sort_transparency = bool(sort)
             renderer._sort_key = None          # force one re-sort either way
+        # the same viewing on every model's own view
+        for controller in self.models:
+            try:
+                controller.view.set_stereo(stereo_mode, separation)
+            except (AttributeError, RuntimeError):
+                pass
         fallback = getattr(self.view, "_fallback", None)
         if fallback is not None:
             # the software tier sorts everything by depth already, so there is

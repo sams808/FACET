@@ -16,7 +16,7 @@ from contextlib import contextmanager
 
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen, QPolygonF
 from PySide6.QtOpenGL import QOpenGLPaintDevice
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
@@ -38,6 +38,7 @@ class StructureView(QOpenGLWidget):
     ready = Signal(object)              # Capabilities, once the context exists
     labelsChanged = Signal(object)      # LabelSettings, after a keyboard cycle
     contextRequested = Signal(int, object)   # atom index or -1, and the position
+    bondPicked = Signal(int)                 # a bond under the click, by index
     pivotChanged = Signal(object)       # a caption for the rotation centre, or None
 
     def __init__(self, parent: QWidget | None = None):
@@ -86,6 +87,9 @@ class StructureView(QOpenGLWidget):
         self._measure_chain: list[int] = []
         # the atom whose bond angles are drawn as arcs, or None
         self._angle_hub: int | None = None
+        # depth cueing about the focused atom, and the on-screen colour bar
+        self.depth_dim_focus = False
+        self.show_legend = True
         self._status = ""
         self.labels = labels_mod.LabelSettings()
         self.structure = None
@@ -109,7 +113,16 @@ class StructureView(QOpenGLWidget):
 
     def set_scene(self, scene: Scene, reframe: bool = True) -> None:
         same = scene is not None and scene is self.scene
+        previous = self.scene
         self.scene = scene
+        # a rebuild of the same atoms (a style change, a threshold, a label
+        # mode) keeps the measurement chain; a different structure drops it
+        if not same and self._measure_chain:
+            alike = (scene is not None and previous is not None
+                     and scene.n_atoms == previous.n_atoms
+                     and np.array_equal(scene.atom_site, previous.atom_site))
+            if not alike:
+                self._measure_chain.clear()
         if scene is not None and scene.theme is not None:
             self.theme = scene.theme
 
@@ -251,6 +264,7 @@ class StructureView(QOpenGLWidget):
             return
         self.scene.set_focus(atom, radius)
         self.set_scene(self.scene, reframe=False)
+        self._apply_depth_dim()
 
     def save_vector(self, path, background=None, scale: float = 1.0,
                     width_mm: float = 170.0, title: str = ""):
@@ -635,6 +649,8 @@ class StructureView(QOpenGLWidget):
             self._paint_measurement(painter)
         if self._angle_hub is not None:
             self._paint_angles(painter)
+        if self.show_legend:
+            self._paint_legend(painter)
         if self.show_axis_gizmo and self.structure is not None:
             self._paint_axis_gizmo(painter)
         if self._status:
@@ -885,6 +901,48 @@ class StructureView(QOpenGLWidget):
         # segments; the value itself is placed by the measurement labels
         for a, p, b in zip(px[:-2], px[1:-1], px[2:]):
             self._paint_arc(painter, p, a, b, scale, QColor(120, 220, 255))
+        if len(pts) == 4:
+            self._paint_dihedral(painter, pts, px, scale)
+
+    def _paint_dihedral(self, painter: QPainter, pts, px, scale: float) -> None:
+        """The torsion of four atoms as two translucent planes and the arc
+        between their normals, drawn about the middle bond."""
+        from ..core.utilities import torsion_angle
+
+        p0, p1, p2, p3 = (np.asarray(p, float) for p in pts)
+        axis = p2 - p1
+        n = np.linalg.norm(axis)
+        if n < 1e-9:
+            return
+        axis /= n
+        # the arms, with their components along the axis removed
+        u = (p0 - p1) - ((p0 - p1) @ axis) * axis
+        v = (p3 - p2) - ((p3 - p2) @ axis) * axis
+        if np.linalg.norm(u) < 1e-9 or np.linalg.norm(v) < 1e-9:
+            return
+        mid = 0.5 * (p1 + p2)
+        reach = 0.6 * min(np.linalg.norm(u), np.linalg.norm(v))
+        tip_u = mid + u / np.linalg.norm(u) * reach
+        tip_v = mid + v / np.linalg.norm(v) * reach
+        sm, su, sv = self._visible(np.array([mid, tip_u, tip_v]))
+        fill_a = QColor(120, 220, 255, 48)
+        fill_b = QColor(255, 196, 92, 48)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(fill_a)
+        painter.drawPolygon(QPolygonF([QPointF(px[0][0], px[0][1]),
+                                       QPointF(px[1][0], px[1][1]),
+                                       QPointF(px[2][0], px[2][1])]))
+        painter.setBrush(fill_b)
+        painter.drawPolygon(QPolygonF([QPointF(px[1][0], px[1][1]),
+                                       QPointF(px[2][0], px[2][1]),
+                                       QPointF(px[3][0], px[3][1])]))
+        painter.setBrush(Qt.NoBrush)
+        pen = QPen(QColor(255, 196, 92), 1.2 * scale, Qt.DotLine)
+        painter.setPen(pen)
+        painter.drawLine(QPointF(sm[0], sm[1]), QPointF(su[0], su[1]))
+        painter.drawLine(QPointF(sm[0], sm[1]), QPointF(sv[0], sv[1]))
+        self._paint_arc(painter, sm, su, sv, scale, QColor(255, 196, 92),
+                        fraction=0.55, text=f"τ {torsion_angle(p0, p1, p2, p3):.1f}°")
 
     # -- bond angles ---------------------------------------------------------
     def set_angle_hub(self, index: int | None) -> None:
@@ -947,20 +1005,22 @@ class StructureView(QOpenGLWidget):
         fnt = QFont(painter.font())
         fnt.setPointSizeF(max(6.5, 8.0 * scale))
         painter.setFont(fnt)
+        placed: list[QRectF] = []
         # the largest arcs first, so the small ones draw on top of them
         for n, (i, j, ang) in enumerate(sorted(pairs, key=lambda t: -t[2])):
             px = self._visible(np.array([centre, tip(i), tip(j)]))
             # a different fraction of the bond's drawn length for each
-            # pair, so the arcs sit at different radii and read apart
+            # pair, so the arcs sit at different radii and read apart; the
+            # label is then moved outwards until it overlaps none placed
             self._paint_arc(painter, px[0], px[1], px[2], scale, colour,
                             fraction=0.22 + 0.07 * (n % 5),
-                            text=f"{ang:.1f}°")
+                            text=f"{ang:.1f}°", placed=placed)
         painter.setFont(self.font())
 
     @staticmethod
     def _paint_arc(painter: QPainter, p, a, b, scale: float, colour: QColor,
                    *, radius: float | None = None, fraction: float = 0.35,
-                   text: str | None = None) -> None:
+                   text: str | None = None, placed: list | None = None) -> None:
         """The arc at ``p`` from the direction of ``a`` to that of ``b``,
         the shorter way round, in screen space; ``text`` at its middle."""
         import math
@@ -984,11 +1044,83 @@ class StructureView(QOpenGLWidget):
                         int(round(start * 16)), int(round(span * 16)))
         if text:
             mid = math.radians(start + span / 2.0)
-            tx = p[0] + (r + 9 * scale) * math.cos(mid)
-            ty = p[1] - (r + 9 * scale) * math.sin(mid)
+            fm = painter.fontMetrics()
+            w = fm.horizontalAdvance(text) + 4
+            h = fm.height()
+            out = r + 9 * scale
+            rect = None
+            for _step in range(12):
+                tx = p[0] + out * math.cos(mid)
+                ty = p[1] - out * math.sin(mid)
+                rect = QRectF(tx - w / 2, ty - h / 2, w, h)
+                if placed is None or not any(rect.intersects(q) for q in placed):
+                    break
+                out += h * 0.9
+            if placed is not None and rect is not None:
+                placed.append(rect)
             painter.setPen(colour)
-            painter.drawText(QRectF(tx - 30, ty - 8, 60, 16), Qt.AlignCenter,
-                             text)
+            painter.drawText(rect, Qt.AlignCenter, text)
+
+    def _paint_legend(self, painter: QPainter) -> None:
+        """A colour bar with its range when atoms are coloured by a value."""
+        theme = self.theme
+        mode = getattr(theme, "color_mode", None) if theme else None
+        if mode is None or self.results is None or not self.results:
+            return
+        if mode in (theme_mod.ColorMode.ELEMENT, theme_mod.ColorMode.SITE,
+                    theme_mod.ColorMode.UNIFORM):
+            return
+        values = theme_mod.site_values(self.results, mode)
+        if not values:
+            return
+        lo, hi = theme_mod.scale_range(values, theme, mode)
+        diverging = mode is theme_mod.ColorMode.VALENCE_DISCREPANCY
+        width, height = self._view_size()
+        scale = self._view_scale()
+        bar_w, bar_h = 14 * scale, 110 * scale
+        x = width - bar_w - 14 * scale
+        y = height - bar_h - 26 * scale
+        steps = 24
+        for k in range(steps):
+            f = k / (steps - 1)
+            rgb = theme_mod.color_for_value(lo + f * (hi - lo), lo, hi, diverging)
+            painter.fillRect(QRectF(x, y + bar_h * (1 - (k + 1) / steps),
+                                    bar_w, bar_h / steps + 0.5),
+                             self._ink(rgb))
+        ink = self._ink(theme.contrasting_ink())
+        painter.setPen(ink)
+        fnt = QFont(painter.font())
+        fnt.setPointSizeF(max(6.5, 8.0 * scale))
+        painter.setFont(fnt)
+        painter.drawText(QRectF(x - 90 * scale, y - 8 * scale, 86 * scale, 16 * scale),
+                         Qt.AlignRight | Qt.AlignVCenter, f"{hi:.3g}")
+        painter.drawText(QRectF(x - 90 * scale, y + bar_h - 8 * scale, 86 * scale,
+                                16 * scale),
+                         Qt.AlignRight | Qt.AlignVCenter, f"{lo:.3g}")
+        painter.drawText(QRectF(x - 160 * scale, y + bar_h + 2 * scale,
+                                160 * scale + bar_w, 16 * scale),
+                         Qt.AlignRight | Qt.AlignVCenter, mode.value)
+        painter.setFont(self.font())
+
+    def set_depth_dim_focus(self, on: bool) -> None:
+        """Fade what lies deeper than the focused atom."""
+        self.depth_dim_focus = bool(on)
+        self._apply_depth_dim()
+        self.update()
+
+    def _apply_depth_dim(self) -> None:
+        scene = self.scene
+        anchor = None
+        if self.depth_dim_focus and scene is not None \
+                and scene.focus_atom is not None \
+                and scene.focus_atom < scene.n_atoms:
+            anchor = np.asarray(scene.atom_position[scene.focus_atom], float)
+        self.camera.fog_anchor = anchor
+        renderer = self._renderer
+        if renderer is not None:
+            base = float(getattr(self.theme, "fog_amount", 0.18) or 0.18) \
+                if self.theme else 0.18
+            renderer.fog_amount = 0.75 if anchor is not None else base
 
     @staticmethod
     def _ink(rgb) -> QColor:
@@ -1161,10 +1293,40 @@ class StructureView(QOpenGLWidget):
         r = self._screen_radius(s.atom_position[i], s.atom_radius[i])
         return i if d[i] <= max(r, 4.0) else None
 
+    def pick_bond_at(self, pos) -> int | None:
+        """The drawn bond nearest the click, within a few pixels of its
+        segment, on every tier (projected on the CPU)."""
+        s = self.scene
+        target = self._pane_at(pos) if hasattr(pos, "x") else None
+        if s is None or s.n_bonds == 0 or target is None:
+            return None
+        camera, x, y, width, height = target
+        with self._in_view(camera, width, height):
+            a = self._visible(np.asarray(s.bond_a))
+            b = self._visible(np.asarray(s.bond_b))
+        above = np.asarray(s.bond_valence) >= s.v_bond
+        p = np.array([x, y], float)
+        ab = b[:, :2] - a[:, :2]
+        length2 = (ab ** 2).sum(axis=1)
+        t = np.clip(((p - a[:, :2]) * ab).sum(axis=1) / np.where(length2 > 0, length2, 1),
+                    0.0, 1.0)
+        closest = a[:, :2] + ab * t[:, None]
+        d = np.hypot(*(closest - p).T)
+        d[~above] = np.inf
+        front = (a[:, 2] < 0) & (b[:, 2] < 0)
+        d[~front] = np.inf
+        if not len(d) or not np.isfinite(d).any():
+            return None
+        i = int(np.argmin(d))
+        return i if d[i] <= 6.0 * self._view_scale() else None
+
     def _handle_select_click(self, pos: QPoint) -> None:
         index = self.pick_at(pos)
         self._selected = index
         if index is None:
+            bond = self.pick_bond_at(pos)
+            if bond is not None:
+                self.bondPicked.emit(bond)
             self.atomPicked.emit(-1)
             self.sitePicked.emit(-1)
         else:
