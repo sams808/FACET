@@ -2,6 +2,18 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 1.0.0 — 2026-10-14
+
+- Version 1.0.0  `828722a`  2026-10-14
+- Batch I: verification — self-check command, reference numbers, parity harness, est. marks, build record  `5e7b075`  2026-10-14
+- Batch H: Compare — difference colouring, pinned frames, parameter sets, linked cursors, basket in sessions  `d91940d`  2026-10-14
+- Batch G: report templates, a report over two thresholds, figures in the HTML report, the Site tab as Markdown and LaTeX, FEFF and a P1 CIF about an MD atom, extended XYZ and the whole frame unwrapped, provenance as JSON beside every export, and facet.site  `9fcece5`  2026-10-14
+- Batch F: a CIF's own bond list pinned on the explorer, every block of a multi-block CIF, mmCIF assemblies, dropped folders, read options remembered by path, data files beside a lone dump, bzip2 and xz by their magic bytes, a window that answers between files  `6f41407`  2026-10-14
+- Batches C, D, E: rules by angle, neighbours, rings and channel distance; saved rule sets; a rule from a dragged range; a Ctrl-click selection; counts per element; shell colouring; the highlighted set on the figure; environments grouped with a representative, populations over frames and for Compare; an atom lookup; an estimate with the progress; partial results on cancel; a frame cache; workers; valences by pair; composition by region; centres of mass  `2ac13eb`  2026-10-14
+- Batch B: angle labels laid out, the dihedral drawn, depth cueing about the focus, a slab through an MD box, polyhedra within the focus, bond clicks on every tier, stereo on the model's view, measurements that survive a rebuild, an on-screen legend  `8a1839b`  2026-10-14
+- Batch A: plateau table and angles in the Site tab, a second site overlaid, the axis read against a chosen pair, bookmarks, ECoN on the axis, sensitivity tooltips, the uncertainty band, the Site tab as a page, keyboard on the explorer  `bda4560`  2026-10-14
+- Batch J: what the window remembers, recent files, layouts, a message log, the threshold as an undo step, the tour, the change log, a problem report, a pruned bundle  `258147d`  2026-10-14
+
 ## 0.9.0 — 2026-10-14
 
 - Bond angles as arcs, an MD atom read as a site, and a hundred proposals  `a70fe94`  2026-10-14
