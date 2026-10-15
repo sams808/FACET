@@ -1817,8 +1817,13 @@ def _record_valences(col: _Collector, k: int, bonds, symbols: np.ndarray,
 def _record_regions(col: _Collector, k: int, frame, symbols: np.ndarray,
                     cells: int = REGION_CELLS) -> None:
     """The box split into cells x cells x cells, each cell's composition:
-    segregation shows as cells that differ."""
-    frac = np.asarray(frame.frac, np.float64) % 1.0
+    segregation shows as cells that differ. The grid is anchored on the
+    centre of all the atoms (fractional, wrapped), so a frame translated as
+    a whole keeps every count; the cells are a presentation of the frame,
+    not of where its origin happened to be."""
+    frac = np.asarray(frame.frac, np.float64)
+    anchor = np.angle(np.exp(2j * np.pi * frac).mean(axis=0)) / (2 * np.pi)
+    frac = (frac - anchor) % 1.0
     idx = np.minimum((frac * cells).astype(np.int64), cells - 1)
     cell = idx[:, 0] * cells * cells + idx[:, 1] * cells + idx[:, 2]
     keys = tuple(f"{x}{y}{z}" for x in range(cells) for y in range(cells)

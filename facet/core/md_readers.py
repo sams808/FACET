@@ -678,12 +678,20 @@ def _open_binary(path: Path):
     kind = _compression_of(path)
     if kind == "gzip":
         return gzip.open(path, "rb")
-    if kind == "bz2":
-        import bz2
-        return bz2.open(path, "rb")
-    if kind == "xz":
-        import lzma
-        return lzma.open(path, "rb")
+    if kind in ("bz2", "xz"):
+        if kind == "bz2":
+            import bz2 as module
+        else:
+            import lzma as module
+        # a stream that does not decompress at all (a damaged file, or a
+        # file that merely starts with the magic) is read raw, so the
+        # format refusal names what it looks like
+        try:
+            with module.open(path, "rb") as probe:
+                probe.read(1)
+        except Exception:                            # noqa: BLE001
+            return open(path, "rb")
+        return module.open(path, "rb")
     return open(path, "rb")
 
 

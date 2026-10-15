@@ -116,10 +116,11 @@ _os.environ["FACET_PREFS_DIR"] = _PREFS_DIR
 
 
 @pytest.fixture(autouse=True)
-def _isolated_prefs(tmp_path):
-    """Each test starts with an empty preferences file of its own."""
-    folder = tmp_path / "prefs"
-    folder.mkdir(exist_ok=True)
+def _isolated_prefs(tmp_path_factory):
+    """Each test starts with an empty preferences file of its own, in a
+    folder of its own (not inside tmp_path, which some tests expect to be
+    exactly what they wrote)."""
+    folder = tmp_path_factory.mktemp("prefs")
     previous = _os.environ.get("FACET_PREFS_DIR")
     _os.environ["FACET_PREFS_DIR"] = str(folder)
     try:

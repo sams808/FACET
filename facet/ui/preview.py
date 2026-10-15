@@ -3955,7 +3955,9 @@ def md_companions(group, models) -> list[str]:
             continue
         if os.path.normcase(str(Path(path).resolve().parent)) == folder:
             out.append(str(path))
-    if not out:
+    own_formats = {file_format for path, file_format in models
+                   if os.path.normcase(os.path.abspath(str(path))) in own}
+    if not out and "lammps-data" not in own_formats:
         # a dump opened on its own: the LAMMPS data files in its folder are
         # offered as well, as the file whose Masses name its types
         try:

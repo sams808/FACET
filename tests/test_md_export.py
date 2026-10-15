@@ -89,7 +89,8 @@ def test_every_csv_reads_back_as_its_descriptor(result, tmp_path):
     paths = md_export.write_csv_files(result, tmp_path)
     _, index = _read_csv(tmp_path / "index.csv")
     listed = [row for row in index if row["file"]]
-    assert len(listed) == len(paths) - 2 == sum(
+    # index.csv, the notes file and provenance.json are not descriptors
+    assert len(listed) == len(paths) - 3 == sum(
         len(out.tables) for out in result.outputs.values())
     for row in listed:
         container = result.outputs[row["analysis"]].tables[row["descriptor"]]
@@ -326,7 +327,7 @@ def test_channel_csvs_read_back_as_their_descriptors(channel_result,
     _, index = _read_csv(tmp_path / "index.csv")
     listed = [row for row in index if row["file"]]
     assert {row["analysis"] for row in listed} == set(CHANNEL_NAMES)
-    assert len(listed) == len(paths) - 2
+    assert len(listed) == len(paths) - 3
     kinds = {row["kind"] for row in listed}
     assert {"Series", "Scalar", "Histogram", "Distribution", "Table"} <= kinds
     for row in listed:
