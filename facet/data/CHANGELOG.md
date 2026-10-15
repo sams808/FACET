@@ -2,6 +2,11 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 1.0.0 (in progress)
+
+- Full-suite fixes for 1.0.0  `0e53525`  2026-10-14
+- Changelog for 1.0.0  `a7a7bf7`  2026-10-14
+
 ## 1.0.0 — 2026-10-14
 
 - Version 1.0.0  `828722a`  2026-10-14
