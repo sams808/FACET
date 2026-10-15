@@ -96,6 +96,20 @@ class ReportDialog(QDialog):
         self.anions = QCheckBox("Analyse the anion sites as well")
         self.anions.setChecked(anions)
         form.addRow("", self.anions)
+        self.second = QDoubleSpinBox()
+        self.second.setDecimals(4)
+        self.second.setRange(0.0, 5.0)
+        self.second.setSingleStep(0.005)
+        self.second.setValue(0.0)
+        self.second.setSpecialValueText("none")
+        self.second.setSuffix(" v.u.")
+        self.second.setToolTip("A second bond threshold to compare against: "
+                               "the sites whose coordination number changes "
+                               "between the two come first in the report.")
+        form.addRow("Second threshold", self.second)
+        self.figures = QCheckBox("With figures (HTML only): the explorer of "
+                                 "every site and a picture of each structure")
+        form.addRow("", self.figures)
         self.format = QComboBox()
         for key in report_mod.FORMATS:
             self.format.addItem(report_mod.FORMAT_NAMES[key], key)
@@ -103,6 +117,15 @@ class ReportDialog(QDialog):
         layout.addLayout(form)
 
         buttons = QDialogButtonBox()
+        self.templates = QPushButton("Templates…")
+        self.templates.setToolTip("Save these settings under a name, or "
+                                  "load a template saved before; the "
+                                  "command line takes them with --template.")
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self.templates)
+        menu.aboutToShow.connect(self._fill_templates)
+        self.templates.setMenu(menu)
+        buttons.addButton(self.templates, QDialogButtonBox.ActionRole)
         self.run = buttons.addButton("Write report…", QDialogButtonBox.AcceptRole)
         buttons.addButton(QDialogButtonBox.Close)
         buttons.accepted.connect(self._write)
@@ -144,6 +167,45 @@ class ReportDialog(QDialog):
         self.count.setText(f"{n} file{'s' if n != 1 else ''}")
         self.run.setEnabled(n > 0)
 
+    # -- templates -------------------------------------------------------------
+    def template(self) -> dict:
+        second = self.second.value() if self.second.value() > 0 else None
+        return report_mod.template_fields(
+            self.format.currentData(), self.v_bond.value(), self.v_list.value(),
+            self.anions.isChecked(), second)
+
+    def apply_template(self, fields: dict) -> None:
+        i = self.format.findData(fields.get("format"))
+        if i >= 0:
+            self.format.setCurrentIndex(i)
+        if "v_bond" in fields:
+            self.v_bond.setValue(float(fields["v_bond"]))
+        if "v_list" in fields:
+            self.v_list.setValue(float(fields["v_list"]))
+        self.anions.setChecked(bool(fields.get("anions", False)))
+        other = fields.get("v_bond_other")
+        self.second.setValue(float(other) if other else 0.0)
+
+    def _fill_templates(self) -> None:
+        menu = self.templates.menu()
+        menu.clear()
+        save = menu.addAction("Save these settings as…")
+        save.triggered.connect(self._save_template)
+        names = report_mod.template_names()
+        if names:
+            menu.addSeparator()
+            for name in names:
+                act = menu.addAction(name)
+                act.triggered.connect(lambda _=False, n=name: self.apply_template(
+                    report_mod.load_template(n) or {}))
+
+    def _save_template(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Save the report settings",
+                                        "A name for this template:")
+        if ok and name.strip():
+            report_mod.save_template(name.strip(), self.template())
+
     # -- writing -------------------------------------------------------------
     def _write(self) -> None:
         if self.v_bond.value() < self.v_list.value():
@@ -174,12 +236,17 @@ class ReportDialog(QDialog):
             return not progress.wasCanceled()
 
         try:
+            second = self.second.value() if self.second.value() > 0 else None
             report = report_mod.analyse_files(
                 files, params=self.params, v_bond=self.v_bond.value(),
                 v_list=self.v_list.value(), anions=self.anions.isChecked(),
-                progress=step)
+                progress=step, v_bond_other=second)
             progress.setValue(len(files))
             self.written = report_mod.write_report(report, out, fmt)
+            if fmt == "html" and self.figures.isChecked():
+                from .report_figures import add_figures
+                add_figures(self.written[0], report,
+                            getattr(self.parent(), "theme", None))
         except Exception as error:                    # noqa: BLE001
             progress.close()
             QMessageBox.critical(self, "Report not written", str(error))

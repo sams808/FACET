@@ -655,6 +655,16 @@ class PreviewWindow(QMainWindow):
                              "as one page.")
         site_page.triggered.connect(lambda: self.export_site_html())
         export.addAction(site_page)
+        site_md = QAction("Site tab as &Markdown…", self)
+        site_md.setToolTip("The Site tab as Markdown tables, for a README or "
+                           "a notebook.")
+        site_md.triggered.connect(lambda: self.export_site_text("md"))
+        export.addAction(site_md)
+        site_tex = QAction("Site tab as &LaTeX…", self)
+        site_tex.setToolTip("The Site tab as LaTeX tabulars, for a "
+                            "manuscript.")
+        site_tex.triggered.connect(lambda: self.export_site_text("tex"))
+        export.addAction(site_tex)
         export.addSeparator()
         self.report_action = QAction("&Report on CIFs…", self)
         self.report_action.setToolTip(
@@ -2248,6 +2258,27 @@ class PreviewWindow(QMainWindow):
         result = next((r for r in self.project.results_for(entry)
                        if r.site_index == site_index), None)
         self.explorer.set_second(result)
+
+    def export_site_text(self, fmt: str, path=None):
+        """The Site tab as Markdown or LaTeX text."""
+        from ..core.site_text import site_text
+        r = self._current_result()
+        if r is None:
+            self.statusBar().showMessage("No site selected to export.", 5000)
+            return None
+        suffix = {"md": ".md", "tex": ".tex"}.get(fmt, ".txt")
+        if path is None:
+            path = self._ask(f"Export the Site tab as {fmt}",
+                             f"{r.label}_site{suffix}",
+                             f"{fmt.upper()} (*{suffix})")
+            if not path:
+                return None
+        entry = self._crystal()
+        text = site_text(r, self.project.v_bond, fmt=fmt,
+                         source=f"{entry.name if entry else ''}, FACET")
+        Path(path).write_text(text, encoding="utf-8")
+        self._wrote(path)
+        return Path(path)
 
     def export_site_html(self, path=None):
         """The Site tab and the explorer's picture as one HTML page."""

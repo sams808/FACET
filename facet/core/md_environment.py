@@ -114,6 +114,81 @@ def environment_xyz(frame: Frame, keep: np.ndarray, centre: int, *,
     return "\n".join(lines) + "\n"
 
 
+def environment_extxyz(frame: Frame, keep: np.ndarray, centre: int, *,
+                       comment: str = "") -> str:
+    """The cluster as extended XYZ: a Lattice= of the frame's box, the
+    columns species:S:1:pos:R:3, the frame's velocities when it carries
+    them, and the frame row of each atom -- the form a restart or ASE
+    reads."""
+    rows = np.flatnonzero(np.asarray(keep, bool))
+    if centre not in rows:
+        rows = np.concatenate([[centre], rows])
+    cart = unwrapped_about(frame, rows, centre)
+    box = np.asarray(frame.box_ang, float)
+    lattice = " ".join(f"{x:.6f}" for x in box.reshape(-1))
+    vel = getattr(frame, "vel_ang_per_ps", None)
+    props = "species:S:1:pos:R:3:row:I:1" + (":vel:R:3" if vel is not None else "")
+    note = comment.replace("\n", " ").replace('"', "'")
+    head = (f'Lattice="{lattice}" Properties={props} pbc="T T T" '
+            f'comment="{note}"')
+    symbols = np.asarray(frame.elements)
+    lines = [str(len(rows)), head]
+    for row, p in zip(rows, cart):
+        line = f"{symbols[row]:<2s} {p[0]:14.6f} {p[1]:14.6f} {p[2]:14.6f} {int(row)}"
+        if vel is not None:
+            v = np.asarray(vel, float)[row]
+            line += f" {v[0]:12.6f} {v[1]:12.6f} {v[2]:12.6f}"
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def write_environment_extxyz(path, frame: Frame, keep: np.ndarray, centre: int,
+                             *, comment: str = "") -> Path:
+    path = Path(path)
+    path.write_text(environment_extxyz(frame, keep, centre, comment=comment),
+                    encoding="utf-8")
+    return path
+
+
+def cluster_structure(frame: Frame, keep: np.ndarray, centre: int, *,
+                      name: str = "cluster", ox=None):
+    """The cluster as a P1 Structure in a box of its own, the centre atom
+    first (site 0), unwrapped about it: what a FEFF input or a CIF of the
+    environment is written from."""
+    from .readers import _assemble, cell_from_vectors
+    rows = np.flatnonzero(np.asarray(keep, bool))
+    if centre not in rows:
+        rows = np.concatenate([[centre], rows])
+    cart = unwrapped_about(frame, rows, centre)
+    centre_pos = cart[list(rows).index(centre)]
+    order = np.argsort(np.linalg.norm(cart - centre_pos[None, :], axis=1),
+                       kind="stable")
+    rows, cart = rows[order], cart[order]
+    span = cart.max(axis=0) - cart.min(axis=0)
+    box = np.maximum(span + 8.0, 8.0)
+    cell = cell_from_vectors(np.diag(box))
+    shifted = cart - cart.min(axis=0) + 4.0
+    frac = shifted / box[None, :]
+    symbols = np.asarray(frame.elements)
+    ids = np.asarray(frame.atom_id)
+    table = []
+    for row, f in zip(rows, frac):
+        table.append((f"{symbols[row]}{int(ids[row])}", str(symbols[row]),
+                      tuple(float(x) for x in f), 1.0))
+    structure = _assemble(name, cell, table, None, note_p1=True)
+    structure.notes.append(
+        f"a cluster of {len(rows)} atoms cut from an MD frame about row "
+        f"{int(centre)}, unwrapped by the minimum image, in a box 8 Å wider "
+        "than it; the box is not the model's")
+    if ox is not None:
+        try:
+            for site in structure.sites:
+                site.ox = int(np.asarray(ox)[rows[[s.label for s in structure.sites].index(site.label)]])
+        except Exception:                            # noqa: BLE001
+            pass
+    return structure
+
+
 def write_environment_xyz(path, frame: Frame, keep: np.ndarray, centre: int,
                           *, shell: np.ndarray | None = None,
                           comment: str = "") -> Path:

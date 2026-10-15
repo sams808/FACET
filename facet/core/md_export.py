@@ -385,7 +385,20 @@ def write_csv_files(result: ModelResult, directory, *,
         result.provenance.as_rows(), folder / "provenance.csv",
         provenance=[_one_line(line) for line in _search_lines(result)
                     + _minima_lines(result)])
-    return [index_path, provenance_path] + written
+    # the same provenance as JSON, for a pipeline that checks what it reads
+    import json as _json
+    json_path = folder / "provenance.json"
+    try:
+        payload = {"lines": list(run_lines),
+                   "rows": [{k: _csv_value(v) for k, v in row.items()}
+                            for row in result.provenance.as_rows()],
+                   "model_notes": list(getattr(result, "model_notes", ()))}
+        json_path.write_text(_json.dumps(payload, indent=1, default=str),
+                             encoding="utf-8")
+        extra = [json_path]
+    except (OSError, TypeError, ValueError):
+        extra = []
+    return [index_path, provenance_path] + extra + written
 
 
 def write_workbook(result: ModelResult, path, *, per_frame: bool = False,

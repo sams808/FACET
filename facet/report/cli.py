@@ -41,6 +41,15 @@ def build_parser() -> argparse.ArgumentParser:
                              f"(default {bv.V_LIST_DEFAULT})")
     parser.add_argument("--anions", action="store_true",
                         help="analyse the anion sites as well as the cations")
+    parser.add_argument("--v-bond-2", type=float, default=None, metavar="V",
+                        help="a second bond threshold: the sites whose CN "
+                             "changes between the two are listed first")
+    parser.add_argument("--template", metavar="NAME",
+                        help="a report template saved from the window "
+                             "(format, thresholds, tables); flags given "
+                             "override it")
+    parser.add_argument("--tables", metavar="NAMES",
+                        help="comma-separated tables to write (default all)")
     parser.add_argument("--quiet", action="store_true",
                         help="no progress on stderr")
     return parser
@@ -48,6 +57,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    tables = None
+    if args.template:
+        from facet.core.report import load_template
+        found = load_template(args.template)
+        if found is None:
+            print(f"no report template named {args.template!r}", file=sys.stderr)
+            return 2
+        given = set(a for a in (argv or sys.argv[1:]) if a.startswith("--"))
+        if "--format" not in given:
+            args.format = found.get("format", args.format)
+        if "--v-bond" not in given:
+            args.v_bond = float(found.get("v_bond", args.v_bond))
+        if "--v-list" not in given:
+            args.v_list = float(found.get("v_list", args.v_list))
+        if "--anions" not in given:
+            args.anions = bool(found.get("anions", args.anions))
+        if "--v-bond-2" not in given and found.get("v_bond_other") is not None:
+            args.v_bond_2 = float(found["v_bond_other"])
+        tables = found.get("tables")
+    if args.tables:
+        tables = [t.strip() for t in args.tables.split(",") if t.strip()]
     if args.v_bond < args.v_list:
         print(f"v_bond ({args.v_bond}) is below v_list ({args.v_list}): a bond "
               "must be at least a listed contact", file=sys.stderr)
@@ -63,11 +93,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return True
 
     report = analyse_files(args.paths, v_bond=args.v_bond, v_list=args.v_list,
-                           anions=args.anions, progress=progress)
+                           anions=args.anions, progress=progress,
+                           v_bond_other=args.v_bond_2)
     if not report.structures:
         print("no CIF files among the paths given", file=sys.stderr)
         return 2
-    written = write_report(report, args.out, args.format)
+    written = write_report(report, args.out, args.format, tables_wanted=tables)
     for path in written:
         print(path)
     failed = [s for s in report.structures if s.error]

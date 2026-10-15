@@ -35,7 +35,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Sequence
 
 from . import bv, bv_report, cif, coordination, exporters
 from ..version import __version__
@@ -50,6 +50,9 @@ FORMAT_NAMES = {
     "txt": "Plain text (.txt)",
 }
 TABLES = ("sites", "contacts", "plateaus", "cutoffs", "balance")
+# with a second threshold: the sites whose coordination number changes
+# between the two, first, and every site at the second threshold
+TABLES_TWO = ("cn_changes", "sites_at_second")
 
 
 @dataclass
@@ -76,6 +79,8 @@ class Report:
     anions: bool
     generated: str
     structures: list[StructureReport] = field(default_factory=list)
+    # a second bond threshold to compare against, or None
+    v_bond_other: float | None = None
 
     # -- provenance ----------------------------------------------------------
     def provenance(self) -> list[str]:
@@ -91,6 +96,9 @@ class Report:
             f"files: {len(self.structures)} "
             f"({sum(1 for s in self.structures if s.error)} not read)",
         ]
+        if self.v_bond_other is not None:
+            lines.insert(2, f"compared against a second bond threshold "
+                            f"{self.v_bond_other:.4f} v.u.")
         for s in self.structures:
             lines.append(f"  {s.path}" + (f"  -- {s.error}" if s.error else ""))
         return lines
@@ -223,9 +231,36 @@ class Report:
         return rows
 
     def tables(self) -> dict[str, list[dict]]:
-        return {"sites": self.site_rows(), "contacts": self.contact_rows(),
-                "plateaus": self.plateau_rows(), "cutoffs": self.cutoff_rows(),
-                "balance": self.balance_rows()}
+        out = {}
+        if self.v_bond_other is not None:
+            changes, second = self.second_threshold_rows()
+            out["cn_changes"] = changes
+            out["sites_at_second"] = second
+        out.update({"sites": self.site_rows(), "contacts": self.contact_rows(),
+                    "plateaus": self.plateau_rows(), "cutoffs": self.cutoff_rows(),
+                    "balance": self.balance_rows()})
+        return out
+
+    def second_threshold_rows(self) -> tuple[list[dict], list[dict]]:
+        """Every site reclassified at the second threshold, and first the
+        sites whose coordination number differs between the two."""
+        from .coordination import reclassify
+        other = float(self.v_bond_other)
+        changes, second = [], []
+        for s in self.structures:
+            for r in s.results:
+                moved = reclassify(r, other)
+                row = {
+                    "structure": s.name, "site": r.label, "element": r.element,
+                    "cn_at_first": r.cn_valence, "cn_at_second": moved.cn_valence,
+                    "bvs_at_first": _num(r.bvs), "bvs_at_second": _num(moved.bvs),
+                    "phi_at_first": _num(r.phi), "phi_at_second": _num(moved.phi),
+                    "v_bond_first": self.v_bond, "v_bond_second": other,
+                }
+                second.append(row)
+                if moved.cn_valence != r.cn_valence:
+                    changes.append(dict(row, cn_change=moved.cn_valence - r.cn_valence))
+        return changes, second
 
 
 def _num(value):
@@ -266,6 +301,7 @@ def analyse_files(paths: Iterable[str | Path],
                   v_list: float = bv.V_LIST_DEFAULT,
                   anions: bool = False,
                   progress: Callable[[int, int, str], bool] | None = None,
+                  v_bond_other: float | None = None,
                   ) -> Report:
     """Read and analyse every file. A file that cannot be read is kept in the
     report with its reason, so the table says which files are missing and
@@ -279,10 +315,14 @@ def analyse_files(paths: Iterable[str | Path],
         raise ValueError(f"v_bond ({v_bond}) is below v_list ({v_list}): a "
                          "bond must be at least a listed contact")
     files = collect_cifs(paths)
+    if v_bond_other is not None and v_bond_other < v_list:
+        raise ValueError(f"the second threshold ({v_bond_other}) is below "
+                         f"v_list ({v_list})")
     report = Report(v_bond=float(v_bond), v_list=float(v_list),
                     parameter_set=getattr(params, "name", None) or "built-in",
                     anions=bool(anions),
-                    generated=_dt.datetime.now().isoformat(timespec="seconds"))
+                    generated=_dt.datetime.now().isoformat(timespec="seconds"),
+                    v_bond_other=None if v_bond_other is None else float(v_bond_other))
     for i, path in enumerate(files):
         if progress is not None and progress(i, len(files), path.name) is False:
             break
@@ -317,8 +357,11 @@ def _one(path: Path, params, v_bond: float, v_list: float,
 
 # -- writing -----------------------------------------------------------------
 
-def write_report(report: Report, path: str | Path, fmt: str) -> list[Path]:
-    """Write the report in one format; returns the files written."""
+def write_report(report: Report, path: str | Path, fmt: str,
+                 tables_wanted: Sequence[str] | None = None) -> list[Path]:
+    """Write the report in one format; returns the files written.
+    ``tables_wanted`` limits the tables to those named (a template's
+    choice); None writes every one."""
     fmt = fmt.lower().lstrip(".")
     if fmt == "markdown":
         fmt = "md"
@@ -332,17 +375,21 @@ def write_report(report: Report, path: str | Path, fmt: str) -> list[Path]:
         path = path.with_suffix(f".{fmt}")
     path.parent.mkdir(parents=True, exist_ok=True)
     tables = report.tables()
+    if tables_wanted:
+        wanted = {str(t) for t in tables_wanted}
+        tables = {k: v for k, v in tables.items() if k in wanted} or tables
     provenance = report.provenance()
+    sidecar = _provenance_json(report, path)
     if fmt == "xlsx":
         out = exporters.write_xlsx(tables, path, provenance=provenance)
-        return [out] if isinstance(out, Path) else list(out)
+        return ([out] if isinstance(out, Path) else list(out)) + [sidecar]
     if fmt == "csv":
         stem = path.with_suffix("") if path.suffix.lower() == ".csv" else path
         written = []
         for name, rows in tables.items():
             written.append(exporters.write_csv(
                 rows, Path(f"{stem}_{name}.csv"), provenance=provenance))
-        return written
+        return written + [sidecar]
     if fmt == "json":
         payload = {"provenance": provenance, "v_bond": report.v_bond,
                    "v_list": report.v_list, "parameter_set": report.parameter_set,
@@ -350,15 +397,64 @@ def write_report(report: Report, path: str | Path, fmt: str) -> list[Path]:
                    "tables": tables}
         path.write_text(json.dumps(payload, indent=1, default=str),
                         encoding="utf-8")
-        return [path]
+        return [path, sidecar]
     if fmt == "html":
         path.write_text(_as_html(report, tables, provenance), encoding="utf-8")
-        return [path]
+        return [path, sidecar]
     if fmt == "md":
         path.write_text(_as_markdown(report, tables, provenance), encoding="utf-8")
-        return [path]
+        return [path, sidecar]
     path.write_text(_as_text(report, tables, provenance), encoding="utf-8")
-    return [path]
+    return [path, sidecar]
+
+
+def _provenance_json(report: Report, beside: Path) -> Path:
+    """The provenance as a machine-readable file beside the export, so a
+    pipeline can check what it reads without parsing a header."""
+    target = Path(str(beside.with_suffix("")) + ".provenance.json")
+    payload = {
+        "application": "FACET", "version": __version__,
+        "generated": report.generated, "v_bond_vu": report.v_bond,
+        "v_list_vu": report.v_list, "v_bond_other_vu": report.v_bond_other,
+        "parameter_set": report.parameter_set, "anions": report.anions,
+        "files": [{"name": s.name, "path": s.path, "formula": s.formula,
+                   "spacegroup": s.spacegroup, "n_atoms": s.n_atoms,
+                   "error": s.error} for s in report.structures],
+        "lines": report.provenance(),
+    }
+    target.write_text(json.dumps(payload, indent=1, default=str), encoding="utf-8")
+    return target
+
+
+# -- templates ----------------------------------------------------------------------
+
+def template_fields(fmt: str, v_bond: float, v_list: float, anions: bool,
+                    v_bond_other: float | None = None,
+                    tables: Sequence[str] | None = None) -> dict:
+    """What a saved report template holds."""
+    return {"format": fmt, "v_bond": float(v_bond), "v_list": float(v_list),
+            "anions": bool(anions),
+            "v_bond_other": None if v_bond_other is None else float(v_bond_other),
+            "tables": list(tables) if tables else None}
+
+
+def save_template(name: str, fields: dict) -> None:
+    from . import prefs
+    templates = prefs.get("report_templates", {}) or {}
+    templates[str(name)] = dict(fields)
+    prefs.set("report_templates", templates)
+
+
+def load_template(name: str) -> dict | None:
+    from . import prefs
+    templates = prefs.get("report_templates", {}) or {}
+    found = templates.get(str(name))
+    return dict(found) if isinstance(found, dict) else None
+
+
+def template_names() -> list[str]:
+    from . import prefs
+    return sorted((prefs.get("report_templates", {}) or {}).keys())
 
 
 def _fmt(value) -> str:
@@ -382,7 +478,7 @@ def _as_html(report: Report, tables: dict, provenance: list[str]) -> str:
              "padding:10px;font-size:12px}h2{margin-top:28px}</style></head><body>",
              "<h1>FACET report</h1>",
              "<pre>" + _html.escape("\n".join(provenance)) + "</pre>"]
-    for name in TABLES:
+    for name in tables:
         rows = tables[name]
         parts.append(f"<h2>{name}</h2>")
         if not rows:
@@ -403,7 +499,7 @@ def _as_markdown(report: Report, tables: dict, provenance: list[str]) -> str:
     out = ["# FACET report", ""]
     out += [f"    {line}" for line in provenance]
     out.append("")
-    for name in TABLES:
+    for name in tables:
         rows = tables[name]
         out.append(f"## {name}")
         out.append("")
@@ -425,7 +521,7 @@ def _as_text(report: Report, tables: dict, provenance: list[str]) -> str:
     out = ["FACET report", "=" * 12, ""]
     out += provenance
     out.append("")
-    for name in TABLES:
+    for name in tables:
         rows = tables[name]
         out.append(name)
         out.append("-" * len(name))

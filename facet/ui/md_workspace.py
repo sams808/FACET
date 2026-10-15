@@ -1851,6 +1851,17 @@ class ModelController(QObject):
                 menu.addAction(
                     f"Export the environment of {label} as XYZ…"
                 ).triggered.connect(lambda _=False, r=row: self.export_environment(r))
+                more = menu.addMenu(f"More exports of {label}")
+                more.addAction("Environment as extended XYZ (box, velocities)…"
+                               ).triggered.connect(
+                    lambda _=False, r=row: self.export_environment(r, kind="extxyz"))
+                more.addAction("Environment as a P1 CIF…").triggered.connect(
+                    lambda _=False, r=row: self.export_environment(r, kind="cif"))
+                more.addAction("FEFF input about this atom…").triggered.connect(
+                    lambda _=False, r=row: self.export_environment(r, kind="feff"))
+                more.addAction("The whole frame unwrapped about this atom, as XYZ…"
+                               ).triggered.connect(
+                    lambda _=False, r=row: self.export_environment(r, kind="frame"))
             menu.addSeparator()
         rows = self.selected_rows()
         if rows and fv.table is not None:
@@ -1911,10 +1922,15 @@ class ModelController(QObject):
         return neighbour_shells(bulk.bonds_at(fv.table, v_bond),
                                 len(fv.frame.elements), row, shells)
 
-    def export_environment(self, row: int, path=None, shells: int = 2):
-        """Write ``row`` with two shells of neighbours as XYZ, unwrapped
-        about it; asks where when ``path`` is None. Returns the path."""
-        from ..core.md_environment import write_environment_xyz
+    def export_environment(self, row: int, path=None, shells: int = 2,
+                           kind: str = "xyz"):
+        """Write ``row`` with two shells of neighbours, unwrapped about it:
+        as XYZ (``kind`` 'xyz'), extended XYZ ('extxyz'), a P1 CIF ('cif'),
+        a FEFF input about it ('feff'), or the whole frame unwrapped about it
+        ('frame'); asks where when ``path`` is None. Returns the path."""
+        from ..core import exporters
+        from ..core.md_environment import (
+            cluster_structure, write_environment_extxyz, write_environment_xyz)
 
         fv = self.frame_view
         found = self.environment(row, shells)
@@ -1923,22 +1939,42 @@ class ModelController(QObject):
                                     "environment to export.")
             return None
         keep, shell = found
+        if kind == "frame":
+            keep = np.ones(len(fv.frame.elements), bool)
+            shell = np.where(keep, 0, -1)
         label = f"{fv.frame.elements[row]}{int(fv.frame.atom_id[row])}"
+        suffix, filt = {"xyz": (".xyz", "XYZ (*.xyz)"),
+                        "frame": (".xyz", "XYZ (*.xyz)"),
+                        "extxyz": (".extxyz", "Extended XYZ (*.extxyz *.xyz)"),
+                        "cif": (".cif", "CIF (*.cif)"),
+                        "feff": (".inp", "FEFF input (*.inp)")}[kind]
         if path is None:
             from PySide6.QtWidgets import QFileDialog
             path, _ = QFileDialog.getSaveFileName(
-                self.view, f"Environment of {label} as XYZ",
-                f"{label}_environment.xyz", "XYZ (*.xyz)")
+                self.view, f"Environment of {label}",
+                f"{label}_environment{suffix}", filt)
             if not path:
                 return None
         v_bond = self._strip_v_bond()
         v_bond = fv.v_bond_vu if v_bond is None else v_bond
+        what = "the whole frame" if kind == "frame" else f"{shells} shells"
         comment = (f"FACET environment of {label} (frame row {row}), frame "
-                   f"{fv.k}, {shells} shells at v_bond {v_bond:.4f} v.u.; "
+                   f"{fv.k}, {what} at v_bond {v_bond:.4f} v.u.; "
                    f"minimum-image unwrapped about the centre; "
                    f"{int(keep.sum())} atoms")
-        out = write_environment_xyz(path, fv.frame, keep, row, shell=shell,
-                                    comment=comment)
+        if kind in ("xyz", "frame"):
+            out = write_environment_xyz(path, fv.frame, keep, row, shell=shell,
+                                        comment=comment)
+        elif kind == "extxyz":
+            out = write_environment_extxyz(path, fv.frame, keep, row,
+                                           comment=comment)
+        else:
+            structure = cluster_structure(fv.frame, keep, row, name=f"{label} environment",
+                                          ox=fv.ox_atom)
+            if kind == "cif":
+                out = exporters.write_cif(structure, path, provenance=[comment])
+            else:
+                out = exporters.write_feff(structure, 0, path)
         self.statusMessage.emit(f"Wrote {int(keep.sum())} atoms to {out}")
         return out
 

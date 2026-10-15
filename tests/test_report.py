@@ -119,6 +119,7 @@ def test_progress_can_stop_the_run():
 def test_every_format_writes_the_same_tables(two_files, tmp_path, fmt):
     written = report.write_report(two_files, tmp_path / "out", fmt)
     assert written and all(p.exists() and p.stat().st_size > 0 for p in written)
+    written = [p for p in written if not p.name.endswith(".provenance.json")]
     text = "".join(p.read_text(encoding="utf-8", errors="replace")
                    for p in written if p.suffix != ".xlsx")
     if fmt == "csv":
