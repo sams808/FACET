@@ -96,7 +96,33 @@ def read(path: str | Path, block: str | None = None) -> Structure:
         year=_int(blk, "_journal_year"),
     )
     out.notes.append(f"symmetry expansion used {symmetry_note}")
+    out.bond_loops = _bond_loop(blk)
+    if out.bond_loops:
+        out.notes.append(f"the file lists {len(out.bond_loops)} bonds of its "
+                         "own (_geom_bond)")
     _annotate_symmetry(out)
+    return out
+
+
+def _bond_loop(blk) -> list:
+    """The authors' bonds: ``_geom_bond_atom_site_label_1/2`` and
+    ``_geom_bond_distance``, as (label 1, label 2, distance in Å). Empty
+    when the block has no such loop. A distance with an uncertainty in
+    brackets is read without it."""
+    try:
+        loop = blk.find(["_geom_bond_atom_site_label_1",
+                         "_geom_bond_atom_site_label_2",
+                         "_geom_bond_distance"])
+    except Exception:                                # noqa: BLE001
+        return []
+    out = []
+    for row in loop:
+        try:
+            a, b = str(row[0]).strip("'\""), str(row[1]).strip("'\"")
+            text = str(row[2]).split("(")[0]
+            out.append((a, b, float(text)))
+        except (TypeError, ValueError, IndexError):
+            continue
     return out
 
 

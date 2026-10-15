@@ -648,15 +648,42 @@ def _existing(path) -> Path:
 
 
 def _is_gzip(path: Path) -> bool:
+    """Whether the file is compressed (gzip, bzip2 or xz): every reader that
+    asks this decompresses through ``_open_binary``, which handles the
+    three alike, so the name is historical."""
+    return _compression_of(path) is not None
+
+
+_BZ2_MAGIC = b"BZh"
+_XZ_MAGIC = b"\xfd7zXZ\x00"
+
+
+def _compression_of(path: Path) -> str | None:
+    """'gzip', 'bz2', 'xz' or None, from the magic bytes rather than the
+    name, so a renamed archive still decompresses."""
     with open(path, "rb") as handle:
-        return handle.read(2) == _GZIP_MAGIC
+        head = handle.read(6)
+    if head[:2] == _GZIP_MAGIC:
+        return "gzip"
+    if head[:3] == _BZ2_MAGIC:
+        return "bz2"
+    if head[:6] == _XZ_MAGIC:
+        return "xz"
+    return None
 
 
 def _open_binary(path: Path):
-    """The file as a binary stream, decompressed when it starts with gzip's
-    magic bytes (whatever its name)."""
-    if _is_gzip(path):
+    """The file as a binary stream, decompressed when it starts with the
+    magic bytes of gzip, bzip2 or xz (whatever its name)."""
+    kind = _compression_of(path)
+    if kind == "gzip":
         return gzip.open(path, "rb")
+    if kind == "bz2":
+        import bz2
+        return bz2.open(path, "rb")
+    if kind == "xz":
+        import lzma
+        return lzma.open(path, "rb")
     return open(path, "rb")
 
 
@@ -1558,7 +1585,7 @@ class _FileTrajectory(_Closable, Trajectory):
         else:
             with self._lock:
                 if self._handle is None:
-                    self._handle = gzip.open(self._path, "rb")
+                    self._handle = _open_binary(self._path)
                 try:
                     self._handle.seek(start)
                 except EOFError:

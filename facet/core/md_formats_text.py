@@ -433,7 +433,7 @@ class _RangeTrajectory(_Base):
         else:
             with self._lock:
                 if self._handle is None:
-                    self._handle = gzip.open(self._path, "rb")
+                    self._handle = _mr()._open_binary(self._path)
                 try:
                     self._handle.seek(start)
                 except EOFError:

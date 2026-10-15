@@ -1204,6 +1204,8 @@ class PreviewWindow(QMainWindow):
                   ".res", ".ins", ".pdb", ".ent", ".cmtx", ".cmdf")
 
     def _droppable(self, path: str) -> bool:
+        if Path(path).is_dir():
+            return True
         lower = path.lower()
         name = Path(path).name.upper()
         return (lower.endswith(self._DROPPABLE)
@@ -1222,8 +1224,18 @@ class PreviewWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls()
-                 if self._droppable(u.toLocalFile())]
+        paths = []
+        for u in event.mimeData().urls():
+            local = u.toLocalFile()
+            if not self._droppable(local):
+                continue
+            if Path(local).is_dir():
+                # a dropped folder opens every structure file in it, as
+                # File > Open folder does
+                paths.extend(str(p) for p in sorted(Path(local).iterdir())
+                             if p.is_file() and self._droppable(str(p)))
+            else:
+                paths.append(local)
         if paths:
             self.load_many(paths)
             event.acceptProposedAction()
@@ -1308,11 +1320,17 @@ class PreviewWindow(QMainWindow):
             if kind == "structure":
                 added.append(self.project.add(value, str(path)))
                 prefs.add_recent(path)
+                # the other blocks of a multi-block CIF open as entries of
+                # their own, named by their block
+                for extra in _other_blocks(path, value):
+                    added.append(self.project.add(extra, str(path)))
             elif kind == "md":
                 models.append((str(path), value))
                 prefs.add_recent(path)
             else:
                 failed.append((str(path), value))
+            # a long list keeps the window answering between files
+            QApplication.processEvents()
         self.structure_panel.refresh()
         if added:
             self.project.set_active(len(self.project) - len(added))
@@ -1809,6 +1827,8 @@ class PreviewWindow(QMainWindow):
             self.project.results_for(active) if active else None)
         current = self._current_result()
         pin = active.first_v_bond if active is not None else None
+        self.explorer.set_bond_loops(
+            getattr(active.structure, "bond_loops", []) if active else [])
         self.explorer.set_result(current)
         self.explorer.set_pin(pin)
         self.explorer.set_threshold(self.project.v_bond)
@@ -3750,6 +3770,33 @@ def _md_despite_refusal(path) -> str | None:
     return "lammps-dump" if suffix in _MD_ONLY_SUFFIXES else None
 
 
+def _other_blocks(path, first) -> list:
+    """The remaining usable blocks of a multi-block CIF, each as a
+    Structure named by its block; empty for any other file."""
+    if not str(path).lower().endswith((".cif", ".mcif")):
+        return []
+    try:
+        import gemmi
+        doc = gemmi.cif.read(str(path))
+        names = [blk.name for blk in doc]
+    except Exception:                                # noqa: BLE001
+        return []
+    if len(names) < 2:
+        return []
+    out = []
+    first_name = getattr(first, "name", None)
+    for name in names[1:]:
+        try:
+            structure = cif.read(path, block=name)
+        except Exception:                            # noqa: BLE001
+            continue
+        if structure.name == first_name:
+            structure.name = f"{structure.name} [{name}]"
+        structure.notes.append(f"block {name!r} of a multi-block file")
+        out.append(structure)
+    return out
+
+
 def read_or_route(path) -> tuple[str, object]:
     """Where a file opens: ('structure', Structure) for the crystal window,
     ('md', format name) for a Model window, ('failed', why) otherwise.
@@ -3871,6 +3918,19 @@ def md_companions(group, models) -> list[str]:
             continue
         if os.path.normcase(str(Path(path).resolve().parent)) == folder:
             out.append(str(path))
+    if not out:
+        # a dump opened on its own: the LAMMPS data files in its folder are
+        # offered as well, as the file whose Masses name its types
+        try:
+            for candidate in sorted(Path(paths[0]).resolve().parent.iterdir()):
+                key = os.path.normcase(str(candidate))
+                if key in own or not candidate.is_file():
+                    continue
+                if candidate.suffix.lower() in (".data", ".lmp") \
+                        or candidate.name.lower().startswith("data."):
+                    out.append(str(candidate))
+        except OSError:
+            pass
     return out
 
 

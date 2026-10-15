@@ -640,8 +640,24 @@ def read_pdb(path: str | Path, *, pdb_layout: bool = False) -> Structure:
     if not len(doc):
         raise UnsupportedFormat(f"{path.name}: no models")
 
+    # an mmCIF that states biological assemblies opens as its first
+    # assembly rather than as the asymmetric unit, when gemmi can build it
+    model = doc[0]
+    assembly_note = ""
+    assemblies = getattr(doc, "assemblies", None)
+    if assemblies is not None and len(assemblies):
+        try:
+            how = gemmi.HowToNameCopiedChain.AddNumber
+            built = gemmi.make_assembly(assemblies[0], model, how)
+            if len(built) and sum(1 for _ in built.all()) > 0:
+                model = built
+                assembly_note = (f"opened as assembly {assemblies[0].name} "
+                                 f"of {len(assemblies)} the file states")
+        except Exception:                            # noqa: BLE001
+            assembly_note = ""
+
     positions, symbols, labels = [], [], []
-    for chain in doc[0]:
+    for chain in model:
         for residue in chain:
             for atom in residue:
                 positions.append([atom.pos.x, atom.pos.y, atom.pos.z])
@@ -666,6 +682,8 @@ def read_pdb(path: str | Path, *, pdb_layout: bool = False) -> Structure:
     rows = [(label, symbol, inverse @ p, 1.0)
             for label, symbol, p in zip(labels, symbols, positions)]
     structure = _assemble(doc.name or path.stem, cell, rows, str(path))
+    if assembly_note:
+        structure.notes.append(assembly_note)
     if invented:
         structure.notes.append(
             "the file carries no usable unit cell, so a box was invented "

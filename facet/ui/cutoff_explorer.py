@@ -875,6 +875,13 @@ class CutoffExplorer(QWidget):
         if r.cn_gap and 0 < r.cn_gap < len(vals):
             v = math.sqrt(vals[r.cn_gap - 1] * vals[r.cn_gap])
             marks.append((v, "max gap", QColor("#7f9e79")))
+        # the authors' bonds: a CIF's own _geom_bond loop, read as the
+        # threshold their list implies for this site (the weakest listed
+        # contact), so the published coordination can be seen against the
+        # staircase
+        authors = self.authors_threshold()
+        if authors is not None:
+            marks.append((authors, "authors' bonds", self._c("#d9a066", "#8a5a1e")))
         # the pin: where the threshold stood when the file was opened, so the
         # numbers first shown for it can be found again after a drag
         if self.pin_v is not None and self.pin_v > 0:
@@ -883,6 +890,40 @@ class CutoffExplorer(QWidget):
             if v > 0:
                 marks.append((v, f"⚑ {name}", self._c("#9fc5e8", "#2b6cb0")))
         return sorted(marks, key=lambda m: m[0])
+
+    def authors_threshold(self) -> float | None:
+        """The threshold a CIF's own bond list implies for this site: the
+        smallest valence among the listed contacts the file bonds to it,
+        matched by site label and distance; None without such a list."""
+        r = self.result
+        loops = getattr(self, "bond_loops", None)
+        if r is None or not loops:
+            return None
+        listed = []
+        taken: set[int] = set()
+        for a, b, d in loops:
+            other = b if a == r.label else a if b == r.label else None
+            if other is None:
+                continue
+            # the nearest contact of that label not yet matched: a loop
+            # lists each bond once, and two O at 1.605 and 1.611 are two
+            best, best_gap = None, 0.02
+            for i, c in enumerate(r.contacts):
+                if i in taken or not c.has_valence or c.label != other:
+                    continue
+                gap = abs(c.distance - d)
+                if gap < best_gap:
+                    best, best_gap = i, gap
+            if best is not None:
+                taken.add(best)
+                listed.append(r.contacts[best].valence)
+        if not listed:
+            return None
+        return float(min(listed)) * 0.999
+
+    def set_bond_loops(self, loops) -> None:
+        self.bond_loops = list(loops or [])
+        self.update()
 
     def _pin_label(self) -> str:
         return f"opened at {self.pin_v:.4f}"

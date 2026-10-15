@@ -144,6 +144,9 @@ class Structure:
     # File tab fills this when it computes.
     issues: list = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # the bonds the file's authors listed (a CIF's _geom_bond loop), as
+    # (site label 1, site label 2, distance in Å); empty when none
+    bond_loops: list = field(default_factory=list)
 
     # -- convenience ------------------------------------------------------
     @property

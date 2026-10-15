@@ -238,6 +238,52 @@ class ThresholdStrip(ThresholdPanel):
 # the Elements panel (what the Sites dock shows for a model)
 # ---------------------------------------------------------------------------
 
+def _source_key(source) -> str:
+    import os
+    paths = source if isinstance(source, (list, tuple)) else [source]
+    return "|".join(os.path.normcase(os.path.abspath(str(p))) for p in paths)
+
+
+def _remembered_read_options(source) -> dict:
+    """The read options saved for this source, or none."""
+    from ..core import prefs
+    try:
+        answers = prefs.get("read_answers", {}) or {}
+        found = answers.get(_source_key(source))
+        if not isinstance(found, dict):
+            return {}
+        out = dict(found)
+        # JSON turned the type map's integer keys into text
+        tm = out.get("type_map")
+        if isinstance(tm, dict):
+            out["type_map"] = {(int(k) if str(k).lstrip("-").isdigit() else k): v
+                               for k, v in tm.items()}
+        return out
+    except Exception:                                # noqa: BLE001
+        return {}
+
+
+def _remember_read_options(source, options: dict) -> None:
+    """Keep the read options answered for this source, so the next open
+    asks nothing."""
+    from ..core import prefs
+    try:
+        answers = prefs.get("read_answers", {}) or {}
+        plain = {}
+        for key, value in dict(options).items():
+            if isinstance(value, dict):
+                plain[key] = {str(k): v for k, v in value.items()}
+            else:
+                plain[key] = value
+        answers[_source_key(source)] = plain
+        # the newest sixty files
+        for stale in list(answers)[:-60]:
+            answers.pop(stale, None)
+        prefs.set("read_answers", answers)
+    except Exception:                                # noqa: BLE001
+        pass
+
+
 class ElementsPanel(QWidget):
     """Per element of the frame shown: atoms, oxidation state (a model
     input) and mean CN at the strip's v_bond. ``elementChosen(symbol)`` on
@@ -754,6 +800,13 @@ class ModelController(QObject):
         if read_options is not None:
             entry.read_options = dict(read_options)
         self.read_options = dict(entry.read_options or {})
+        if not self.read_options:
+            # the answers given for this file before (its type map, its
+            # units, its topology), remembered between runs by path
+            remembered = _remembered_read_options(self.source)
+            if remembered:
+                self.read_options = dict(remembered)
+                entry.read_options = dict(remembered)
         self.companions: tuple = tuple(entry.companions or ())
         self.trajectory = None
         self.summary = None
@@ -1007,6 +1060,7 @@ class ModelController(QObject):
         if read_options is not None:
             self.read_options = dict(read_options)
             self.entry.read_options = dict(read_options)
+            _remember_read_options(self.source, self.read_options)
         source = self.source
         options = dict(self.read_options)
         name = _escape(md_jobs.source_label(source))
