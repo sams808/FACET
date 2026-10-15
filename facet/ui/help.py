@@ -993,11 +993,26 @@ survives zooming.</p>
    centre of rotation with it.</td></tr>
 <tr><td><b>Wheel</b></td><td>Zoom</td></tr>
 <tr><td><b>Left-click an atom</b></td><td>Select that site</td></tr>
-<tr><td><b>Right-click</b></td><td>Context menu for the atom under the cursor
-(<i>Show the angles at …</i> draws every bond angle at it as an arc with its
-value; a measurement chain of three atoms draws its angle the same way):
-   colour, radius, visibility, its polyhedron, and what to turn the view
-   about</td></tr>
+<tr><td><b>Left-click a bond</b></td><td>Its two atoms, length and valence,
+the share of the cation's sum it carries, the R<sub>0</sub> and <i>b</i> it
+was computed with and their source, and the pair's cutoff distance at the
+threshold in force: in a tip at the cursor, the status bar and the Messages
+dock</td></tr>
+<tr><td><b>Right-click</b></td><td>Context menu for the atom under the cursor:
+colour, radius, visibility, its polyhedron, what to turn the view about;
+<i>Isolate …</i> alone, with its bonded neighbours, or with their neighbours
+too (the rest left out until <i>Show the whole structure again</i>);
+<i>Show the angles at …</i> draws the bond angles at it as arcs with their
+values &mdash; by default only between the bonds whose far atom lies nearer
+the viewer than this one, so a seven-fold site reads as a few arcs; turn
+the view to bring other bonds to the front, or untick <i>Angles of the
+front bonds only</i> for every pair; <i>Show the lone-pair lobe at …</i>
+draws this site's bond-valence vector on its own, with its &phi; stated
+(the site has to have one: &phi; above 0)</td></tr>
+<tr><td><b>on…</b> (toolbar)</td><td>Which atoms carry the labels chosen
+under <i>Label atoms</i> and <i>bonds</i>: every atom, or the sites and
+elements ticked, as many as you like; a bond is labelled when either end is
+ticked</td></tr>
 <tr><td><b>Click two atoms</b></td><td>Distance</td></tr>
 <tr><td><b>Click three</b></td><td>Angle</td></tr>
 <tr><td><b>Click four</b></td><td>Torsion</td></tr>
@@ -1518,9 +1533,25 @@ counter-ion at <i>v</i><sub>bond</sub>; former CN counts an anion's bonds to
 the formers only (an O with former CN 1 is non-bridging); Q<sup><i>n</i></sup>
 is a former cation's bonds to anions bonded to two or more formers.
 <b>Atoms outside the rules</b> are, by your choice, <i>dimmed</i> &mdash;
-each keeps {dim}, so the inside of a box stays visible &mdash; or <i>left out
-of the scene entirely</i>, which draws only the atoms picked and the bonds
-among them. The count of atoms matched is written under the rules.</p>
+faded towards the background by the amount on the <i>Dim by</i> slider, 0 %
+leaving them as they are and 100 % hiding them in it, shrinking in step
+&mdash; or <i>left out of the scene entirely</i>, which draws only the atoms
+picked and the bonds among them. A void rule picks the atoms lining the
+drawn voids (their surface within 0.5 &Aring; of a sphere's), a channel rule
+the atoms inside its regions, so with the rest left out the picture is the
+highlight alone. The count of atoms matched is written under the rules.</p>
+<p><b>Hot map of the modifiers.</b> A rule that draws where the network
+modifiers crowd: their number density, each atom spread as a Gaussian of
+the stated width on a grid over the box, as a translucent surface at a
+multiple of the mean density (1.5 encloses the regions half again as dense
+as the average). The count line states the mean, the peak as a multiple of
+the mean and the fraction of the box enclosed. <i>Colour atoms by: modifier
+density</i> colours every atom by the number of modifier atoms within
+4 &Aring; of it. The elements counted are the modifiers (the cations that
+are not formers), or any symbols typed in the rule. The map is the
+complement of the voids: the voids are where no atom is, the hot map where
+the modifiers are; in a modified network the two sit close, which is a
+thing to read off the frame, not something the rule states.</p>
 <p><b>From a result.</b> Double-click a Q<sup><i>n</i></sup> or CN
 distribution, or a BVS or &phi; histogram, in the Results tree: the
 Highlight tab opens with the rule that shows it on the frame &mdash; the
@@ -1537,8 +1568,10 @@ strip with that atom's own staircase and running sum, its pin at the run's
 threshold; dragging either the strip or the explorer moves the other, and
 the atom's numbers follow. The contacts are the frame's valence table
 rows, so nothing is searched again. <i>Investigate …</i> in the right-click
-menu brings the tab up; <i>Show the angles at …</i> draws every bond angle
-at the atom as an arc with its value.</p>
+menu brings the tab up; <i>Show the angles at …</i> draws the bond angles
+at the atom as arcs with their values, by default only between the bonds in
+front of the atom (<i>Angles of the front bonds only</i> in the same menu
+turns that off).</p>
 <p><b>One atom's environment.</b> Right-click an atom in the frame: rotate
 about it; <i>isolate</i> it with its bonded neighbours, or with their
 neighbours too, the rest of the frame left out; or <i>export the

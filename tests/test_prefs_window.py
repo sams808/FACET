@@ -211,9 +211,12 @@ def test_the_problem_report_goes_to_the_clipboard(window, qapp):
         window._report_problem()
     finally:
         QMessageBox.information = original
-    text = QApplication.clipboard().text()
+    # the report is also written beside the preferences, because another
+    # program can take the clipboard at any moment (it did, on this machine)
+    text = (prefs.folder() / "problem_report.txt").read_text(encoding="utf-8")
     assert "FACET" in text and "something happened" in text
-    assert shown
+    assert window._last_problem_report == text
+    assert shown and "problem_report.txt" in shown[0][2]
 
 
 def test_the_change_log_opens_from_the_bundled_file(window, qapp):

@@ -88,6 +88,10 @@ class StructureView(QOpenGLWidget):
         self._measure_chain: list[int] = []
         # the atom whose bond angles are drawn as arcs, or None
         self._angle_hub: int | None = None
+        # the arcs of the bonds in front of the hub only (their far atom
+        # nearer the camera than the hub), so a seven-fold site reads as a
+        # few arcs rather than twenty-one; False draws every pair
+        self.angles_front_only: bool = True
         # depth cueing about the focused atom, and the on-screen colour bar
         self.depth_dim_focus = False
         self.show_legend = True
@@ -1004,12 +1008,39 @@ class StructureView(QOpenGLWidget):
                 out.append((int(bonds[x]), int(bonds[y]), ang))
         return out
 
+    def set_angles_front_only(self, on: bool) -> None:
+        self.angles_front_only = bool(on)
+        self.update()
+
+    def front_bonds(self) -> set[int]:
+        """The bonds at the hub whose far end lies nearer the camera than
+        the hub (view depth: the camera looks down -z, so nearer is a
+        larger z)."""
+        s = self.scene
+        hub = self._angle_hub
+        if s is None or hub is None:
+            return set()
+        ends = np.asarray(s.bond_atoms, int)
+        bonds = sorted({b for i, j, _a in self.hub_angles() for b in (i, j)})
+        if not bonds:
+            return set()
+        tips = np.asarray([s.bond_b[b] if ends[b, 0] == hub else s.bond_a[b]
+                           for b in bonds], float)
+        px = self._visible(np.vstack([s.atom_position[hub][None, :], tips]))
+        z_hub = float(px[0, 2])
+        return {b for b, z in zip(bonds, px[1:, 2]) if float(z) >= z_hub}
+
     def _paint_angles(self, painter: QPainter) -> None:
         s = self.scene
         hub = self._angle_hub
         pairs = self.hub_angles()
         if not pairs:
             return
+        if self.angles_front_only:
+            front = self.front_bonds()
+            pairs = [(i, j, a) for i, j, a in pairs if i in front and j in front]
+            if not pairs:
+                return
         scale = self._view_scale()
         centre = np.asarray(s.atom_position[hub], float)
         ends = np.asarray(s.bond_atoms, int)

@@ -73,7 +73,11 @@ SENSES = ("≤", "≥", "=")
 COLOUR_MODES = ("element", "shell from the atom",
                 "bond-valence sum", "coordination number",
                 "stereoactivity (phi)", "Qn", "modifier-rich O",
-                "channel membership")
+                "modifier density", "channel membership")
+# the hot map's surface: a warm colour the element palettes keep clear of
+HOTMAP_COLOUR = (0.95, 0.35, 0.15)
+HOTMAP_ALPHA = 0.30
+HOTMAP_RADIUS_ANG = 4.0           # the count radius of the colour mode
 CHANNEL_MODES = ("by charge", "by modifier density", "by voids")
 
 # Presentation choices of the overlays (an orange the element palettes do
@@ -98,6 +102,13 @@ CHANNEL_ALPHA = 0.30
 DIM_KEEP = 0.20
 DIM_ATOM_RADIUS = 0.40
 DIM_BOND_RADIUS = 0.35
+# the default dimming, as a fraction of the way to the background: 0 leaves
+# the atoms as they are, 1 fades them to the background entirely (the
+# Highlight page's slider, 0 to 100 %)
+DIM_DEFAULT = 1.0 - DIM_KEEP
+# the atoms within this of a drawn void's surface are its lining: what a
+# void rule keeps when the rest is left out
+VOID_LINING_ANG = 0.5
 NEUTRAL = (0.60, 0.62, 0.66)       # theme.ramp's colour for NaN
 
 # The meshing policy of a by-charge channel surface: METHOD CHOICES about
@@ -435,6 +446,32 @@ class FrameData:
         _keep, shell = neighbour_shells(self.bonds, self.n_atoms, centre, depth)
         return shell
 
+    def modifier_counts(self, elements, r_ang: float) -> np.ndarray:
+        """Modifier atoms within ``r_ang`` of each atom
+        (:func:`facet.core.md_hotmap.modifier_counts`), kept per
+        (elements, r)."""
+        from ..core import md_hotmap
+
+        key = ("counts", tuple(sorted(str(e) for e in elements)), float(r_ang))
+        if key not in self._landscapes:
+            self._landscapes[key] = md_hotmap.modifier_counts(
+                self.frame, key[1], float(r_ang))
+        return self._landscapes[key]
+
+    def hotmap(self, elements, grid_spacing_ang: float, sigma_ang: float):
+        """The smoothed modifier density grid
+        (:func:`facet.core.md_hotmap.modifier_density_grid`), kept per
+        (elements, spacing, sigma)."""
+        from ..core import md_hotmap
+
+        key = ("hotmap", tuple(sorted(str(e) for e in elements)),
+               float(grid_spacing_ang), float(sigma_ang))
+        if key not in self._landscapes:
+            self._landscapes[key] = md_hotmap.modifier_density_grid(
+                self.frame, key[1], grid_spacing_ang=float(grid_spacing_ang),
+                sigma_ang=float(sigma_ang))
+        return self._landscapes[key]
+
     def probe_sum_spread(self, probe: str, r_cut_ang: float):
         """(mean, standard deviation, count) of the landscape's sum at the
         probe element's own atoms (:func:`facet.core.md_channels.probe_sums`),
@@ -659,6 +696,11 @@ class Rule:
     min_volume_ang3: float = 0.0
     min_elongation: float | None = None
     radii: str = "ionic"            # voids: the atom radii subtracted (VOID_RADII)
+    # hotmap: the elements counted ('' = every modifier), the smoothing
+    # sigma, and the level drawn as a multiple of the mean density
+    elements: str = ""
+    sigma_ang: float = 1.5
+    level_x_mean: float = 1.5
     channel_by: str = "by charge"
     threshold: float = 0.0
     probe: str = ""
@@ -1014,6 +1056,16 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
             finite = list(by_atom.values())
             hi = max(max(finite) if finite else 0.0, 1.0)
             colours = _ramp_over(by_atom, 0.0, hi, base, sites)
+    elif colour_by == "modifier density":
+        modifiers = list(fd.modifiers)
+        if not modifiers:
+            note = "modifier density needs a modifier (a cation that is not a former)"
+            colours = base
+        else:
+            counts = fd.modifier_counts(modifiers, HOTMAP_RADIUS_ANG)
+            by_atom = {int(i): float(counts[i]) for i in range(fd.n_atoms)}
+            hi = max(float(counts.max()) if counts.size else 0.0, 1.0)
+            colours = _ramp_over(by_atom, 0.0, hi, base, sites)
     elif colour_by == "channel membership":
         if membership is None:
             note = "channel membership needs a channels rule that is on"
@@ -1059,15 +1111,51 @@ def _keep_of_rule(fd: FrameData, rule: Rule) -> np.ndarray:
     return keep
 
 
-def _dim(scene, keep_rows: np.ndarray, theme) -> None:
+def _void_lining(scene, fd, centres_ang, radii_ang, atom_radii) -> np.ndarray:
+    """Which frame rows have an atom whose surface lies within
+    VOID_LINING_ANG of the surface of a drawn void sphere (the drawn
+    atoms, images included, so a void across the box edge keeps its
+    lining)."""
+    from scipy.spatial import cKDTree
+
+    keep = np.zeros(fd.n_atoms, bool)
+    positions = np.asarray(scene.atom_position, np.float64)
+    if positions.shape[0] == 0 or len(centres_ang) == 0:
+        return keep
+    rows = np.asarray(scene.atom_site, int)
+    r_atom = np.asarray([float(atom_radii.get(str(s), 0.0))
+                         for s in scene.atom_element], np.float64)
+    reach = float(np.max(radii_ang)) + float(r_atom.max()) + VOID_LINING_ANG
+    tree = cKDTree(positions)
+    for centre, r in zip(np.asarray(centres_ang, np.float64), radii_ang):
+        near = tree.query_ball_point(centre, r + reach)
+        if not near:
+            continue
+        near = np.asarray(near, int)
+        d = np.linalg.norm(positions[near] - centre, axis=1)
+        close = d - r_atom[near] <= r + VOID_LINING_ANG
+        keep[rows[near[close]]] = True
+    return keep
+
+
+def _dim(scene, keep_rows: np.ndarray, theme, amount: float = DIM_DEFAULT) -> None:
+    """Fade the atoms outside ``keep_rows`` ``amount`` of the way to the
+    background (0 none, 1 all the way) and shrink them in step; the bonds
+    with no kept end likewise."""
+    amount = float(min(max(amount, 0.0), 1.0))
+    if amount <= 0.0:
+        return
+    own = 1.0 - amount
     bg = np.array(getattr(theme, "background", None)
                   or theme_mod.FALLBACK_BACKGROUND, np.float32)
     keep = keep_rows[np.asarray(scene.atom_site, int)]
-    pale = (1 - DIM_KEEP) * bg + DIM_KEEP * scene.atom_color
+    pale = amount * bg + own * scene.atom_color
     scene.atom_color = np.where(keep[:, None], scene.atom_color,
                                 pale).astype(np.float32)
+    # the default amount reproduces DIM_ATOM_RADIUS; 100 % shrinks further
+    atom_factor = max(0.0, 1.0 - amount * (1.0 - DIM_ATOM_RADIUS) / DIM_DEFAULT)
     scene.atom_radius = np.where(keep, scene.atom_radius,
-                                 scene.atom_radius * DIM_ATOM_RADIUS
+                                 scene.atom_radius * atom_factor
                                  ).astype(np.float32)
     if scene.n_bonds:
         ends = np.asarray(scene.bond_atoms, int)
@@ -1075,10 +1163,11 @@ def _dim(scene, keep_rows: np.ndarray, theme) -> None:
         for name in ("bond_color_a", "bond_color_b"):
             c = getattr(scene, name)
             setattr(scene, name, np.where(bond_keep[:, None], c,
-                                          (1 - DIM_KEEP) * bg + DIM_KEEP * c)
+                                          amount * bg + own * c)
                     .astype(np.float32))
+        bond_factor = max(0.0, 1.0 - amount * (1.0 - DIM_BOND_RADIUS) / DIM_DEFAULT)
         scene.bond_radius = np.where(bond_keep, scene.bond_radius,
-                                     scene.bond_radius * DIM_BOND_RADIUS
+                                     scene.bond_radius * bond_factor
                                      ).astype(np.float32)
 
 
@@ -1237,7 +1326,7 @@ def _channel_distance(fd: FrameData) -> np.ndarray | None:
 
 def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
                 dim_rest: bool = True, colour_by: str = "element",
-                theme=None) -> HighlightResult:
+                theme=None, dim_amount: float = DIM_DEFAULT) -> HighlightResult:
     """Edit ``scene``'s arrays in place by ``rules`` (the disabled ones are
     skipped): colour the atoms by ``colour_by``, dim (``dim_rest``) or
     leave out the atoms outside the show-only rules and outside the
@@ -1252,7 +1341,7 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
     active = [r for r in rules if r.enabled]
     problems: list[str] = []
     parts: list[str] = [f"frame {fd.k} at v_bond {fd.v_bond:g} v.u."]
-    _drop_overlays(scene, ("voids", "channels"))
+    _drop_overlays(scene, ("voids", "channels", "hotmap"))
 
     # channels first: their membership feeds the colour and the keep mask
     membership = None
@@ -1281,7 +1370,10 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
     colour_note = colour_atoms(scene, fd, colour_by, theme, membership)
     if colour_note:
         problems.append(colour_note)
-    parts.append(f"colour: {colour_by}")
+    parts.append(f"colour: {colour_by}"
+                 + (f" ({', '.join(fd.modifiers)} within {HOTMAP_RADIUS_ANG:g} Å "
+                    "of each atom)" if colour_by == "modifier density"
+                    and fd.modifiers else ""))
 
     keep = None
     n_matching = n
@@ -1322,15 +1414,10 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
         keep = channel_keep if keep is None else keep & channel_keep
         parts.append(f"{_thousands(int(channel_keep.sum()))} atoms in "
                      f"{n_regions} region(s)")
-    if keep is not None:
-        if dim_rest:
-            _dim(scene, keep, theme)
-            parts.append("the rest dimmed")
-        else:
-            _hide(scene, keep)
-            parts.append("the rest left out")
-
+    # the dimming or the hiding comes after the void rules, whose lining
+    # atoms are a keep of their own (below)
     n_spheres = 0
+    void_keep = None
     for rule in [r for r in active if r.kind == "voids"]:
         r_min = radius_for_volume(rule.min_volume_ang3)
         mode = rule.radii if rule.radii in VOID_RADII else "ionic"
@@ -1373,6 +1460,13 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
         centres = fd.sphere_centres_ang(mode)[drawn]
         if count:
             scene.overlay_meshes.append(sphere_mesh(centres, radii[drawn]))
+            # the atoms lining the drawn voids: their surface within
+            # VOID_LINING_ANG of a drawn sphere's surface
+            lining = _void_lining(scene, fd, centres, radii[drawn],
+                                  spheres.radii_ang)
+            void_keep = lining if void_keep is None else void_keep | lining
+            parts.append(f"{_thousands(int(lining.sum()))} atoms line the "
+                         f"drawn voids")
         largest = float(radii.max()) if radii.size else float("nan")
         parts.append(f"{count} voids ≥ {rule.min_volume_ang3:g} Å³ "
                      f"(radius ≥ {r_min:.2f} Å) with {VOID_RADII[mode][1]}; "
@@ -1383,6 +1477,53 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
                         if rule.min_elongation is not None
                         and rule.min_elongation > 1.0 else "")
                      + " drawn")
+    for rule in [r for r in active if r.kind == "hotmap"]:
+        elements = ([e.strip() for e in rule.elements.split(",") if e.strip()]
+                    if rule.elements else list(fd.modifiers))
+        if not elements:
+            problems.append("hot map: no modifier to count (name the formers, "
+                            "or the elements in the rule)")
+            continue
+        try:
+            hot = fd.hotmap(elements, rule.grid_spacing_ang or 0.5,
+                            rule.sigma_ang or 1.5)
+        except ValueError as error:
+            problems.append(f"hot map: {error}")
+            continue
+        level = float(rule.level_x_mean) * hot.mean_density
+        try:
+            from ..core import volume
+            step, _ = _choose_step(np.asarray(hot.grid.values), level)
+            vertices, faces, normals = volume.isosurface(hot.grid, level, step=step)
+        except ValueError as error:
+            problems.append(f"hot map: {error}")
+            continue
+        vertices = np.asarray(vertices, np.float32)
+        faces = np.asarray(faces, int)
+        if len(faces) and len(vertices):
+            flat = faces.reshape(-1)
+            normals = np.asarray(normals, np.float32)
+            tri_normals = (normals[flat] if len(normals) == len(vertices)
+                           else np.zeros((len(flat), 3), np.float32))
+            scene.overlay_meshes.append(OverlayMesh(
+                vertices[flat], tri_normals, tuple(HOTMAP_COLOUR),
+                float(HOTMAP_ALPHA), label="hotmap"))
+        above = hot.fraction_above(level)
+        parts.append(
+            f"hot map of {'+'.join(hot.elements)}: {hot.n_atoms} atoms, mean "
+            f"{hot.mean_density:.4f} atoms/Å³, highest {hot.max_density / hot.mean_density:.2f} "
+            f"× the mean; the surface at {rule.level_x_mean:g} × the mean encloses "
+            f"{100 * above:.1f} % of the box (sigma {hot.sigma_ang:g} Å, grid "
+            f"{hot.grid_spacing_ang:g} Å" + (f", meshed at step {step}" if step > 1 else "") + ")")
+    if void_keep is not None:
+        keep = void_keep if keep is None else keep & void_keep
+    if keep is not None:
+        if dim_rest:
+            _dim(scene, keep, theme, dim_amount)
+            parts.append(f"the rest dimmed {100 * dim_amount:.0f} %")
+        else:
+            _hide(scene, keep)
+            parts.append("the rest left out")
     if problems:
         parts.append("not drawn: " + "; ".join(problems))
     n_in = int(channel_keep.sum()) if channel_keep is not None else 0
@@ -1678,6 +1819,87 @@ class VoidsRow(RuleRow):
                     radii=keys[max(0, self.radii.currentIndex())])
 
 
+class HotmapRow(RuleRow):
+    """Where the modifiers crowd: the smoothed number density of the
+    modifier elements, drawn as a translucent surface at a multiple of
+    its mean; 'Colour atoms by: modifier density' shows the count around
+    each atom."""
+    kind = "hotmap"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.level = _spin(1.5, 0.1, 20.0, 0.1, 1, " × mean")
+        self.level.setToolTip("The density the surface is drawn at, as a "
+                              "multiple of the mean modifier density of the "
+                              "box; 1.5 encloses the regions half again as "
+                              "dense as the average.")
+        self.sigma = _spin(1.5, 0.3, 6.0, 0.1, 1, " Å")
+        self.sigma.setToolTip("The width of the Gaussian each modifier atom "
+                              "is spread with; larger smooths more.")
+        self.spacing = _spin(0.5, 0.2, 3.0, 0.1, 1, " Å")
+        self.spacing.setToolTip("The grid spacing of the density field.")
+        self.elements = QComboBox()
+        self.elements.setEditable(True)
+        self.elements.setToolTip("The elements counted: the modifiers (every "
+                                 "cation that is not a former), or type "
+                                 "symbols separated by commas.")
+        self.elements.setMinimumContentsLength(8)
+        self._add("Hot map ≥", self.level, "sigma", self.sigma)
+        extra = QHBoxLayout()
+        extra.setContentsMargins(22, 0, 0, 0)
+        extra.setSpacing(6)
+        extra.addWidget(QLabel("of"))
+        extra.addWidget(self.elements)
+        extra.addWidget(QLabel("grid"))
+        extra.addWidget(self.spacing)
+        extra.addStretch(1)
+        self.column.insertLayout(1, extra)
+        for box in (self.level, self.sigma, self.spacing):
+            box.valueChanged.connect(lambda _v: self.changed.emit())
+        self.elements.currentTextChanged.connect(lambda _t: self.changed.emit())
+        self.setToolTip("A hot map of the network modifiers: their smoothed "
+                        "number density, the surface where it exceeds a "
+                        "multiple of the mean. The count line states the "
+                        "mean, the peak and the fraction of the box enclosed.")
+        self._finish()
+        self.set_frame_data(None)
+
+    def set_frame_data(self, fd: FrameData | None) -> None:
+        current = self.elements.currentText()
+        self.elements.blockSignals(True)
+        self.elements.clear()
+        self.elements.addItem("modifiers")
+        if fd is not None:
+            for s in fd.species:
+                self.elements.addItem(s)
+        if current:
+            i = self.elements.findText(current)
+            if i >= 0:
+                self.elements.setCurrentIndex(i)
+            else:
+                self.elements.setEditText(current)
+        self.elements.blockSignals(False)
+        note = []
+        if fd is not None:
+            if fd.modifiers:
+                note.append("modifiers: " + ", ".join(fd.modifiers))
+            else:
+                note.append("no modifier known: name the formers in Setup, or "
+                            "type the elements")
+            grid = grid_points_note(fd, float(self.spacing.value()))
+            if grid:
+                note.append(grid)
+        self.set_note(" · ".join(note))
+
+    def rule(self) -> Rule:
+        text = self.elements.currentText().strip()
+        return Rule("hotmap", self.tick.isChecked(),
+                    elements="" if text in ("", "modifiers") else text,
+                    sigma_ang=float(self.sigma.value()),
+                    level_x_mean=float(self.level.value()),
+                    grid_spacing_ang=float(self.spacing.value()))
+
+
 class ChannelsRow(RuleRow):
     kind = "channels"
     _THRESHOLD = {"by charge": ("mismatch ≤", 0.30, 0.0, 5.0, 0.05, 2,
@@ -1877,7 +2099,8 @@ class ChannelsRow(RuleRow):
 
 
 _ROW_CLASSES = {"show-only": ShowOnlyRow, "neighbours": NeighboursRow,
-                "rows": RowsRow, "voids": VoidsRow, "channels": ChannelsRow}
+                "rows": RowsRow, "voids": VoidsRow, "channels": ChannelsRow,
+                "hotmap": HotmapRow}
 
 
 def _rule_stylesheet(theme) -> str:
@@ -1945,7 +2168,8 @@ class HighlightPage(QWidget):
         for text, kind in (("Show only atoms where…", "show-only"),
                            ("Show only atoms with bonds to…", "neighbours"),
                            ("Voids above a volume", "voids"),
-                           ("Channels", "channels")):
+                           ("Channels", "channels"),
+                           ("Hot map of the modifiers", "hotmap")):
             action = menu.addAction(text)
             action.triggered.connect(lambda _c=False, k=kind: self.add_rule(k))
         self.add.setMenu(menu)
@@ -1989,6 +2213,35 @@ class HighlightPage(QWidget):
         then.addWidget(self.export)
         then.addStretch(1)
         column.addLayout(then)
+        # how far the dimmed atoms fade towards the background
+        from PySide6.QtWidgets import QSlider
+        self.dim_label = QLabel("Dim by")
+        self.dim_slider = QSlider(Qt.Horizontal)
+        self.dim_slider.setRange(0, 100)
+        self.dim_slider.setValue(int(round(100 * DIM_DEFAULT)))
+        self.dim_slider.setToolTip("How far the atoms outside the rules "
+                                   "fade towards the background: 0 % leaves "
+                                   "them as they are, 100 % hides them in "
+                                   "it; they shrink in step.")
+        self.dim_slider.setMaximumWidth(160)
+        self.dim_value = QLabel(f"{self.dim_slider.value()} %")
+        self.dim_value.setMinimumWidth(36)
+        self.dim_slider.valueChanged.connect(
+            lambda v: self.dim_value.setText(f"{v} %"))
+        self.dim_slider.sliderReleased.connect(self._changed)
+        self.dim_slider.valueChanged.connect(
+            lambda _v: None if self.dim_slider.isSliderDown() else self._changed())
+        dim_row = QHBoxLayout()
+        dim_row.addWidget(self.dim_label)
+        dim_row.addWidget(self.dim_slider)
+        dim_row.addWidget(self.dim_value)
+        dim_row.addStretch(1)
+        column.addLayout(dim_row)
+        for w in (self.dim_label, self.dim_slider, self.dim_value):
+            w.setVisible(True)
+        self.rest.currentIndexChanged.connect(
+            lambda i: [w.setVisible(i == 0) for w in
+                       (self.dim_label, self.dim_slider, self.dim_value)])
 
         self.summary = _hint()
         self.summary.setToolTip("The frame, v_bond and what was drawn, with "
@@ -2002,7 +2255,8 @@ class HighlightPage(QWidget):
         """The rules as plain data, for a saved set."""
         from dataclasses import asdict
         return {"rules": [asdict(r) for r in self.rules()],
-                "colour_by": self.colour_by(), "dim_rest": self.dim_rest()}
+                "colour_by": self.colour_by(), "dim_rest": self.dim_rest(),
+                "dim_amount": self.dim_amount()}
 
     def from_dict(self, data: dict) -> None:
         for row in list(self.rows):
@@ -2021,6 +2275,13 @@ class HighlightPage(QWidget):
                     i = box.findText(str(spec[name]))
                     if i >= 0:
                         box.setCurrentIndex(i)
+            if kind == "hotmap":
+                if "level_x_mean" in spec:
+                    row.level.setValue(float(spec["level_x_mean"]))
+                if "sigma_ang" in spec:
+                    row.sigma.setValue(float(spec["sigma_ang"]))
+                if spec.get("elements"):
+                    row.elements.setEditText(str(spec["elements"]))
             if kind == "voids" and hasattr(row, "radii") and "radii" in spec:
                 keys = list(VOID_RADII)
                 if spec["radii"] in keys:
@@ -2030,6 +2291,11 @@ class HighlightPage(QWidget):
                     1 if str(spec["target"]) == "formal" else 0)
             for name in ("value", "min_volume_ang3", "threshold",
                          "grid_spacing_ang", "r_cut_ang"):
+                if kind == "hotmap" and name == "grid_spacing_ang":
+                    spin = getattr(row, "spacing", None)
+                    if spin is not None and name in spec:
+                        spin.setValue(float(spec[name]))
+                    continue
                 spin = getattr(row, name, None)
                 if spin is not None and hasattr(spin, "setValue") and name in spec:
                     try:
@@ -2044,6 +2310,12 @@ class HighlightPage(QWidget):
                 self.colour.setCurrentIndex(i)
         if "dim_rest" in data:
             self.dim.setChecked(bool(data["dim_rest"]))
+        if "dim_amount" in data:
+            try:
+                self.dim_slider.setValue(
+                    int(round(100 * min(max(float(data["dim_amount"]), 0.0), 1.0))))
+            except (TypeError, ValueError):
+                pass
         self._changed()
 
     def save_set(self, name: str) -> None:
@@ -2145,6 +2417,10 @@ class HighlightPage(QWidget):
     def dim_rest(self) -> bool:
         return self.dim.isChecked()
 
+    def dim_amount(self) -> float:
+        """0 to 1: how far the dimmed atoms fade towards the background."""
+        return self.dim_slider.value() / 100.0
+
     def apply_to(self, scene, theme=None) -> HighlightResult | None:
         """Apply the page's rules to ``scene`` (:func:`apply_rules`) and
         write the count line; None without frame data."""
@@ -2153,7 +2429,8 @@ class HighlightPage(QWidget):
             return None
         result = apply_rules(scene, self.frame_data, self.rules(),
                              dim_rest=self.dim_rest(), colour_by=self.colour_by(),
-                             theme=theme or self.theme)
+                             theme=theme or self.theme,
+                             dim_amount=self.dim_amount())
         self.show_result(result)
         return result
 

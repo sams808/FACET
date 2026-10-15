@@ -85,7 +85,11 @@ says what is missing; what remains planned is listed as such.
 | Feature | CM | VESTA | FACET | Note |
 |---|:--:|:--:|---|---|
 | Click to measure distance | ✓ | ✓ | **done** | shift-click two atoms |
-| Angle | ✓ | ✓ | **done** | three atoms |
+| Angle | ✓ | ✓ | **done** | three atoms; the arcs at a site, by default between the bonds in front of it |
+| Isolate a site | ✓ | – | **done** | right-click: alone, with its bonded neighbours, or with their neighbours too, the rest left out |
+| Bond readout | ✓ | ✓ | **done** | click a bond: atoms, length, valence, share of the cation's sum, R₀ and b with their source, the pair's cutoff at the threshold |
+| Labels on chosen atoms | ✓ | ✓ | **done** | the toolbar's "on…": sites and elements ticked, several at once; bonds follow |
+| Lone-pair lobe per site | – | – | **done** | right-click: the site's bond-valence vector on its own, its φ stated |
 | Torsion | ✓ | ✓ | **done** | four atoms |
 | Bond-length table | ✓ | ✓ | **done** | per site, with valence per contact |
 | Bond-angle table | ✓ | ✓ | **done** | Utilities ▸ Angles |
@@ -338,6 +342,7 @@ No model from the group's own work has been analysed yet.
 | Model workspace in the main window | **done** | a model is an entry in the Structures dock beside the crystals; choosing one switches the Sites dock to an Elements table, the toolbar to frame navigation and a 3D-view/figure switch, the bottom strip to the coordination-against-threshold staircase, and the right column to four tabs (Setup, Results, Highlight, Notes). Opened by dropping the file or by *File ▸ Open MD model…*; asks for a type map, topology or box only when the reader needs one, and shows the units it assumed, with a way to read the file again with others; runs in the background with progress and cancel |
 | Presets | **done** | silicate, aluminosilicate, borosilicate, phosphate, oxyfluoride, ion conduction, scattering against experiment, dynamics, everything; a preset ticks the analyses, ticks the network formers among the cations present and fills the method inputs those analyses read, and states what the model cannot give; any edit afterwards leaves the combo on Custom |
 | Analyses grouped by question | **done** | structure, voids and channels, comparison with experiment, dynamics; each row states the inputs it will use, or, greyed, what it still needs, linked to the field that would supply it |
+| Hot map of the modifiers | **done** | the smoothed number density of the modifier elements as a translucent surface at a multiple of the mean, the count around each atom as a colour mode; mean, peak and enclosed fraction stated |
 | Highlight rules on the 3D view | **done** | colour by element, bond-valence sum, coordination number, φ, Qⁿ, modifier-rich anions or channel membership; keep only the atoms a rule matches (element, CN, CN to formers, BVS, φ, Qⁿ); draw voids above a volume and an elongation, and channels, as translucent surfaces; dim the rest fades and shrinks what is left. The rules edit the scene's arrays, so the no-GPU tier and the vector export draw them |
 | Channels by charge | **done** | the bond-valence landscape of a probe ion on a grid, its mismatch against the formal valence, the accessible volume fraction against the mismatch, the connected regions at one mismatch with volume, elongation and dimensionality, and the mismatch at which a path first crosses the box along each axis, by bisection over the grid's own values. An optional exclusion radius about the cations stands in for the repulsion term of a softBV model, and is stated |
 | Channels by modifier density | **done** | modifier cations within the measured first minimum of each anion's partial g(r), the anions rich at a count the user sets, their clusters with the modifiers and whether those span the box; crossed with the speciation when the glass analysis runs |

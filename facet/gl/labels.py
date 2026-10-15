@@ -63,6 +63,7 @@ class LabelScope(Enum):
     ANIONS = "anions only"
     SELECTED_SITE = "the selected site"
     BONDED_ONLY = "bonds above the threshold"
+    CHOSEN = "chosen atoms"             # LabelSettings.chosen_sites / _elements
 
 
 @dataclass
@@ -71,6 +72,14 @@ class LabelSettings:
     atom_scope: LabelScope = LabelScope.ALL
     bond: BondLabel = BondLabel.NONE
     bond_scope: LabelScope = LabelScope.BONDED_ONLY
+    # the CHOSEN scope: site indices and element symbols (either matches);
+    # a bond is labelled when either end is chosen
+    chosen_sites: frozenset = frozenset()
+    chosen_elements: frozenset = frozenset()
+
+    def chosen(self, site_index: int, element: str) -> bool:
+        return (site_index in self.chosen_sites
+                or str(element) in self.chosen_elements)
 
     show_axes: bool = False            # a, b, c at the cell origin
     show_measurements: bool = True     # the click-to-measure chain
@@ -231,9 +240,12 @@ def _collides(box, boxes) -> bool:
 
 
 def _in_scope(scope: LabelScope, *, is_anion: bool, site_index: int,
-              selected_site: int | None) -> bool:
+              selected_site: int | None, settings=None,
+              element: str = "") -> bool:
     if scope is LabelScope.ALL:
         return True
+    if scope is LabelScope.CHOSEN:
+        return settings is not None and settings.chosen(site_index, element)
     if scope is LabelScope.CATIONS:
         return not is_anion
     if scope is LabelScope.ANIONS:
@@ -258,11 +270,12 @@ def _atom_candidates(scene, camera, settings, width, height, by_site,
                 if structure is not None and 0 <= site_index < structure.n_sites
                 else None)
         is_anion = bool(site.is_anion) if site is not None else False
+        element = scene.atom_element[i]
         if not _in_scope(settings.atom_scope, is_anion=is_anion,
-                         site_index=site_index, selected_site=selected_site):
+                         site_index=site_index, selected_site=selected_site,
+                         settings=settings, element=element):
             continue
 
-        element = scene.atom_element[i]
         per_element[element] = per_element.get(element, 0) + 1
         text = atom_text(
             settings.atom, element=element, label=scene.atom_label[i],
@@ -295,6 +308,17 @@ def _bond_candidates(scene, camera, settings, width, height, by_site,
                       if 0 <= source < scene.n_atoms else -1)
         if settings.bond_scope is LabelScope.SELECTED_SITE:
             if selected_site is None or site_index != selected_site:
+                continue
+        if settings.bond_scope is LabelScope.CHOSEN:
+            other = int(scene.bond_atoms[i, 1])
+            ends_ok = False
+            for end in (source, other):
+                if 0 <= end < scene.n_atoms and settings.chosen(
+                        int(scene.atom_site[end]), scene.atom_element[end]):
+                    ends_ok = True
+            if not ends_ok:
+                continue
+            if valence < scene.v_bond:
                 continue
 
         x, y, z = projected[i]

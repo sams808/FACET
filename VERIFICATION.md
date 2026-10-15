@@ -952,6 +952,27 @@ showed, with the checks that now hold them:
   and the view's own `hub_angles` returns n(n − 1)/2 pairs; reproduced on
   the 15 486-atom model (36 pairs at a nine-bonded Ca, from 0).
 
+### Added in 1.0.2
+
+* **Hot map.** The smoothed modifier density integrates over the box to the
+  number of modifier atoms within a part in a thousand (the four-sigma cut
+  and the grid); the count around one atom equals a brute force over the
+  images. Both in `test_ui_requests_batch.py`.
+* **Dimming by amount.** At 0 the colours are untouched, at 1 they equal the
+  background to 1e-6; the default reproduces the radii the earlier tests pin.
+* **Isolation of a site.** The scene filter the slab used is now the one
+  the isolation uses (`_filter_scene`); after isolating quartz's Si with one
+  shell, 5 atoms remain and every bond endpoint is a live index.
+* **Labels on chosen atoms.** The candidates in scope are a strict subset of
+  all for one site and the whole again for no choice; a bond is in scope
+  when either end is.
+* **Results-side voids and channels.** The empty-sphere histogram counts one
+  sphere per maximum under Shannon's ionic radii (negative radii were the
+  circumcentres inside van der Waals spheres); the channels analysis carries
+  the target as a per-frame descriptor and the fraction of the probe's atoms
+  inside a region, and still equals `md_channels` called directly on each
+  frame to 1e-10 (`test_md_analysis.py`).
+
 ### What is not verified
 
 **No model from the group has been analysed yet.** Every number above measured

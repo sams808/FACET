@@ -1836,6 +1836,13 @@ class ModelController(QObject):
                 if self.view.angle_hub == atom_index:
                     menu.addAction("Hide the angles").triggered.connect(
                         lambda _=False: self.view.set_angle_hub(None))
+                    front = menu.addAction("Angles of the front bonds only")
+                    front.setCheckable(True)
+                    front.setChecked(self.view.angles_front_only)
+                    front.setToolTip("Only the arcs between bonds whose far "
+                                     "atom lies nearer the viewer than this "
+                                     "one; off draws every pair.")
+                    front.toggled.connect(self.view.set_angles_front_only)
                 else:
                     menu.addAction(f"Show the angles at {label}").triggered.connect(
                         lambda _=False, i=atom_index: self.view.set_angle_hub(i))
@@ -2490,8 +2497,10 @@ class ModelController(QObject):
             rules = self.highlight.rules()
             colour_by = self.highlight.colour_by()
             dim_rest = self.highlight.dim_rest()
+            dim_amount = self.highlight.dim_amount()
         else:
             rules, colour_by, dim_rest = [], "element", True
+            from .md_highlight import DIM_DEFAULT as dim_amount
         element = self.element
         style = self.toolbar.style()
         show_cell = self.toolbar.box_check.isChecked()
@@ -2514,7 +2523,8 @@ class ModelController(QObject):
                                    v_bond=v_bond, v_list=v_list, style=style,
                                    show_cell=show_cell)
             outcome = apply_rules(scene, fd, rules, dim_rest=dim_rest,
-                                  colour_by=colour_by, theme=theme)
+                                  colour_by=colour_by, theme=theme,
+                                  dim_amount=dim_amount)
             if element:
                 keep = np.asarray(fd.elements) == element
                 _dim(scene, keep, theme)

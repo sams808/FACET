@@ -338,7 +338,7 @@ NO_FORMERS = "none"
 CHARGE_SOURCES = ("oxidation states", "file")
 # Named radius sets of the void analyses besides a map: FACET's van der Waals
 # radii (md_order.vdw_radii_ang) or radii of 0 (the circumspheres).
-RADII_NAMES = ("vdw", "zero")
+RADII_NAMES = ("ionic", "vdw", "zero")
 # The model curves a measured one can be compared with, and their axis.
 CURVE_FUNCTIONS = {"S(Q)": ("s", "q_inv_ang"), "F(Q)": ("f_reduced", "q_inv_ang"),
                    "F_K(Q)": ("f_keen", "q_inv_ang"), "G(r)": ("pdf_g", "r_ang"),
@@ -573,10 +573,15 @@ class OrderOptions:
 class VoidOptions:
     """Inputs of the empty spheres and the free volume.
 
-    ``radii`` is required: 'vdw' (FACET's van der Waals radii,
-    ``md_order.vdw_radii_ang``, with ``md_order.VDW_RADII_SOURCE``), 'zero'
-    (radii 0, the circumspheres; empty spheres only) or a map element -> Å
-    with ``radii_source``. ``probe_radius_ang`` and ``grid_spacing_ang`` are
+    ``radii``: 'ionic' (the default when None: Shannon's effective ionic
+    radii by the model's oxidation states, ``md_order.ionic_radii_ang``,
+    the choice for an oxide or halide), 'vdw' (FACET's van der Waals
+    radii, ``md_order.vdw_radii_ang``, larger than a bond length in an
+    ionic solid, so most spheres come out with no room), 'zero' (radii 0,
+    the circumspheres; empty spheres only) or a map element -> Å with
+    ``radii_source``. The spheres are refined to the maxima of the
+    clearance (md_order.empty_spheres) and the histogram counts one sphere
+    per maximum. ``probe_radius_ang`` and ``grid_spacing_ang`` are
     required for the free volume (md_order requires them).
     ``sphere_bin_ang`` is the resolution of the empty-sphere histogram.
     """
@@ -620,6 +625,11 @@ class ChannelOptions:
     """
 
     probe: str | None = None
+    # what the probe's sum is matched to: 'frame' (the mean of the sum at
+    # the probe's own atoms, so the regions pass through its sites),
+    # 'formal' (its formal valence, the original form) or a number;
+    # md_channels.bv_landscape
+    target: str = "frame"             # 'frame', 'formal', or a number as text
     grid_spacing_ang: float = 0.3
     r_cut_ang: float = 6.0
     deltas_vu: tuple[float, ...] | None = None
@@ -1453,6 +1463,14 @@ def invalid_inputs(request: AnalysisRequest) -> tuple[MissingInput, ...]:
                   f"{probe} has oxidation state {state}; the probe is a "
                   "cation whose formal valence the landscape matches, so a "
                   "positive state is needed (ox_overrides)")
+    target = str(getattr(ch, "target", "frame")).strip()
+    if target.lower() not in ("frame", "formal"):
+        try:
+            if float(target) <= 0:
+                raise ValueError
+        except ValueError:
+            c.add("channels", "channels.target",
+                  f"{target!r}: 'frame', 'formal' or a number in v.u.")
     c.number("channels", "channels.grid_spacing_ang", ch.grid_spacing_ang,
              above=0.0)
     c.number("channels", "channels.r_cut_ang", ch.r_cut_ang, above=0.0)
@@ -2061,6 +2079,15 @@ def _containers(obj, prefix: str = "") -> dict[str, object]:
     return out
 
 
+def _target_option(value):
+    """channels.target as bv_landscape takes it: 'frame', 'formal' or a
+    number (given as text in a request file)."""
+    text = str(value).strip()
+    if text.lower() in ("frame", "formal"):
+        return text.lower()
+    return float(text)
+
+
 def _option_parameters(prefix: str, options) -> dict[str, object]:
     """An options dataclass as provenance method parameters."""
     out = {}
@@ -2396,6 +2423,12 @@ class _Run:
             elif radii == "vdw":
                 try:
                     md_order.vdw_radii_ang(self.species)
+                except ValueError as error:
+                    out.append(MissingInput(who_voids, "voids.radii",
+                                            str(error)))
+            elif radii in (None, "ionic"):
+                try:
+                    md_order.ionic_radii_ang(tuple(self.species))
                 except ValueError as error:
                     out.append(MissingInput(who_voids, "voids.radii",
                                             str(error)))
@@ -4254,9 +4287,14 @@ class _VoidConsumer(_Consumer):
         elif v.radii == "zero":
             self.radii = {s: 0.0 for s in run.species}
             self.radii_source = "radii of 0 (the Delaunay circumspheres)"
-        else:
+        elif v.radii == "vdw":
             self.radii = dict(md_order.vdw_radii_ang(tuple(run.species)))
             self.radii_source = md_order.VDW_RADII_SOURCE
+        else:
+            # 'ionic', the default: Shannon's radii by the model's states
+            species = tuple(run.species)
+            self.radii, self.radii_source = md_order.ionic_radii_ang(
+                species, run.ox.per_atom(np.asarray(species)))
         self.spheres: dict[int, object] = {}
         self.volumes: dict[int, object] = {}
 
@@ -4269,11 +4307,21 @@ class _VoidConsumer(_Consumer):
             # the void regions of this frame read the full result
             self.run.empty_spheres_cache = {ctx.k: result}
             # only the radii are averaged; the tetrahedra are not kept
+            rep = (np.asarray(result.representative, bool)
+                   if result.representative is not None
+                   else np.ones(len(result), bool))
             self.spheres[ctx.k] = dataclasses.replace(
                 result, vertices=np.zeros((0, 4), np.int64),
                 vertex_image=np.zeros((0, 4, 3), np.int64),
                 centre_frac=np.zeros((0, 3)), circumradius_ang=np.zeros(0),
-                volume_ang3=np.zeros(0))
+                volume_ang3=np.zeros(0),
+                radius_ang=np.asarray(result.radius_ang)[rep],
+                seed_centre_frac=None, seed_radius_ang=None, moved_ang=None,
+                representative=None,
+                notes=result.notes + (
+                    f"{int(rep.sum())} distinct voids (one sphere per maximum "
+                    f"of the clearance) of {len(result)} tetrahedra enter the "
+                    "histogram",))
 
         def free():
             self.volumes[ctx.k] = md_order.free_volume(
@@ -4426,6 +4474,8 @@ class _ChannelConsumer(_Consumer):
         self.region_fraction: dict[int, float] = {}
         self.region_count: dict[int, int] = {}
         self.lowest: dict[int, float] = {}
+        self.inside_fraction: dict[int, float] = {}
+        self.target_vu: dict[int, float] = {}
         self.landscape_method: dict | None = None
         self.landscape_notes: list[str] = []
         self.last_landscape: tuple | None = None
@@ -4486,9 +4536,13 @@ class _ChannelConsumer(_Consumer):
             elif v.radii == "zero":
                 self.radii = {s: 0.0 for s in run.species}
                 self.radii_source = "radii of 0 (the Delaunay circumspheres)"
-            else:
+            elif v.radii == "vdw":
                 self.radii = dict(md_order.vdw_radii_ang(tuple(run.species)))
                 self.radii_source = md_order.VDW_RADII_SOURCE
+            else:
+                species = tuple(run.species)
+                self.radii, self.radii_source = md_order.ionic_radii_ang(
+                    species, run.ox.per_atom(np.asarray(species)))
         self.frame_units = 0
 
     # -- the search -----------------------------------------------------------
@@ -4563,7 +4617,8 @@ class _ChannelConsumer(_Consumer):
                 ctx.frame, ox_atom, self.probe, self.probe_ox,
                 grid_spacing_ang=float(o.grid_spacing_ang),
                 r_cut_ang=float(o.r_cut_ang), params=run.params,
-                repulsion=self.repulsion, cancelled=run.is_cancelled)
+                repulsion=self.repulsion, cancelled=run.is_cancelled,
+                target=_target_option(o.target))
             self.step(k, 26, f"channels: landscape of {landscape.probe_label} "
                              f"on {landscape.n_points} grid points done")
             self.poll("after the landscape, before the regions")
@@ -4587,6 +4642,12 @@ class _ChannelConsumer(_Consumer):
         self.region_fraction[k] = float(regions.accessible_fraction)
         self.region_count[k] = int(regions.n_regions)
         self.lowest[k] = float(landscape.sorted_mismatch()[0])
+        probe_rows = np.asarray(ctx.frame.elements) == self.probe
+        n_probe = int(probe_rows.sum())
+        self.inside_fraction[k] = (
+            float((np.asarray(regions.region_of_atom)[probe_rows] >= 0).mean())
+            if n_probe else float("nan"))
+        self.target_vu[k] = float(landscape.target_vu)
         self.frame_grid[k] = (tuple(landscape.shape),
                               tuple(landscape.spacing_ang))
         if self.landscape_method is None:
@@ -4756,7 +4817,7 @@ class _ChannelConsumer(_Consumer):
                 axis_name="delta_vu", axis_unit="v.u.", value_unit="1",
                 frames=used,
                 notes=(f"accessible volume fraction: non-excluded grid points "
-                       f"with |V - {landscape.target_vu:g}| <= Delta over all "
+                       f"with |V - {md_channels.target_text(landscape)}| <= Delta over all "
                        f"grid points; {setting}",))
             tables[series.name] = series
             thresholds = [self.thresholds[k] for k in used]
@@ -4781,9 +4842,22 @@ class _ChannelConsumer(_Consumer):
                               f"at Delta {self.delta:g} v.u.; " + setting,)),
                 Scalar(f"lowest mismatch of {label} on the grid", "v.u.",
                        [self.lowest[k] for k in used], frames=used,
-                       notes=(f"the smallest |V - {landscape.target_vu:g}| "
+                       notes=(f"the smallest |V - {md_channels.target_text(landscape)}| "
                               "over the non-excluded grid points of each "
-                              "frame; " + setting,))]
+                              "frame; " + setting,)),
+                Scalar(f"{label} atoms inside a region {at}", "1",
+                       [self.inside_fraction[k] for k in used], frames=used,
+                       notes=(f"the fraction of the frame's {self.probe} atoms "
+                              "whose nearest grid point lies in an accessible "
+                              "region: whether the regions pass through the "
+                              "ion's own sites; " + setting,)),
+                Scalar(f"target sum for {label}", "v.u.",
+                       [self.target_vu[k] for k in used], frames=used,
+                       notes=(f"the sum the mismatch is measured from, chosen "
+                              f"as '{landscape.target_mode}' "
+                              "(channels.target): the frame mean of V at the "
+                              "probe's own atoms, the formal valence, or a "
+                              "number given",))]
             for scalar in scalars:
                 tables[scalar.name] = scalar
             rows = tuple(row for k in used for row in self.region_rows[k])

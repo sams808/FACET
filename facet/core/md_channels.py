@@ -801,7 +801,6 @@ class Landscape:
     @property
     def method_parameters(self) -> dict:
         out = {"probe": self.probe_label,
-               "target (v.u.)": self.target_vu,
                "target chosen as": self.target_mode,
                "grid spacing requested (Å)": self.grid_spacing_ang,
                "grid spacing (Å)": self.spacing_ang,
@@ -809,6 +808,11 @@ class Landscape:
                "r_cut (Å)": self.r_cut_ang,
                "bond-valence parameters": self.params_name,
                "connectivity": _CONNECTIVITY_TEXT}
+        if self.target_mode != "frame":
+            # a frame-mean target differs from frame to frame by design
+            # (it is a per-frame descriptor); a formal or given one is a
+            # setting the frames share
+            out["target (v.u.)"] = self.target_vu
         if self.repulsion is None:
             out["repulsion exclusion"] = "none"
         else:
@@ -1132,6 +1136,14 @@ def _check_landscape(landscape) -> Landscape:
         raise ValueError(f"a Landscape is needed, not "
                          f"{type(landscape).__name__}; bv_landscape builds one")
     return landscape
+
+
+def target_text(landscape: Landscape) -> str:
+    """How a note names the target: the number for a formal or given
+    target, the words for a frame mean (a per-frame descriptor)."""
+    if getattr(landscape, "target_mode", "formal") == "frame":
+        return "target (the frame's mean sum at the probe's own atoms)"
+    return f"{landscape.target_vu:g}"
 
 
 def accessible_fraction(landscape: Landscape, deltas_vu) -> np.ndarray:
@@ -2464,7 +2476,7 @@ def average_accessible_fraction(landscapes: Sequence[Landscape], deltas_vu, *,
     rows = [accessible_fraction(r, deltas) for r in results]
     first = results[0]
     notes = (f"accessible volume fraction: non-excluded grid points with "
-             f"|V - {first.target_vu:g}| <= Delta over all grid points; "
+             f"|V - {target_text(first)}| <= Delta over all grid points; "
              + "; ".join(f"{k} = {v}" for k, v in
                          first.method_parameters.items()),)
     return Series.from_frames(

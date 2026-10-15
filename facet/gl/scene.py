@@ -147,6 +147,9 @@ class Scene:
     # can drop a whole lobe instead of slicing one in half.
     overlay_meshes: list = field(default_factory=list)
     show_vectors: bool = False
+    # the sites whose lobe is drawn when show_vectors is off (the right
+    # click's "show the lone-pair lobe at ..."); None or empty: none
+    vector_sites: frozenset | None = None
     show_void_cones: bool = False
     # The focus: one drawn atom and a radius about it. Everything outside the
     # sphere is dimmed, the sphere itself is drawn translucent, and the radius
@@ -243,10 +246,13 @@ class Scene:
             occupancy=self.bond_occupancy)
         self.vector_sums = sums
 
-        if self.show_vectors:
+        chosen = self.vector_sites
+        if self.show_vectors or chosen:
             # phi = 0 draws nothing: a centrosymmetric site has no direction to
             # draw, and inventing one out of rounding noise would be a claim.
             live = (sums.phi > 1e-6) & (sums.count > 0)
+            if not self.show_vectors:
+                live &= np.isin(np.asarray(self.atom_site, int), list(chosen))
             if live.any():
                 magnitude = np.linalg.norm(sums.vector[live], axis=1)
                 direction = -sums.vector[live] / magnitude[:, None]
@@ -515,7 +521,8 @@ def build_scene(structure: Structure,
                 show_vectors: bool = False,
                 show_void_cones: bool = False,
                 vector_scale: float = 0.6,
-                ellipsoid_probability: float = 0.50) -> Scene:
+                ellipsoid_probability: float = 0.50,
+                vector_sites=None) -> Scene:
     """Build a drawable scene for a structure.
 
     `results` is reused when supplied, so opening a structure does not analyse
@@ -534,6 +541,8 @@ def build_scene(structure: Structure,
     scene.poly_alpha = theme.polyhedron_alpha
     scene.cell_range = tuple(max(1, int(n)) for n in cell_range)
     scene.show_vectors = bool(show_vectors)
+    scene.vector_sites = (frozenset(int(i) for i in vector_sites)
+                          if vector_sites else None)
     scene.show_void_cones = bool(show_void_cones)
     scene.vector_scale = float(vector_scale)
     # set before the atoms are built: it decides how large every ellipsoid is
@@ -605,6 +614,59 @@ def _build_planes(structure: Structure, scene: Scene, lattice_planes) -> None:
             scene.add_plane(vertices, normals, plane.color, plane.alpha, edges)
 
 
+def neighbour_shells_of(scene: Scene, atom: int, shells: int) -> np.ndarray:
+    """Which drawn atoms lie within ``shells`` bonds of drawn atom ``atom``
+    (0: the atom alone), over the bonds above the scene's threshold and
+    by where the bonds are DRAWN (a bond's far end is matched to the drawn
+    atom at that position, image or not)."""
+    n = scene.n_atoms
+    keep = np.zeros(n, bool)
+    if not (0 <= atom < n):
+        return keep
+    keep[atom] = True
+    if shells <= 0 or scene.n_bonds == 0:
+        return keep
+    from scipy.spatial import cKDTree
+
+    tree = cKDTree(np.asarray(scene.atom_position, float))
+    above = np.asarray(scene.bond_valence, float) >= float(scene.v_bond)
+    da, ia = tree.query(np.asarray(scene.bond_a, float))
+    db, ib = tree.query(np.asarray(scene.bond_b, float))
+    ok = above & (da < 1e-3) & (db < 1e-3)
+    ia, ib = ia[ok], ib[ok]
+    frontier = np.array([atom])
+    for _ in range(int(shells)):
+        hit = np.isin(ia, frontier) | np.isin(ib, frontier)
+        new = np.unique(np.concatenate([ia[hit], ib[hit]]))
+        new = new[~keep[new]]
+        if new.size == 0:
+            break
+        keep[new] = True
+        frontier = new
+    return keep
+
+
+def isolate_atoms(scene: Scene, keep_atoms: np.ndarray) -> None:
+    """Leave only the drawn atoms in ``keep_atoms`` (and the bonds between
+    them, the polyhedra on them) in the scene, renumbering everything as
+    the slab does."""
+    keep_atoms = np.asarray(keep_atoms, bool)
+    if scene.n_atoms == 0 or keep_atoms.all():
+        return
+    from scipy.spatial import cKDTree
+
+    tree = cKDTree(np.asarray(scene.atom_position, float)[keep_atoms])
+
+    def inside(points) -> np.ndarray:
+        points = np.asarray(points, float).reshape(-1, 3)
+        if points.shape[0] == 0:
+            return np.zeros(0, bool)
+        d, _ = tree.query(points)
+        return d < 1e-3
+
+    _filter_scene(scene, inside, keep_atoms)
+
+
 def apply_slab(structure: Structure, scene: Scene, slab) -> None:
     """Keep only the atoms, bonds and polyhedra inside the slab.
 
@@ -626,6 +688,14 @@ def apply_slab(structure: Structure, scene: Scene, slab) -> None:
     keep = planes_mod.slab_mask(structure, scene.atom_position, slab)
     if keep.all():
         return
+    _filter_scene(scene, lambda points: planes_mod.slab_mask(structure, points, slab),
+                  keep)
+
+
+def _filter_scene(scene: Scene, inside, keep: np.ndarray) -> None:
+    """Keep the atoms in ``keep`` and everything drawn where ``inside``
+    (a predicate on cartesian points) holds, renumbering the atom indices
+    every array carries: the slab's and the isolation's shared body."""
 
     index = np.nonzero(keep)[0]
     remap = np.full(scene.n_atoms, -1, np.int64)
@@ -662,8 +732,8 @@ def apply_slab(structure: Structure, scene: Scene, slab) -> None:
         # away. Filtering on bond_atoms would keep bonds whose far end has been
         # cut away, which is the trailing-bond fault again, and drop bonds that
         # lie wholly inside the slab.
-        inside_a = planes_mod.slab_mask(structure, scene.bond_a, slab)
-        inside_b = planes_mod.slab_mask(structure, scene.bond_b, slab)
+        inside_a = inside(scene.bond_a)
+        inside_b = inside(scene.bond_b)
         alive = inside_a & inside_b
 
         for name in ("bond_a", "bond_b", "bond_radius", "bond_color_a",
@@ -699,7 +769,7 @@ def apply_slab(structure: Structure, scene: Scene, slab) -> None:
     if scene.n_poly_triangles:
         triangles = scene.poly_vertices.reshape(-1, 3, 3)
         centroids = triangles.mean(axis=1)
-        inside = planes_mod.slab_mask(structure, centroids, slab)
+        inside = inside(centroids)
         scene.poly_vertices = triangles[inside].reshape(-1, 3).astype(
             np.float32)
         scene.poly_normals = scene.poly_normals.reshape(-1, 3, 3)[
@@ -707,7 +777,7 @@ def apply_slab(structure: Structure, scene: Scene, slab) -> None:
 
     if scene.n_iso_triangles:
         triangles = scene.iso_vertices.reshape(-1, 3, 3)
-        inside = planes_mod.slab_mask(structure, triangles.mean(axis=1), slab)
+        inside = inside(triangles.mean(axis=1))
         scene.iso_vertices = triangles[inside].reshape(-1, 3).astype(np.float32)
         scene.iso_normals = scene.iso_normals.reshape(-1, 3, 3)[
             inside].reshape(-1, 3).astype(np.float32)
@@ -720,7 +790,7 @@ def apply_slab(structure: Structure, scene: Scene, slab) -> None:
         for mesh in scene.overlay_meshes:
             if not mesh.n_parts:
                 continue
-            inside = planes_mod.slab_mask(structure, mesh.anchors, slab)
+            inside = inside(mesh.anchors)
             trimmed = mesh.keep_parts(inside)
             if trimmed.n_triangles:
                 kept.append(trimmed)

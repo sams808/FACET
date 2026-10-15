@@ -1011,7 +1011,7 @@ def _direct_landscapes(trajectory, ox, probe, probe_ox, delta):
         frame = trajectory.frame(k)
         landscape = mc.bv_landscape(frame, ox.per_atom(frame.elements), probe,
                                     probe_ox, grid_spacing_ang=COARSE_GRID,
-                                    r_cut_ang=6.0)
+                                    r_cut_ang=6.0, target="frame")
         out[k] = (landscape, mc.accessible_regions(landscape, delta),
                   mc.percolation_thresholds(landscape))
     return out
@@ -1241,7 +1241,7 @@ def test_the_channel_analyses_on_the_glass_file_whose_box_changes():
         frame = trajectory.frame(k)
         landscape = mc.bv_landscape(frame, ox.per_atom(frame.elements), "Na",
                                     1, grid_spacing_ang=COARSE_GRID,
-                                    r_cut_ang=6.0)
+                                    r_cut_ang=6.0, target="frame")
         np.testing.assert_allclose(
             channels.tables["accessible volume fraction of Na1+"].per_frame[k],
             mc.accessible_fraction(landscape, deltas), rtol=0, atol=1e-10)

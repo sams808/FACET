@@ -149,6 +149,11 @@ class PreviewWindow(QMainWindow):
         # bonding rather than a picture of the crystallography, so they should
         # not be what a structure looks like when it is first opened.
         self.show_vectors = False
+        # the sites whose lone-pair lobe is drawn on their own (right click)
+        self.vector_sites: set[int] = set()
+        # one drawn atom with its neighbour shells, or None for the whole
+        # structure (right click: isolate)
+        self._isolated: tuple[int, int] | None = None
         self.show_void_cones = False
         self.vector_scale = 0.6
         self._manual_dialog = None
@@ -559,6 +564,20 @@ class PreviewWindow(QMainWindow):
             self.bond_label_box.addItem(kind.value, kind)
         self.bond_label_box.activated.connect(self._on_labels)
         row.addWidget(self.bond_label_box)
+        # which atoms carry the labels: every atom, or chosen sites and
+        # elements (several at once); the bonds follow the same choice
+        from PySide6.QtWidgets import QToolButton
+        self.label_scope_button = QToolButton()
+        self.label_scope_button.setText("on…")
+        self.label_scope_button.setToolTip(
+            "Which atoms are labelled: every atom, or the sites and "
+            "elements ticked here (as many as you like); a bond is "
+            "labelled when either end is ticked.")
+        self.label_scope_button.setPopupMode(QToolButton.InstantPopup)
+        self.label_scope_menu = QMenu(self.label_scope_button)
+        self.label_scope_menu.aboutToShow.connect(self._fill_label_scope_menu)
+        self.label_scope_button.setMenu(self.label_scope_menu)
+        row.addWidget(self.label_scope_button)
 
         for box in (self.style_box, self.poly_box,
                     self.atom_label_box, self.bond_label_box):
@@ -1102,6 +1121,35 @@ class PreviewWindow(QMainWindow):
         self.highlight_action.setEnabled(ready)
         if self.preset_actions:
             self._sync_preset_menu()
+
+    def _isolate(self, atom_index, shells: int) -> None:
+        """One drawn atom with ``shells`` shells of bonded neighbours, or
+        (None) the whole structure."""
+        if atom_index is None:
+            self._isolated = None
+        else:
+            self._isolated = (int(atom_index), int(shells))
+        self._rebuild(reframe=atom_index is not None)
+        if self._isolated is None:
+            self.statusBar().showMessage("the whole structure is drawn again", 6000)
+        else:
+            s = self.scene
+            self.statusBar().showMessage(
+                f"isolated: {s.n_atoms} atoms and {s.n_bonds} contacts drawn "
+                f"({shells} shell{'s' if shells != 1 else ''} about the atom); "
+                "right-click for the whole structure", 9000)
+
+    def _toggle_lone_pair(self, site_index: int) -> None:
+        """Draw or drop the lobe of one site (View > Show bond-valence
+        vector draws every site's)."""
+        if site_index in self.vector_sites:
+            self.vector_sites.discard(site_index)
+        else:
+            self.vector_sites.add(site_index)
+        self._rebuild()
+        self.statusBar().showMessage(
+            f"lone-pair lobes drawn on {len(self.vector_sites)} site(s)"
+            if self.vector_sites else "no lone-pair lobe drawn", 6000)
 
     def _on_show_vectors(self, on: bool) -> None:
         self.show_vectors = bool(on)
@@ -1829,6 +1877,7 @@ class PreviewWindow(QMainWindow):
                       if entry is active else None),
                 overrides=entry.overrides,
                 show_vectors=self.show_vectors,
+                vector_sites=frozenset(self.vector_sites),
                 show_void_cones=(self.show_void_cones and entry is active),
                 vector_scale=self.vector_scale,
                 ellipsoid_probability=self.probability_box.currentData()
@@ -1836,6 +1885,14 @@ class PreviewWindow(QMainWindow):
 
         self.scene = (scenes[0] if len(scenes) == 1
                       else merge_scenes(scenes, [e.offset for e in entries]))
+        if self._isolated is not None:
+            from ..gl.scene import isolate_atoms, neighbour_shells_of
+            atom, shells = self._isolated
+            if 0 <= atom < self.scene.n_atoms:
+                isolate_atoms(self.scene,
+                              neighbour_shells_of(self.scene, atom, shells))
+            else:
+                self._isolated = None
         self.view.set_scene(self.scene, reframe=reframe)
         self.view.set_theme(self.theme)
         self.view.set_label_context(
@@ -1889,9 +1946,39 @@ class PreviewWindow(QMainWindow):
         a, b = int(ends[bond, 0]), int(ends[bond, 1])
         la = s.atom_label[a] if a < len(s.atom_label) else str(a)
         lb = s.atom_label[b] if b < len(s.atom_label) else str(b)
-        self.statusBar().showMessage(
-            f"Bond {la}–{lb}: {float(s.bond_distance[bond]):.4f} Å, "
-            f"{float(s.bond_valence[bond]):.4f} v.u.", 8000)
+        d = float(s.bond_distance[bond])
+        v = float(s.bond_valence[bond])
+        lines = [f"{la} – {lb}", f"distance {d:.4f} Å", f"valence {v:.4f} v.u."
+                 + (" (a bond at the threshold in force)" if v >= s.v_bond
+                    else f" (below the threshold {s.v_bond:g} v.u., a listed contact)")]
+        # the parameter and the share of each cation end's sum
+        entry = self._crystal()
+        results = self.project.results_for(entry) if entry is not None else []
+        sites = np.asarray(s.atom_site, int)
+        for end in (a, b):
+            site = int(sites[end]) if end < len(sites) else -1
+            r = next((x for x in results if x.site_index == site), None)
+            if r is None:
+                continue
+            contact = min((c for c in r.contacts if c.has_valence),
+                          key=lambda c: abs(c.distance - d), default=None)
+            if contact is None or abs(contact.distance - d) > 1e-3:
+                continue
+            share = (v / float(r.bvs) * 100.0) if float(r.bvs) > 0 else float("nan")
+            label = s.atom_label[end] if end < len(s.atom_label) else str(end)
+            lines.append(f"{share:.1f} % of {label}'s sum ({float(r.bvs):.3f} v.u.)")
+            if contact.param is not None:
+                pr = contact.param
+                lines.append(f"parameters R0 {pr.r0:.3f} Å, b {pr.b:.3f} Å: "
+                             f"{pr.source}" + ("" if pr.fitted else " (estimated)"))
+                lines.append(f"this pair's cutoff at v_bond {s.v_bond:g}: "
+                             f"{pr.distance_for(s.v_bond):.3f} Å")
+            break
+        self.statusBar().showMessage("Bond " + " · ".join(lines[:3]), 10000)
+        self._log_message("bond: " + " · ".join(lines))
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QToolTip
+        QToolTip.showText(QCursor.pos(), chr(10).join(lines), self.view)
 
     def _on_site_picked(self, site_index: int) -> None:
         if site_index < 0 or self.structure is None:
@@ -2335,6 +2422,66 @@ class PreviewWindow(QMainWindow):
         self.labels.bond = self.bond_label_box.currentData()
         self.view.set_labels(self.labels)
 
+    # -- the atoms labelled ----------------------------------------------------
+    def label_scope(self) -> tuple[frozenset, frozenset]:
+        """(site indices, elements) the labels are restricted to; both
+        empty when every atom is labelled."""
+        return self.labels.chosen_sites, self.labels.chosen_elements
+
+    def set_label_scope(self, sites=(), elements=()) -> None:
+        """Label only these sites and elements (either matches), or every
+        atom when both are empty; the bonds follow."""
+        from ..gl.labels import LabelScope
+        self.labels.chosen_sites = frozenset(int(i) for i in sites)
+        self.labels.chosen_elements = frozenset(str(e) for e in elements)
+        chosen = bool(self.labels.chosen_sites or self.labels.chosen_elements)
+        self.labels.atom_scope = LabelScope.CHOSEN if chosen else LabelScope.ALL
+        self.labels.bond_scope = (LabelScope.CHOSEN if chosen
+                                  else LabelScope.BONDED_ONLY)
+        self.label_scope_button.setText(
+            f"on {len(self.labels.chosen_sites) + len(self.labels.chosen_elements)}…"
+            if chosen else "on…")
+        self.view.set_labels(self.labels)
+
+    def _fill_label_scope_menu(self) -> None:
+        menu = self.label_scope_menu
+        menu.clear()
+        sites, elements = self.label_scope()
+        every = menu.addAction("Every atom")
+        every.setCheckable(True)
+        every.setChecked(not (sites or elements))
+        every.triggered.connect(lambda _=False: self.set_label_scope())
+        entry = self._crystal()
+        if entry is None:
+            return
+        structure = entry.structure
+        menu.addSeparator()
+        for symbol in sorted({a.element for a in structure.atoms}):
+            act = menu.addAction(f"all {symbol}")
+            act.setCheckable(True)
+            act.setChecked(symbol in elements)
+            act.triggered.connect(
+                lambda on, s=symbol: self._toggle_label_element(s, on))
+        menu.addSeparator()
+        for i, site in enumerate(structure.sites):
+            act = menu.addAction(site.label)
+            act.setCheckable(True)
+            act.setChecked(i in sites)
+            act.triggered.connect(
+                lambda on, k=i: self._toggle_label_site(k, on))
+
+    def _toggle_label_site(self, site_index: int, on: bool) -> None:
+        sites, elements = self.label_scope()
+        sites = set(sites)
+        (sites.add if on else sites.discard)(int(site_index))
+        self.set_label_scope(sites, elements)
+
+    def _toggle_label_element(self, symbol: str, on: bool) -> None:
+        sites, elements = self.label_scope()
+        elements = set(elements)
+        (elements.add if on else elements.discard)(str(symbol))
+        self.set_label_scope(sites, elements)
+
     def _on_labels_cycled(self, settings) -> None:
         """The viewport cycled the atom label kind with the L key."""
         self.labels = settings
@@ -2754,6 +2901,20 @@ class PreviewWindow(QMainWindow):
                 lambda _=False, i=site_index: self._on_site_picked(i))
             menu.addAction("Show this site's polyhedron").triggered.connect(
                 lambda _=False, i=site_index: self._show_polyhedron_for(i))
+            isolate = QMenu("Isolate this atom", menu)
+            menu.addMenu(isolate)
+            isolate.setToolTip("Draw this atom alone, with its bonded "
+                               "neighbours at the threshold in force, or "
+                               "with their neighbours too; the rest is left "
+                               "out of the picture. Right-click again for "
+                               "the whole structure.")
+            for shells, words in ((0, "alone"), (1, "with its neighbours"),
+                                  (2, "with the neighbours' neighbours")):
+                isolate.addAction(words).triggered.connect(
+                    lambda _=False, i=atom_index, n=shells: self._isolate(i, n))
+            if self._isolated is not None:
+                menu.addAction("Show the whole structure again").triggered.connect(
+                    lambda _=False: self._isolate(None, 0))
             turn = menu.addAction(f"Rotate about {label}")
             turn.setToolTip(
                 "Turn the view about this atom instead of about the middle of "
@@ -2761,9 +2922,38 @@ class PreviewWindow(QMainWindow):
                 "or middle button moves the centre off it again.")
             turn.triggered.connect(
                 lambda _=False, i=atom_index, t=label: self._center_on_atom(i, t))
+            # the lone pair: the bond-valence vector lobe of this site, on
+            # its own, where the site has one to draw (phi above 0)
+            site_result = next((r for r in self.project.results_for(entry)
+                                if r.site_index == site_index), None)
+            if site_result is not None and float(site_result.phi) > 1e-6 \
+                    and not self.show_vectors:
+                if site_index in self.vector_sites:
+                    menu.addAction(f"Hide the lone-pair lobe at {label}"
+                                   ).triggered.connect(
+                        lambda _=False, i=site_index: self._toggle_lone_pair(i))
+                else:
+                    lone = menu.addAction(
+                        f"Show the lone-pair lobe at {label} (φ {site_result.phi:.3f})")
+                    lone.setToolTip("The bond-valence vector of this site as "
+                                    "a lobe along -V/|V|, the direction the "
+                                    "bonding leaves open; its length is phi "
+                                    "times the mean bond length times the "
+                                    "scale under View. The site's phi is "
+                                    "stated; what it means is yours to read.")
+                    lone.triggered.connect(
+                        lambda _=False, i=site_index: self._toggle_lone_pair(i))
             if self.view.angle_hub == atom_index:
                 menu.addAction("Hide the angles").triggered.connect(
                     lambda _=False: self.view.set_angle_hub(None))
+                front = menu.addAction("Angles of the front bonds only")
+                front.setCheckable(True)
+                front.setChecked(self.view.angles_front_only)
+                front.setToolTip("Draw only the arcs between bonds whose far "
+                                 "atom lies nearer the viewer than this one; "
+                                 "off draws every pair. Turn the view to "
+                                 "bring other bonds to the front.")
+                front.toggled.connect(self.view.set_angles_front_only)
             else:
                 angles = menu.addAction(f"Show the angles at {label}")
                 angles.setToolTip(
@@ -3406,12 +3596,22 @@ class PreviewWindow(QMainWindow):
         lines += [f"  {s}  {t}" for s, t in self._messages[-30:]]
         text = "\n".join(lines)
         QApplication.clipboard().setText(text)
+        # the clipboard can be taken by another program at any moment, so
+        # the report is also written beside the preferences, and the
+        # message says where
+        where = "on the clipboard"
+        try:
+            target = prefs.folder() / "problem_report.txt"
+            target.write_text(text, encoding="utf-8")
+            where += f" and in {target}"
+        except OSError:
+            pass
+        self._last_problem_report = text
         QMessageBox.information(
             self, "Report a problem",
-            "The version, the renderer and the last status messages are on "
-            "the clipboard. Paste them into an issue at "
-            "github.com/sams808/FACET or into an email, with what you did "
-            "and what you expected.")
+            f"The version, the renderer and the last status messages are "
+            f"{where}. Paste them into an issue at github.com/sams808/FACET "
+            "or into an email, with what you did and what you expected.")
 
     def _show_changelog(self) -> None:
         from .help import ManualDialog
