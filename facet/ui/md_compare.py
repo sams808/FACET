@@ -85,6 +85,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
@@ -137,8 +138,9 @@ __all__ = ["CompareWorkspace", "CompareElements", "crystal_values",
 # what the crystal-vs-glass selector offers: (key, axis name, axis unit)
 VALUE_KINDS = (("CN", "CN", "1"),
                ("BVS", "bond-valence sum", "v.u."),
-               ("phi", "phi", "1"))
-_BIN = {"CN": 1.0, "BVS": BVS_BIN_VU, "phi": PHI_BIN}
+               ("phi", "phi", "1"),
+               ("plateau", "plateau width", "decades"))
+_BIN = {"CN": 1.0, "BVS": BVS_BIN_VU, "phi": PHI_BIN, "plateau": 0.1}
 
 STAIRCASE_POINTS = 240
 
@@ -204,7 +206,8 @@ def per_atom_values(table: bulk.ValenceTable, element: str, v_bond: float,
     threshold strip reads."""
     results = bulk.at_threshold(table, float(v_bond))
     sel = np.asarray(table.elements) == str(element)
-    arrays = {"CN": results.cn, "BVS": results.bvs_vu, "phi": results.phi}
+    arrays = {"CN": results.cn, "BVS": results.bvs_vu, "phi": results.phi,
+              "plateau": results.plateau_decades}
     if which not in arrays:
         raise ValueError(f"{which!r} is not one of {tuple(arrays)}")
     return np.asarray(arrays[which], dtype=np.float64)[sel]
@@ -478,6 +481,126 @@ def histogram_difference(a: Histogram, b: Histogram
             f"{eb[-1]:.4g} {a.unit}; no difference is drawn.")
     return ea.copy(), (np.asarray(b.mean, dtype=np.float64)
                        - np.asarray(a.mean, dtype=np.float64))
+
+
+def distribution_distances(a, b) -> dict | None:
+    """Two numbers that say how far two distributions of one descriptor
+    lie apart, stated without a verdict: the Kolmogorov-Smirnov distance
+    (the largest gap between the two cumulative fractions) and the
+    Wasserstein-1 distance (the area between them, in the descriptor's
+    unit). Histograms need the same edges; distributions need numeric
+    keys. None when the two cannot be laid on one axis."""
+    try:
+        if isinstance(a, Histogram) and isinstance(b, Histogram):
+            ea, eb = np.asarray(a.edges, float), np.asarray(b.edges, float)
+            if len(ea) != len(eb) or not np.allclose(ea, eb) or len(ea) < 2:
+                return None
+            widths = np.diff(ea)
+            ca = np.nan_to_num(np.asarray(a.mean, float))
+            cb = np.nan_to_num(np.asarray(b.mean, float))
+            fa = np.concatenate([[0.0], np.cumsum(ca * (widths if a.density else 1.0))])
+            fb = np.concatenate([[0.0], np.cumsum(cb * (widths if b.density else 1.0))])
+            x = ea
+            unit = a.unit
+            stepped = False
+        elif isinstance(a, Distribution) and isinstance(b, Distribution):
+            keys = sorted(set(a.keys) | set(b.keys), key=float)
+            x = np.asarray([float(k) for k in keys], float)
+            ma = dict(zip(a.keys, np.nan_to_num(np.asarray(a.mean, float))))
+            mb = dict(zip(b.keys, np.nan_to_num(np.asarray(b.mean, float))))
+            fa = np.cumsum([ma.get(k, 0.0) for k in keys])
+            fb = np.cumsum([mb.get(k, 0.0) for k in keys])
+            unit = "1"
+            stepped = True
+        else:
+            return None
+    except (TypeError, ValueError):
+        return None
+    if fa[-1] <= 0 or fb[-1] <= 0:
+        return None
+    gap = np.abs(fa / fa[-1] - fb / fb[-1])
+    ks = float(np.max(gap))
+    if len(x) < 2:
+        w1 = 0.0
+    elif stepped:
+        # a distribution over discrete keys: the cumulative fraction is a
+        # staircase, flat from one key to the next
+        w1 = float(np.sum(gap[:-1] * np.diff(x)))
+    else:
+        # a histogram: the cumulative fraction is linear across each bin
+        w1 = float(np.sum(0.5 * (gap[1:] + gap[:-1]) * np.diff(x)))
+    return {"ks": ks, "w1": w1, "unit": unit}
+
+
+def staircase_difference(a, b, grid) -> np.ndarray:
+    """CN of site result ``b`` minus CN of ``a`` at every threshold of
+    ``grid``."""
+    ca = np.asarray([a.cn_at(float(v)) for v in grid], float)
+    cb = np.asarray([b.cn_at(float(v)) for v in grid], float)
+    return cb - ca
+
+
+def rows_that_differ(rows: Sequence[dict], labels: Sequence[str],
+                     percent: float) -> list[dict]:
+    """The comparison rows where some later model's mean differs from
+    the first model's by more than ``percent`` of the first's (by anything
+    when the first is zero). Rows without a number on both sides are left
+    out: nothing is said about them."""
+    first = f"{labels[0]} mean"
+    out = []
+    for row in rows:
+        try:
+            a = float(row.get(first))
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(a):
+            continue
+        keep = False
+        for label in labels[1:]:
+            try:
+                b = float(row.get(f"{label} mean"))
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(b):
+                continue
+            if a == 0:
+                keep = keep or b != 0
+            else:
+                keep = keep or abs(b - a) / abs(a) * 100.0 > percent
+        if keep:
+            out.append(row)
+    return out
+
+
+def difference_colours(scene_a, results_a, scene_b, results_b, kind: str
+                       ) -> tuple[np.ndarray | None, str]:
+    """Colours for the atoms of scene B: the per-site difference of one
+    value (CN, BVS or phi) against the site of the same label in A, on a
+    diverging ramp about zero, grey where A has no site of that label.
+    (None, reason) when nothing can be compared."""
+    from ..core import theme as theme_mod
+    pick = {"CN": lambda r: float(r.cn_valence), "BVS": lambda r: float(r.bvs),
+            "phi": lambda r: float(r.phi)}.get(kind)
+    if pick is None:
+        return None, f"no per-site value named {kind!r}"
+    va = {r.label: pick(r) for r in results_a}
+    vb = {r.label: pick(r) for r in results_b}
+    diffs = {label: vb[label] - va[label] for label in vb if label in va
+             and np.isfinite(vb[label]) and np.isfinite(va[label])}
+    if not diffs:
+        return None, "the two structures share no site label with a value"
+    span = max(abs(d) for d in diffs.values()) or 1.0
+    by_site = {r.site_index: diffs[r.label] for r in results_b if r.label in diffs}
+    colours = np.asarray(scene_b.atom_color, np.float32).copy()
+    grey = np.array([0.72, 0.72, 0.72], np.float32)
+    for i, site in enumerate(np.asarray(scene_b.atom_site, int)):
+        d = by_site.get(int(site))
+        colours[i] = grey if d is None else np.asarray(
+            theme_mod.color_for_value(d, -span, span, True), np.float32)
+    words = (f"second crystal coloured by {kind} minus the first's per shared "
+             f"site label ({len(diffs)} labels, the ramp ends at ±{span:.3g}); "
+             "grey where the first has no such label")
+    return colours, words
 
 
 def difference_figure(pairs: Sequence[tuple[str, object]], *, title: str,
@@ -1266,14 +1389,35 @@ class _OverviewTable(QTableWidget):
 class _Ref:
     """One basket row: a crystal site or a model element."""
 
-    def __init__(self, kind: str, entry, key):
+    def __init__(self, kind: str, entry, key, frame=None, params=None,
+                 params_name: str = ""):
         self.kind = kind            # 'crystal' | 'model'
         self.entry = entry
         self.key = key              # site index | element symbol
+        self.frame = frame          # a model row pinned to one frame
+        self.params = params        # a crystal row under another set
+        self.params_name = str(params_name or "")
+        self._frame_view = None     # the pinned frame, loaded once
+        self._results = None        # (thresholds, results) under the set
 
     def matches(self, other: "_Ref") -> bool:
         return (self.kind == other.kind and self.entry is other.entry
-                and self.key == other.key)
+                and self.key == other.key and self.frame == other.frame
+                and self.params_name == other.params_name)
+
+    @property
+    def suffix(self) -> str:
+        bits = []
+        if self.frame is not None:
+            bits.append(f"frame {self.frame}")
+        if self.params_name:
+            bits.append(self.params_name)
+        return f" [{', '.join(bits)}]" if bits else ""
+
+    def record(self) -> dict:
+        """The row as a session file holds it (the entry by its path)."""
+        return {"kind": self.kind, "path": getattr(self.entry, "path", None),
+                "key": self.key, "frame": self.frame}
 
 
 class CompareWorkspace(QObject):
@@ -1373,11 +1517,32 @@ class CompareWorkspace(QObject):
         chrome.mark_hint(basket_title)
         basket_row.addWidget(basket_title)
         basket_row.addStretch(1)
+        self.pin_button = QPushButton("Pin frames")
+        self.pin_button.setToolTip("Add every model row again, pinned to the "
+                                   "frame its model shows now; two pinned "
+                                   "rows of one run compare frame k with "
+                                   "frame m.")
+        self.pin_button.clicked.connect(self.pin_frames)
+        basket_row.addWidget(self.pin_button)
+        self.params_button = QPushButton("Parameters…")
+        self.params_button.setToolTip("Add every crystal row again, analysed "
+                                      "with a bond-valence parameter file, "
+                                      "beside the same site under the "
+                                      "project's set.")
+        self.params_button.clicked.connect(self._choose_params)
+        basket_row.addWidget(self.params_button)
         self.clear_button = QPushButton("Clear")
         self.clear_button.setToolTip("Empty the basket.")
         self.clear_button.clicked.connect(self.clear)
         basket_row.addWidget(self.clear_button)
         column.addLayout(basket_row)
+        self.link_check = QCheckBox("Link the cursors")
+        self.link_check.setToolTip("Dragging the project's bond threshold "
+                                   "moves every ticked model's strip to it.")
+        self.link_check.toggled.connect(
+            lambda on: setattr(self, "link_cursors", bool(on)))
+        self.link_cursors = False
+        column.addWidget(self.link_check)
         self.basket_table = QTableWidget(0, len(self.BASKET_COLUMNS))
         self.basket_table.setHorizontalHeaderLabels(
             list(self.BASKET_COLUMNS))
@@ -1533,6 +1698,26 @@ class CompareWorkspace(QObject):
         col = QVBoxLayout(page)
         col.setContentsMargins(8, 8, 8, 8)
         col.setSpacing(6)
+        differ_row = QHBoxLayout()
+        differ_row.setContentsMargins(6, 6, 6, 0)
+        self.differ_check = QCheckBox("Only the rows that differ by more than")
+        self.differ_check.setToolTip("Keep the descriptors where a later "
+                                     "model's mean differs from the first "
+                                     "model's by more than the percentage; "
+                                     "rows without a number on both sides "
+                                     "are left out.")
+        self.differ_check.toggled.connect(lambda _on: self._refresh_table())
+        differ_row.addWidget(self.differ_check)
+        self.differ_box = QDoubleSpinBox()
+        self.differ_box.setRange(0.0, 1000.0)
+        self.differ_box.setDecimals(1)
+        self.differ_box.setSingleStep(1.0)
+        self.differ_box.setValue(5.0)
+        self.differ_box.setSuffix(" %")
+        self.differ_box.valueChanged.connect(lambda _v: self._refresh_table())
+        differ_row.addWidget(self.differ_box)
+        differ_row.addStretch(1)
+        col.addLayout(differ_row)
         self.table_scope = QLabel("")
         self.table_scope.setWordWrap(True)
         self.table_scope.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -1571,6 +1756,20 @@ class CompareWorkspace(QObject):
             f"set, else {DEFAULT_GAP_ANG:g} Å.")
         self.gap_box.valueChanged.connect(lambda _v: self._refresh_3d())
         row.addWidget(self.gap_box)
+        self.diff_colour_check = QCheckBox("Colour by difference")
+        self.diff_colour_check.setToolTip(
+            "Colour the second crystal of the basket by a per-site value "
+            "minus the first crystal's, site label by site label: a "
+            "diverging ramp about zero, grey where the first has no site "
+            "of that label.")
+        self.diff_colour_check.toggled.connect(lambda _on: self._refresh_3d())
+        row.addWidget(self.diff_colour_check)
+        self.diff_kind_box = QComboBox()
+        for key, _name, _unit in VALUE_KINDS[:3]:
+            self.diff_kind_box.addItem(key)
+        self.diff_kind_box.setCurrentText("BVS")
+        self.diff_kind_box.currentTextChanged.connect(lambda _t: self._refresh_3d())
+        row.addWidget(self.diff_kind_box)
         self.reframe_button = QPushButton("Reframe")
         self.reframe_button.setToolTip("Fit the whole row in the view.")
         self.reframe_button.clicked.connect(self._reframe)
@@ -1659,6 +1858,84 @@ class CompareWorkspace(QObject):
         self._refresh_all()
         return True
 
+    def add_model_frame(self, entry, element: str, k: int) -> bool:
+        """An element of one model at one fixed frame: two such rows of
+        the same run compare frame k with frame m."""
+        ref = _Ref("model", entry, str(element), frame=int(k))
+        if any(ref.matches(r) for r in self._refs):
+            return False
+        self._refs.append(ref)
+        self._refresh_all()
+        return True
+
+    def pin_frames(self) -> int:
+        """Every unpinned model row again, pinned to the frame its model
+        shows now; returns how many rows were added."""
+        added = 0
+        for ref in list(self._refs):
+            if ref.kind != "model" or ref.frame is not None:
+                continue
+            found = self._model_frame(ref)
+            if found is not None and self.add_model_frame(ref.entry, ref.key, found[2]):
+                added += 1
+        self.statusMessage.emit(f"{added} row(s) pinned to the frame shown.")
+        return added
+
+    def add_crystal_site_params(self, entry, site_index: int, params,
+                                name: str) -> bool:
+        """A crystal site analysed under another parameter set, beside the
+        same site under the project's: what the parameters decide."""
+        ref = _Ref("crystal", entry, int(site_index), params=params,
+                   params_name=name)
+        if any(ref.matches(r) for r in self._refs):
+            return False
+        self._refs.append(ref)
+        self._refresh_all()
+        return True
+
+    def add_basket_under_params(self, params, name: str) -> int:
+        """Every crystal row of the basket again, under ``params``."""
+        added = 0
+        for ref in list(self._refs):
+            if ref.kind == "crystal" and not ref.params_name:
+                if self.add_crystal_site_params(ref.entry, ref.key, params, name):
+                    added += 1
+        return added
+
+    def basket_records(self) -> list[dict]:
+        """The basket for a session file: rows by entry path."""
+        return [r.record() for r in self._refs
+                if getattr(r.entry, "path", None) and not r.params_name]
+
+    def restore_basket(self, records, entries) -> int:
+        """Rows from a session file back into the basket, matched to the
+        entries given by path; rows whose file is gone are left out."""
+        by_path = {}
+        for entry in entries:
+            path = getattr(entry, "path", None)
+            key = tuple(path) if isinstance(path, list) else path
+            if key is not None:
+                by_path[key] = entry
+        added = 0
+        for rec in records or []:
+            if not isinstance(rec, dict):
+                continue
+            path = rec.get("path")
+            entry = by_path.get(tuple(path) if isinstance(path, list) else path)
+            if entry is None:
+                continue
+            try:
+                if rec.get("kind") == "crystal":
+                    added += self.add_crystal_site(entry, int(rec["key"]))
+                elif rec.get("frame") is not None:
+                    added += self.add_model_frame(entry, str(rec["key"]),
+                                                  int(rec["frame"]))
+                else:
+                    added += self.add_model_element(entry, str(rec["key"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return added
+
     def remove_ref(self, index: int) -> None:
         if 0 <= index < len(self._refs):
             del self._refs[index]
@@ -1678,7 +1955,22 @@ class CompareWorkspace(QObject):
 
     def set_v_bond(self, _v: float | None = None) -> None:
         """The project's bond threshold moved: re-read the crystal rows and
-        the marks (the project itself already holds the value)."""
+        the marks (the project itself already holds the value); with the
+        cursors linked, every ticked model's strip follows to the same
+        threshold."""
+        if _v is not None and getattr(self, "link_cursors", False):
+            linked = [entry for _label, entry in self.ticked_entries()]
+            linked += [r.entry for r in self._refs if r.kind == "model"
+                       and r.entry not in linked]
+            for entry in linked:
+                strip = getattr(getattr(entry, "controller", None), "strip", None)
+                if strip is None or getattr(strip, "table", None) is None:
+                    continue
+                if abs(float(strip.v_bond) - float(_v)) > 1e-9:
+                    try:
+                        strip.set_threshold(float(_v), emit=True)
+                    except Exception:                # noqa: BLE001
+                        pass
         self._refresh_all()
 
     def frame_changed(self, entry) -> None:
@@ -1691,6 +1983,23 @@ class CompareWorkspace(QObject):
             self._invalidate("figure", "3d")
 
     def _site_result(self, ref: _Ref):
+        if ref.params is not None:
+            key = (round(float(self.project.v_bond), 9),
+                   round(float(self.project.v_list), 9),
+                   bool(self.project.include_anions))
+            if ref._results is None or ref._results[0] != key:
+                try:
+                    results = coordination.analyse_structure(
+                        ref.entry.structure, ref.params,
+                        v_bond=self.project.v_bond, v_list=self.project.v_list,
+                        cations_only=not self.project.include_anions)
+                except (ValueError, KeyError):
+                    results = []
+                ref._results = (key, results)
+            for result in ref._results[1]:
+                if result.site_index == ref.key:
+                    return result
+            return None
         for result in self.project.results_for(ref.entry):
             if result.site_index == ref.key:
                 return result
@@ -1698,9 +2007,37 @@ class CompareWorkspace(QObject):
 
     @staticmethod
     def _model_frame(ref_or_entry):
-        """(ValenceTable, v_bond, frame index) of a model's frame shown,
-        or None before a frame is drawn with its table."""
+        """(ValenceTable, v_bond, frame index) of a model's frame shown --
+        for a row pinned to a frame, of that frame, loaded once -- or None
+        before a frame is drawn with its table."""
         entry = getattr(ref_or_entry, "entry", ref_or_entry)
+        pinned = getattr(ref_or_entry, "frame", None)
+        if pinned is not None:
+            cached = getattr(ref_or_entry, "_frame_view", None)
+            shown = getattr(entry, "frame_view", None)
+            if cached is None:
+                trajectory = getattr(entry, "trajectory", None)
+                if trajectory is None or shown is None:
+                    return None
+                if int(getattr(shown, "k", -1)) == int(pinned):
+                    cached = shown
+                else:
+                    from . import md_jobs
+                    try:
+                        cached = md_jobs.load_frame_view(
+                            trajectory, int(pinned), {}, shown.params,
+                            shown.v_bond_vu, shown.v_list_vu, with_bonds=True)
+                    except Exception:                # noqa: BLE001
+                        return None
+                ref_or_entry._frame_view = cached
+            table = getattr(cached, "table", None)
+            if table is None:
+                return None
+            strip = getattr(getattr(entry, "controller", None), "strip", None)
+            v_bond = float(strip.v_bond) if strip is not None \
+                and getattr(strip, "table", None) is not None \
+                else float(cached.v_bond_vu)
+            return table, v_bond, int(pinned)
         view = getattr(entry, "frame_view", None)
         table = getattr(view, "table", None)
         if table is None:
@@ -1718,8 +2055,8 @@ class CompareWorkspace(QObject):
         ``kind`` and ``frame`` (None for a crystal)."""
         rows = []
         for ref in self._refs:
-            row = {"structure": _entry_title(ref.entry), "kind": ref.kind,
-                   "frame": None}
+            row = {"structure": _entry_title(ref.entry) + ref.suffix,
+                   "kind": ref.kind, "frame": ref.frame}
             if ref.kind == "crystal":
                 result = self._site_result(ref)
                 if result is None:
@@ -1872,7 +2209,11 @@ class CompareWorkspace(QObject):
             self.tree.addTopLevelItem(head)
             leaves = [(("site", "stairs"), "Staircases of the basket rows",
                        "curve", "CN against v_bond on the log axis, one "
-                       "curve per basket row")]
+                       "curve per basket row"),
+                      (("site", "stairs-diff"), "Difference of staircases",
+                       "curve", "CN of each later crystal row minus the "
+                       "first's, against v_bond: over which thresholds the "
+                       "sites disagree")]
             for key, name, unit in VALUE_KINDS:
                 leaves.append((("site", "hist", key),
                                f"Crystal against glass — {name}",
@@ -1979,7 +2320,7 @@ class CompareWorkspace(QObject):
     def select_site_figure(self, which: str, kind: str = "CN") -> bool:
         """Put the tree on 'stairs' or the crystal-vs-glass 'hist' of one
         value kind."""
-        wanted = ("site", "stairs") if which == "stairs" \
+        wanted = ("site", which) if which in ("stairs", "stairs-diff") \
             else ("site", "hist", kind)
         for item in self._walk():
             role = item.data(0, _ROLE)
@@ -2110,7 +2451,14 @@ class CompareWorkspace(QObject):
         self.difference_note.setText("")
         rows = self.basket_rows()
         header = self._basket_header()
-        if role[1] == "stairs":
+        if role[1] == "stairs-diff":
+            figure = self.staircase_difference_figure()
+            title = "Difference of staircases"
+            subtitle = ("each later crystal row's CN minus the first "
+                        "crystal row's, threshold by threshold")
+            empty = ("Add two or more crystal sites: the CN of each later "
+                     "one minus the first's is drawn here against v_bond.")
+        elif role[1] == "stairs":
             figure = self.staircase_figure()
             title = "CN against v_bond, every basket row"
             subtitle = (f"{len(rows)} basket rows · a crystal row is its "
@@ -2166,6 +2514,16 @@ class CompareWorkspace(QObject):
                 figure = difference_figure(
                     [(label, c) for label, c, _s in found],
                     title=display_name(name), styles=styles)
+                lines = []
+                for label, c, _s in found[1:]:
+                    far = distribution_distances(found[0][1], c)
+                    if far is not None:
+                        unit = "" if far["unit"] in ("1", "") else f" {far['unit']}"
+                        lines.append(f"{label} against {found[0][0]}: KS distance "
+                                     f"{far['ks']:.3f}, Wasserstein-1 "
+                                     f"{far['w1']:.3g}{unit}")
+                if lines and figure is not None:
+                    figure.annotations = tuple(figure.annotations) + tuple(lines)
             except ValueError as error:
                 note = str(error)
                 figure = None
@@ -2300,6 +2658,33 @@ class CompareWorkspace(QObject):
                          "row is the mean CN of the element's atoms on the "
                          "frame named in the basket.",))
 
+    def staircase_difference_figure(self) -> Figure | None:
+        """CN of each later crystal basket row minus the first crystal
+        row's, on one log grid of thresholds; None below two crystal rows
+        with results."""
+        found = [(i, r, self._site_result(r)) for i, r in enumerate(self._refs)
+                 if r.kind == "crystal"]
+        found = [(i, r, s) for i, r, s in found if s is not None]
+        if len(found) < 2:
+            return None
+        grid = np.logspace(np.log10(0.005), np.log10(1.5), 240)
+        _i0, ref0, first = found[0]
+        series = []
+        for i, ref, s in found[1:]:
+            series.append(StatSeries(
+                f"{_entry_title(ref.entry)}{ref.suffix} {s.label} minus "
+                f"{_entry_title(ref0.entry)}{ref0.suffix} {first.label}",
+                grid, staircase_difference(first, s, grid), None, kind="line",
+                style=self._basket_style(ref, i), markers=False, band=False))
+        current = float(self.project.v_bond)
+        return Figure(series, "v_bond", "v.u.", "CN difference", "1",
+                      title="Difference of staircases", log_x=True,
+                      vlines=((current, f"v_bond {current:.4g}", "current"),),
+                      annotations=("Each step is the later row's CN minus "
+                                   "the first crystal row's, at the same "
+                                   "threshold; zero where both count the "
+                                   "same number of bonds.",))
+
     def crystal_vs_glass_figure(self, which: str = "CN") -> Figure | None:
         """The model elements' per-atom values ('CN', 'BVS' or 'phi')
         binned, for the elements a basket crystal site shares, with each
@@ -2323,7 +2708,7 @@ class CompareWorkspace(QObject):
         for _ref, result in crystal_rows:
             row = crystal_values(result, v)
             value = {"CN": float(row["cn"]), "BVS": row["bvs_vu"],
-                     "phi": row["phi"]}[which]
+                     "phi": row["phi"], "plateau": row["plateau_decades"]}[which]
             if math.isfinite(value):
                 lines.setdefault(result.element, []).append(
                     (result.label, value))
@@ -2393,6 +2778,8 @@ class CompareWorkspace(QObject):
         scope = self.table_scope_role()
         rows = comparison_rows(ticked, scope=scope,
                                filter_text=self.filter_edit.text())
+        if self.differ_check.isChecked() and len(labels) >= 2:
+            rows = rows_that_differ(rows, labels, float(self.differ_box.value()))
         header = comparison_header(ticked)
         self.table.set_rows(rows, header)
         if scope[0] == "group":
@@ -2492,6 +2879,8 @@ class CompareWorkspace(QObject):
                          f"(above {ATOMS_ONLY_ABOVE}).")
         if self._element and merged.n_atoms:
             merged = emphasise_element(merged, self._element, self.theme)
+        if self.diff_colour_check.isChecked() and merged.n_atoms:
+            notes.append(self._colour_difference(blocks, merged))
         drawn = sum(1 for s in scenes if s is not None and s.n_atoms)
         if merged.n_atoms:
             self.view3d.set_scene(merged, reframe=True)
@@ -2508,6 +2897,34 @@ class CompareWorkspace(QObject):
                                 "Tick models with a frame drawn, or add a "
                                 "crystal the window has drawn to the "
                                 "basket.")
+
+    def _colour_difference(self, blocks, merged) -> str:
+        """Recolour the second crystal block of the merged scene by the
+        per-site difference against the first (the 3D page's 'Colour by
+        difference'); returns the words for the note."""
+        titles = {}
+        for ref in self._refs:
+            if ref.kind == "crystal" and not ref.params_name:
+                titles.setdefault(_entry_title(ref.entry), ref.entry)
+        crystals, offset = [], 0
+        for label, scene, _note in blocks:
+            if scene is None:
+                continue
+            if label in titles:
+                crystals.append((titles[label], scene, offset))
+            offset += scene.n_atoms
+        if len(crystals) < 2:
+            return "colour by difference needs two crystals drawn in the basket"
+        (ea, sa, _oa), (eb, sb, ob) = crystals[0], crystals[1]
+        colours, words = difference_colours(
+            sa, self.project.results_for(ea), sb, self.project.results_for(eb),
+            self.diff_kind_box.currentText())
+        if colours is None:
+            return words
+        n = min(sb.n_atoms, len(colours), merged.n_atoms - ob)
+        merged.atom_color = np.asarray(merged.atom_color, np.float32).copy()
+        merged.atom_color[ob:ob + n] = colours[:n]
+        return words
 
     def _reframe(self) -> None:
         if self.view3d.scene is not None:
@@ -2553,6 +2970,22 @@ class CompareWorkspace(QObject):
         self.elements.set_models(models)
 
     # -- everything ----------------------------------------------------------------------------------------
+    def _choose_params(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        from ..core import bv_files
+        path, _ = QFileDialog.getOpenFileName(
+            self.column, "A bond-valence parameter file", "", bv_files.FILE_FILTER)
+        if not path:
+            return
+        try:
+            params = bv_files.load(path)
+        except Exception as error:                   # noqa: BLE001
+            self.statusMessage.emit(f"The parameters were not read: {error}")
+            return
+        name = getattr(params, "name", None) or Path(path).name
+        added = self.add_basket_under_params(params, str(name))
+        self.statusMessage.emit(f"{added} row(s) added under {name}.")
+
     def _refresh_all(self) -> None:
         self._fill_basket(self.basket_rows())
         self._fill_tree()

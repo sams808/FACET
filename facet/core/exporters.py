@@ -481,7 +481,8 @@ def write_feff(structure: Structure, site_index: int, path: str | Path,
 # ---------------------------------------------------------------------------
 
 def save_session(project, path: str | Path, theme=None,
-                 camera=None, labels=None, presentation=None) -> Path:
+                 camera=None, labels=None, presentation=None,
+                 compare=None) -> Path:
     """Everything needed to reopen the same view.
 
     File paths rather than structures: a session is a pointer to the user's
@@ -503,6 +504,9 @@ def save_session(project, path: str | Path, theme=None,
         # planes and the slab: presentation state that belongs to the view
         # rather than to any one structure
         data["presentation"] = presentation
+    if compare:
+        # the Compare basket: rows by entry path, as the workspace records them
+        data["compare"] = list(compare)
     if theme is not None:
         data["theme"] = theme.to_dict()
     if camera is not None:
@@ -722,6 +726,10 @@ def validate_session(data) -> dict:
         _check_camera(data["camera"])
     if data.get("presentation") is not None:
         _check_presentation(data["presentation"])
+    if "compare" in data:
+        if not isinstance(data["compare"], list) or not all(
+                isinstance(r, dict) for r in data["compare"]):
+            raise _session_error("'compare' is not a list of basket rows")
     return data
 
 

@@ -3080,9 +3080,11 @@ class PreviewWindow(QMainWindow):
                     controller.request_spec()
                 except (ValueError, TypeError):
                     pass
+        compare = (self._compare_ws.basket_records()
+                   if self._compare_ws is not None else None)
         exporters.save_session(self.project, path, theme=self.theme,
                                camera=self.view.camera, labels=self.labels,
-                               presentation=self._snapshot())
+                               presentation=self._snapshot(), compare=compare)
 
     def _open_session(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open a session", "",
@@ -3190,6 +3192,10 @@ class PreviewWindow(QMainWindow):
         if self.project.current is not None and \
                 self.project.current.kind == "model":
             self._show_model(self.project.current)
+        if data.get("compare"):
+            ws = self._compare()
+            ws.clear()
+            ws.restore_basket(data["compare"], list(self.project.entries))
         self.history.reset(self._snapshot(), "opened the session")
         self._refresh_history_actions()
         if missing:
