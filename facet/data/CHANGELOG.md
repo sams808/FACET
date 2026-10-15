@@ -2,6 +2,11 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 1.0.3 — 2026-10-15
+
+- Version 1.0.3: polyhedra on their sites, isolation per structure, bond clicks on OpenGL  `e46e8e4`  2026-10-15
+- Changelog for 1.0.2  `c2dfc80`  2026-10-15
+
 ## 1.0.2 — 2026-10-15
 
 - Version 1.0.2: the window's requests of 2026-10-15  `fb003e6`  2026-10-15
