@@ -2,8 +2,10 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
-## 1.0.0 (in progress)
+## 1.0.1 — 2026-10-15
 
+- Version 1.0.1: bundled IUCr table, no first-run popup, voids, channel targets, cluster arcs  `cd06f00`  2026-10-15
+- Changelog for 1.0.0, final  `2938eec`  2026-10-14
 - Full-suite fixes for 1.0.0  `0e53525`  2026-10-14
 - Changelog for 1.0.0  `a7a7bf7`  2026-10-14
 
