@@ -125,6 +125,35 @@ def make_icon() -> Path:
     return ICON
 
 
+# Files PyInstaller's dependency walk brings in that the application never
+# loads: Qt's translations (the interface is English only), the QML and
+# Quick libraries (no QML anywhere), the PDF library (the PDF export draws
+# through QPdfWriter in Qt6Gui, not Qt6Pdf), and the duplicate OpenSSL copy.
+# Measured 2026-10-14: about 25 MB of the 254 MB application folder.
+PRUNE_DIRS = ("PySide6/translations", "PySide6/qml")
+PRUNE_FILES = ("PySide6/Qt6Qml.dll", "PySide6/Qt6QmlModels.dll",
+               "PySide6/Qt6QmlMeta.dll", "PySide6/Qt6QmlWorkerScript.dll",
+               "PySide6/Qt6Quick.dll", "PySide6/Qt6Pdf.dll",
+               "PySide6/Qt6VirtualKeyboard.dll", "PySide6/Qt6Labs*.dll")
+
+
+def prune_bundle(target: Path) -> None:
+    """Remove what the bundle carries and never loads (PRUNE_DIRS/FILES)."""
+    internal = target / "_internal"
+    removed = 0
+    for rel in PRUNE_DIRS:
+        folder = internal / rel
+        if folder.is_dir():
+            removed += sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
+            shutil.rmtree(folder, ignore_errors=True)
+    for rel in PRUNE_FILES:
+        for file in internal.glob(rel):
+            if file.is_file():
+                removed += file.stat().st_size
+                file.unlink()
+    log(f"pruned {removed / 1e6:.0f} MB the application never loads")
+
+
 def write_licences(target: Path) -> None:
     """The licence texts and the Qt replacement note the LGPL requires."""
     folder = target / "licenses"
@@ -183,6 +212,9 @@ def build_app(clean: bool = True) -> Path:
     # The bundled example structures. They are addressed at runtime as
     # facet/data/examples under sys._MEIPASS, so the destination path has to
     # mirror the source layout exactly; see facet.core.examples.folder().
+    changelog = ROOT / "facet" / "data" / "CHANGELOG.md"
+    if changelog.exists():
+        cmd += ["--add-data", f"{changelog}{os.pathsep}facet/data"]
     examples = ROOT / "facet" / "data" / "examples"
     if examples.is_dir():
         cmd += ["--add-data",
@@ -205,6 +237,7 @@ def build_app(clean: bool = True) -> Path:
         raise SystemExit(f"PyInstaller failed with {result.returncode}")
 
     write_licences(APP_DIR)
+    prune_bundle(APP_DIR)
     size = sum(f.stat().st_size for f in APP_DIR.rglob("*") if f.is_file())
     log(f"application -> {APP_DIR.relative_to(ROOT)}  ({size / 1e6:.0f} MB)")
     return APP_DIR

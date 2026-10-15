@@ -5,6 +5,8 @@ none of them had it.
 """
 from __future__ import annotations
 
+import pytest
+
 
 def dispose(*widgets) -> None:
     """Close widgets and actually destroy them.
@@ -100,3 +102,27 @@ def sample_cif(code: str, name_hint: str = ""):
     if found is not None:
         return found
     return Path(_CIF_ROOT or ".") / (name_hint or f"{code}.cif")
+
+
+# Preferences live in a JSON file per user (facet.core.prefs). The suite
+# points them at a folder of its own, so no test reads or writes what the
+# person running it has chosen -- the lesson of the QSettings tests that
+# once rewrote a real registry.
+import os as _os
+import tempfile as _tempfile
+
+_PREFS_DIR = _tempfile.mkdtemp(prefix="facet_prefs_")
+_os.environ["FACET_PREFS_DIR"] = _PREFS_DIR
+
+
+@pytest.fixture(autouse=True)
+def _isolated_prefs(tmp_path):
+    """Each test starts with an empty preferences file of its own."""
+    folder = tmp_path / "prefs"
+    folder.mkdir(exist_ok=True)
+    previous = _os.environ.get("FACET_PREFS_DIR")
+    _os.environ["FACET_PREFS_DIR"] = str(folder)
+    try:
+        yield folder
+    finally:
+        _os.environ["FACET_PREFS_DIR"] = previous or _PREFS_DIR

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QDoubleSpinBox,
     QSizePolicy,
     QSpinBox,
@@ -46,6 +48,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core import prefs
 from ..core import (bv, cif, coordination, exporters, history as history_mod,
                     overrides as overrides_mod, planes as planes_mod,
                     project as project_mod, readers, theme as theme_mod)
@@ -258,9 +261,33 @@ class PreviewWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self._set_enabled(False)
         self.setAcceptDrops(True)
+        # every status message, kept with its time in the Messages dock
+        self._messages: list[tuple[str, str]] = []
+        self.statusBar().messageChanged.connect(self._log_message)
+        self.messages_text = QPlainTextEdit()
+        self.messages_text.setReadOnly(True)
+        self.messages_text.setMaximumBlockCount(400)
+        messages = QDockWidget("Messages", self)
+        messages.setObjectName("dock_messages")
+        messages.setWidget(self.messages_text)
+        self.addDockWidget(Qt.BottomDockWidgetArea, messages)
+        messages.hide()
+        self.messages_dock = messages
+        self._initial_state = self.saveState()
+        # a threshold drag becomes one undo step once it settles
+        self._threshold_history_timer = QTimer(self)
+        self._threshold_history_timer.setSingleShot(True)
+        self._threshold_history_timer.setInterval(500)
+        self._threshold_history_timer.timeout.connect(self._push_threshold_history)
+        self._apply_saved_preferences()
 
         if path:
             self.load(path)
+        elif prefs.get("restore_session", False):
+            QTimer.singleShot(0, self._reopen_last_session)
+        if not path and prefs.get("offer_tour", True) \
+                and not prefs.get("tour_offered", False):
+            QTimer.singleShot(400, self._offer_tour)
 
     # -- the active structure ----------------------------------------------
     @property
@@ -316,6 +343,7 @@ class PreviewWindow(QMainWindow):
     # -- layout ------------------------------------------------------------
     def _build_layout(self) -> None:
         structures = QDockWidget("Structures", self)
+        structures.setObjectName("dock_structures")
         structures.setWidget(self.structure_panel)
         structures.setFeatures(QDockWidget.DockWidgetMovable
                                | QDockWidget.DockWidgetFloatable)
@@ -327,6 +355,7 @@ class PreviewWindow(QMainWindow):
         # every MD model listed adds its own page (ModelController.widgets).
         # Selecting a row of the Structures dock switches all five at once.
         sites = QDockWidget("Sites", self)
+        sites.setObjectName("dock_sites")
         site_box = QWidget()
         site_layout = QVBoxLayout(site_box)
         site_layout.setContentsMargins(0, 0, 0, 0)
@@ -587,12 +616,17 @@ class PreviewWindow(QMainWindow):
         m = self.menuBar().addMenu("&File")
         m.addAction(openf)
         m.addAction(openfolder)
+        # the files opened before, newest first, kept between runs
+        self.recent_menu = QMenu("Open &recent", m)
+        self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
+        m.addMenu(self.recent_menu)
         self._build_examples_menu(m)
         m.addSeparator()
-        m.addAction(save)
-        m.addAction(vector)
 
         export = m.addMenu("&Export")
+        export.addAction(save)
+        export.addAction(vector)
+        export.addSeparator()
         for label, handler in (
                 ("&Sites (CSV)…", self._export_sites_csv),
                 ("&Contacts (CSV)…", self._export_contacts_csv),
@@ -668,6 +702,12 @@ class PreviewWindow(QMainWindow):
         e.addAction(self.undo_action)
         e.addAction(self.redo_action)
         e.addSeparator()
+        preferences = QAction("&Preferences…", self)
+        preferences.setToolTip("What the application remembers between "
+                               "runs, and a button to forget it all.")
+        preferences.triggered.connect(self._show_preferences)
+        e.addAction(preferences)
+        e.addSeparator()
         clear_overrides = QAction("&Clear all styles", self)
         clear_overrides.setToolTip(
             "Removes every per-atom, per-site and per-element colour, size and "
@@ -709,6 +749,9 @@ class PreviewWindow(QMainWindow):
 
         v.addSeparator()
         v.addMenu(self._build_explorer_menu(v))
+        self.layout_menu = QMenu("&Layout", v)
+        self.layout_menu.aboutToShow.connect(self._fill_layout_menu)
+        v.addMenu(self.layout_menu)
 
         v.addSeparator()
         # an MD model's frames and highlight rules: enabled for a model
@@ -822,6 +865,17 @@ class PreviewWindow(QMainWindow):
         shortcuts = QAction("&Keyboard and mouse", self)
         shortcuts.triggered.connect(lambda: self._show_manual("shortcuts"))
         h.addAction(shortcuts)
+        h.addSeparator()
+        changed = QAction("&What changed", self)
+        changed.setToolTip("Every version's commits, newest first.")
+        changed.triggered.connect(self._show_changelog)
+        h.addAction(changed)
+        problem = QAction("Report a &problem…", self)
+        problem.setToolTip("Copies the version, the renderer and the last "
+                           "status messages to the clipboard, ready to paste "
+                           "into an issue or an email.")
+        problem.triggered.connect(self._report_problem)
+        h.addAction(problem)
         h.addSeparator()
         notices = QAction("&Licences", self)
         notices.setToolTip("What the bundled components require of a build "
@@ -1245,8 +1299,10 @@ class PreviewWindow(QMainWindow):
             kind, value = read_or_route(path)
             if kind == "structure":
                 added.append(self.project.add(value, str(path)))
+                prefs.add_recent(path)
             elif kind == "md":
                 models.append((str(path), value))
+                prefs.add_recent(path)
             else:
                 failed.append((str(path), value))
         self.structure_panel.refresh()
@@ -2135,6 +2191,7 @@ class PreviewWindow(QMainWindow):
                     theme_mod.ColorMode.VALENCE_DISCREPANCY)
         if mode in per_site:
             self._recolour_timer.start()
+        self._threshold_history_timer.start()
 
     def _theme_the_panels(self, theme) -> None:
         """Give the theme to everything in this window that draws with it.
@@ -2904,7 +2961,9 @@ class PreviewWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Stop every model's work (cancel, then wait at most
-        md_workspace.CLOSE_WAIT_MS each) before the window goes."""
+        md_workspace.CLOSE_WAIT_MS each) before the window goes, and write
+        what is remembered between runs."""
+        self._save_preferences()
         for entry in list(self.project.models):
             controller = entry.controller
             if controller is not None:
@@ -2913,6 +2972,222 @@ class PreviewWindow(QMainWindow):
                 except RuntimeError:
                     pass
         super().closeEvent(event)
+
+    # -- what is remembered between runs ------------------------------------
+    def _apply_saved_preferences(self) -> None:
+        """The theme, the explorer's choices, the layout: as they were left."""
+        data = prefs.load()
+        if not data.get("remember_layout", True):
+            return
+        name = data.get("theme")
+        if name and name in theme_mod.PRESETS and name != self.theme.name:
+            try:
+                self._choose_theme(name)
+            except Exception:                        # noqa: BLE001
+                pass
+        axis = data.get("explorer_axis")
+        if axis in ("distance", "valence"):
+            self._set_explorer_axis(axis)
+        for key, action in getattr(self, "explorer_option_actions", {}).items():
+            value = data.get(f"explorer_{key}")
+            if isinstance(value, bool):
+                action.setChecked(value)
+        column = data.get("running_sum_column")
+        if isinstance(column, bool) and hasattr(self, "running_sum_column"):
+            self.running_sum_column.setChecked(column)
+        state = data.get("window_state")
+        geometry = data.get("window_geometry")
+        from PySide6.QtCore import QByteArray
+        try:
+            if geometry:
+                self.restoreGeometry(QByteArray.fromBase64(geometry.encode()))
+            if state:
+                self.restoreState(QByteArray.fromBase64(state.encode()))
+        except Exception:                            # noqa: BLE001
+            pass
+
+    def _save_preferences(self) -> None:
+        if not prefs.get("remember_layout", True):
+            return
+        values = {
+            "theme": self.theme.name,
+            "explorer_axis": self.explorer.axis,
+            "running_sum_column": self.running_sum_column.isChecked(),
+            "window_state": bytes(self.saveState().toBase64()).decode(),
+            "window_geometry": bytes(self.saveGeometry().toBase64()).decode(),
+        }
+        for key, action in getattr(self, "explorer_option_actions", {}).items():
+            values[f"explorer_{key}"] = action.isChecked()
+        if prefs.get("restore_session", False):
+            target = prefs.folder() / "last_session.json"
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                self.save_session(target)
+                values["last_session"] = str(target)
+            except Exception as error:               # noqa: BLE001
+                values["last_session_error"] = str(error)
+        prefs.update(values)
+
+    def _reopen_last_session(self) -> None:
+        target = prefs.get("last_session")
+        if not target or not Path(str(target)).exists():
+            return
+        try:
+            data = exporters.load_session(target)
+        except (ValueError, OSError) as exc:
+            self.statusBar().showMessage(
+                f"The last session could not be reopened: {exc}", 12000)
+            return
+        self.restore_session(data)
+
+    def _show_preferences(self) -> None:
+        from .preferences_dialog import PreferencesDialog
+        dialog = PreferencesDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            axis = prefs.get("explorer_axis")
+            if axis in ("distance", "valence"):
+                self._set_explorer_axis(axis)
+
+    def _fill_recent_menu(self) -> None:
+        self.recent_menu.clear()
+        files = prefs.recent_files()
+        for file in files:
+            act = self.recent_menu.addAction(Path(file).name)
+            act.setToolTip(file)
+            act.triggered.connect(lambda _=False, f=file: self.load_many([f]))
+        if files:
+            self.recent_menu.addSeparator()
+            forget = self.recent_menu.addAction("Forget the list")
+            forget.triggered.connect(prefs.forget_recent)
+        else:
+            none = self.recent_menu.addAction("Nothing opened yet")
+            none.setEnabled(False)
+
+    # -- dock layouts -----------------------------------------------------------
+    def _fill_layout_menu(self) -> None:
+        self.layout_menu.clear()
+        save = self.layout_menu.addAction("&Save this layout…")
+        save.triggered.connect(self._save_layout)
+        reset = self.layout_menu.addAction("&Reset the layout")
+        reset.triggered.connect(self._reset_layout)
+        self.layout_menu.addSeparator()
+        self.layout_menu.addAction(self.messages_dock.toggleViewAction())
+        names = prefs.layouts()
+        if names:
+            self.layout_menu.addSeparator()
+            for name in sorted(names):
+                act = self.layout_menu.addAction(name)
+                act.triggered.connect(lambda _=False, n=name: self.apply_layout(n))
+            self.layout_menu.addSeparator()
+            for name in sorted(names):
+                act = self.layout_menu.addAction(f"Forget {name}")
+                act.triggered.connect(lambda _=False, n=name: prefs.delete_layout(n))
+
+    def _save_layout(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Save this layout",
+                                        "A name for the docks and splitters "
+                                        "as they are now:")
+        if ok and name.strip():
+            self.save_layout(name.strip())
+
+    def save_layout(self, name: str) -> None:
+        prefs.save_layout(name, bytes(self.saveState().toBase64()).decode())
+        self.statusBar().showMessage(f"Layout saved as {name}", 5000)
+
+    def apply_layout(self, name: str) -> bool:
+        from PySide6.QtCore import QByteArray
+        state = prefs.layouts().get(name)
+        if not state:
+            return False
+        ok = self.restoreState(QByteArray.fromBase64(state.encode()))
+        self.statusBar().showMessage(f"Layout {name}", 4000)
+        return bool(ok)
+
+    def _reset_layout(self) -> None:
+        if getattr(self, "_initial_state", None) is not None:
+            self.restoreState(self._initial_state)
+        for dock in self.findChildren(QDockWidget):
+            dock.setFloating(False)
+            dock.show()
+
+    # -- the message log --------------------------------------------------------
+    def _log_message(self, text: str) -> None:
+        if not text:
+            return
+        import datetime as _dt
+        stamp = _dt.datetime.now().strftime("%H:%M:%S")
+        self._messages.append((stamp, text))
+        del self._messages[:-400]
+        log = getattr(self, "messages_text", None)
+        if log is not None:
+            log.appendPlainText(f"{stamp}  {text}")
+
+    def messages(self) -> list[tuple[str, str]]:
+        return list(self._messages)
+
+    def _report_problem(self) -> None:
+        """Version, renderer and the last messages, on the clipboard."""
+        from ..core.version_info import provenance_lines
+        lines = list(provenance_lines())
+        caps = getattr(self.view, "caps", None)
+        if caps is not None:
+            lines.append(f"renderer: {getattr(caps, 'description', caps)}")
+        lines.append("")
+        lines.append("last messages:")
+        lines += [f"  {s}  {t}" for s, t in self._messages[-30:]]
+        text = "\n".join(lines)
+        QApplication.clipboard().setText(text)
+        QMessageBox.information(
+            self, "Report a problem",
+            "The version, the renderer and the last status messages are on "
+            "the clipboard. Paste them into an issue at "
+            "github.com/sams808/FACET or into an email, with what you did "
+            "and what you expected.")
+
+    def _show_changelog(self) -> None:
+        from .help import ManualDialog
+        from ..core import examples as examples_mod
+        text = ""
+        for candidate in (examples_mod.folder().parent / "CHANGELOG.md",
+                          Path(__file__).resolve().parents[1] / "data" / "CHANGELOG.md"):
+            if candidate.exists():
+                text = candidate.read_text(encoding="utf-8")
+                break
+        if not text:
+            QMessageBox.information(self, "What changed",
+                                    "This build carries no change log.")
+            return
+        dialog = getattr(self, "_changelog_dialog", None)
+        if dialog is None:
+            from PySide6.QtWidgets import QTextBrowser
+            dialog = QDialog(self)
+            dialog.setWindowTitle("What changed")
+            dialog.resize(720, 560)
+            lay = QVBoxLayout(dialog)
+            browser = QTextBrowser()
+            browser.setOpenExternalLinks(True)
+            lay.addWidget(browser)
+            dialog.browser = browser
+            self._changelog_dialog = dialog
+        dialog.browser.setMarkdown(text)
+        dialog.show()
+        dialog.raise_()
+
+    def _offer_tour(self) -> None:
+        prefs.set("tour_offered", True)
+        answer = QMessageBox.question(
+            self, "First run",
+            "Six short tutorials walk the bundled structures. Open Tutorial "
+            "1, a coordination number you can trust, now?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            self._show_manual("tut-quartz")
+
+    def _push_threshold_history(self) -> None:
+        self.history.push(f"moved the threshold to {self.project.v_bond:.4f}",
+                          self._snapshot())
+        self._refresh_history_actions()
 
     # -- bond-valence parameters -------------------------------------------
     def _load_parameters(self) -> None:
