@@ -348,7 +348,7 @@ it.</p>
 bonds from 2.158 to 2.606 &Aring;.</li>
 <li>Switch to BiPO<sub>4</sub> and select <b>Bi</b>: coordination number
 <b>8</b>, &phi; <b>0.128</b>, bonds from 2.311 to 2.753 &Aring;. The sum is
-much the same, 3.05 against 3.24.</li>
+much the same, 3.04 against 3.24.</li>
 <li>Turn on <i>View &rsaquo; Show bond-valence vector</i> and switch between
 the two structures. The lobe is long in eulytite and short in the
 phosphate.</li>

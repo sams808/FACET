@@ -188,6 +188,41 @@ THIRD_PARTY_NOTICES.md.
     log(f"licences -> {folder.relative_to(ROOT)}")
 
 
+def write_build_record(target: Path) -> Path:
+    """``licenses/BUILD.txt``: the FACET version and commit, the Python and
+    platform, the date, and every package installed in the build
+    environment with its version, so a build can be rebuilt from its
+    record."""
+    import platform
+    from datetime import datetime
+    from importlib import metadata
+
+    folder = target / "licenses"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                                capture_output=True, text=True, check=False
+                                ).stdout.strip() or "not a git checkout"
+    except OSError:
+        commit = "git not available"
+    packages = sorted({(d.metadata["Name"] or "?", d.version)
+                       for d in metadata.distributions()},
+                      key=lambda nv: nv[0].lower())
+    lines = [f"{NAME} {__version__} -- build record",
+             "=" * 40,
+             f"commit    {commit}",
+             f"built     {datetime.now().isoformat(timespec='seconds')}",
+             f"python    {sys.version.split()[0]} ({platform.python_implementation()})",
+             f"platform  {platform.platform()}",
+             f"machine   {platform.machine()}",
+             "",
+             "Packages installed in the build environment (name==version):"]
+    lines += [f"{name}=={version}" for name, version in packages]
+    out = folder / "BUILD.txt"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out
+
+
 def build_app(clean: bool = True) -> Path:
     if clean:
         for path in (APP_DIR, BUILD):
@@ -237,6 +272,7 @@ def build_app(clean: bool = True) -> Path:
         raise SystemExit(f"PyInstaller failed with {result.returncode}")
 
     write_licences(APP_DIR)
+    write_build_record(APP_DIR)
     prune_bundle(APP_DIR)
     size = sum(f.stat().st_size for f in APP_DIR.rglob("*") if f.is_file())
     log(f"application -> {APP_DIR.relative_to(ROOT)}  ({size / 1e6:.0f} MB)")

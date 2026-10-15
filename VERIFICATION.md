@@ -263,6 +263,30 @@ quantity anyone would read off such a curve.
 
 ---
 
+## Stated tolerances
+
+The precision the permanent tests check the numbers to, so a reader knows
+what "agrees" means in this document:
+
+| Quantity | Tolerance | Where it applies |
+|---|---|---|
+| Bond-valence sum against the sum of its counted contacts | 1e-12 v.u. (absolute) | `tests/test_bulk.py`, `facet.check` |
+| Bulk engine against the per-site engine (CN, BVS, phi, BVV) | 1e-12 relative, exact on CN | `tests/test_bulk_equivalence.py` |
+| Distances and vectors against gemmi | 1e-9 Å | `tests/test_expansion_verification.py` |
+| Angles | 1e-6 degrees | `tests/test_view_batch.py`, `tests/test_geometry_verification.py` |
+| Fractional / Cartesian round trips, cell geometry | 1e-12 | `tests/test_geometry_verification.py` |
+| Numbers the tutorials state (BVS, phi, distances) | 5e-4 (half a unit in the third decimal) | `tests/test_verification_batch.py`, `facet.check` |
+| Plateau widths the tutorials state | 5e-3 decades | the same |
+| PDF against the closed form | 1e-6 of the peak | `tests/test_pdf.py` |
+| EXAFS against FEFF's own output | stated per test | `tests/test_exafs.py` |
+
+`py -3.11 -m facet.check` recomputes every number the documentation states
+for the bundled examples (`facet/data/examples/REFERENCE.json`) on the
+machine it runs on and reports each against these tolerances; it exits 0
+only when every one is within. `py -3.11 -m facet.check --parity TABLE
+TRAJECTORY` lays another code's per-atom values for one frame beside
+FACET's, descriptor by descriptor, without a verdict.
+
 ## Reproducing it
 
 The permanent tests live in `tests/`. Those that correspond

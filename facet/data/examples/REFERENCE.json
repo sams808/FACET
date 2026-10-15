@@ -1,0 +1,233 @@
+{
+ "_about": "Reference numbers of the bundled examples at the default thresholds (v_bond 0.075, v_list 0.02 v.u., Brese & O'Keeffe 1991 parameters), as the tutorials state them. tests/test_examples_reference.py recomputes every number and py -3.11 -m facet.check does the same on a user's machine.",
+ "v_bond_vu": 0.075,
+ "v_list_vu": 0.02,
+ "parameter_set": "Brese & O'Keeffe 1991",
+ "examples": {
+  "quartz_SiO2_cod9013321.cif": {
+   "title": "Quartz",
+   "sites": {
+    "Si": {
+     "element": "Si",
+     "oxidation_state": 4,
+     "oxidation_source": "bond valence",
+     "cn": 4,
+     "bvs_vu": 4.177,
+     "phi": 0.007,
+     "plateau_decades": 1.71,
+     "plateau_from_vu": 0.02,
+     "plateau_to_vu": 1.0353,
+     "bond_distances_ang": [
+      1.605,
+      1.605,
+      1.611,
+      1.611
+     ],
+     "estimated_parameters": false
+    }
+   }
+  },
+  "eulytite_Bi4SiO4_3_cod9012894.cif": {
+   "title": "Eulytite",
+   "sites": {
+    "Bi": {
+     "element": "Bi",
+     "oxidation_state": 3,
+     "oxidation_source": "bond valence",
+     "cn": 6,
+     "bvs_vu": 3.24,
+     "phi": 0.419,
+     "plateau_decades": 1.09,
+     "plateau_from_vu": 0.0201,
+     "plateau_to_vu": 0.248,
+     "bond_distances_ang": [
+      2.158,
+      2.158,
+      2.158,
+      2.606,
+      2.606,
+      2.606
+     ],
+     "estimated_parameters": false
+    },
+    "Si": {
+     "element": "Si",
+     "oxidation_state": 4,
+     "oxidation_source": "bond valence",
+     "cn": 4,
+     "bvs_vu": 4.014,
+     "phi": 0.0,
+     "plateau_decades": 1.7,
+     "plateau_from_vu": 0.02,
+     "plateau_to_vu": 1.0035,
+     "bond_distances_ang": [
+      1.623,
+      1.623,
+      1.623,
+      1.623
+     ],
+     "estimated_parameters": false
+    }
+   }
+  },
+  "senarmontite_Sb2O3_cod9009747.cif": {
+   "title": "Senarmontite",
+   "sites": {
+    "Sb": {
+     "element": "Sb",
+     "oxidation_state": 3,
+     "oxidation_source": "bond valence",
+     "cn": 6,
+     "bvs_vu": 3.203,
+     "phi": 0.46,
+     "plateau_decades": 0.61,
+     "plateau_from_vu": 0.02,
+     "plateau_to_vu": 0.0811,
+     "bond_distances_ang": [
+      1.978,
+      1.978,
+      1.978,
+      2.902,
+      2.902,
+      2.902
+     ],
+     "estimated_parameters": false
+    }
+   }
+  },
+  "valentinite_Sb2O3_cod9007587.cif": {
+   "title": "Valentinite",
+   "sites": {
+    "Sb": {
+     "element": "Sb",
+     "oxidation_state": 3,
+     "oxidation_source": "bond valence",
+     "cn": 5,
+     "bvs_vu": 3.15,
+     "phi": 0.487,
+     "plateau_decades": 0.94,
+     "plateau_from_vu": 0.02,
+     "plateau_to_vu": 0.1747,
+     "bond_distances_ang": [
+      1.977,
+      2.019,
+      2.022,
+      2.519,
+      2.619
+     ],
+     "estimated_parameters": false
+    }
+   }
+  },
+  "cryolite_Na3AlF6_cod9004097.cif": {
+   "title": "Cryolite",
+   "sites": {
+    "Al": {
+     "element": "Al",
+     "oxidation_state": 3,
+     "oxidation_source": "bond valence",
+     "cn": 6,
+     "bvs_vu": 2.95,
+     "phi": 0.0,
+     "plateau_decades": 1.38,
+     "plateau_from_vu": 0.02,
+     "plateau_to_vu": 0.4842,
+     "bond_distances_ang": [
+      1.805,
+      1.805,
+      1.805,
+      1.805,
+      1.813,
+      1.813
+     ],
+     "estimated_parameters": false
+    },
+    "Na1": {
+     "element": "Na",
+     "oxidation_state": 1,
+     "oxidation_source": "bond valence",
+     "cn": 6,
+     "bvs_vu": 1.253,
+     "phi": 0.0,
+     "plateau_decades": 0.99,
+     "plateau_from_vu": 0.02,
+     "plateau_to_vu": 0.1949,
+     "bond_distances_ang": [
+      2.227,
+      2.227,
+      2.263,
+      2.263,
+      2.282,
+      2.282
+     ],
+     "estimated_parameters": false
+    },
+    "Na2": {
+     "element": "Na",
+     "oxidation_state": 1,
+     "oxidation_source": "bond valence",
+     "cn": 6,
+     "bvs_vu": 0.877,
+     "phi": 0.044,
+     "plateau_decades": 0.1,
+     "plateau_from_vu": 0.0625,
+     "plateau_to_vu": 0.0779,
+     "bond_distances_ang": [
+      2.294,
+      2.305,
+      2.319,
+      2.353,
+      2.568,
+      2.621
+     ],
+     "estimated_parameters": false
+    }
+   }
+  },
+  "bismuth_phosphate_BiPO4_cod9008088.cif": {
+   "title": "Bismuth phosphate",
+   "sites": {
+    "Bi": {
+     "element": "Bi",
+     "oxidation_state": 3,
+     "oxidation_source": "bond valence",
+     "cn": 8,
+     "bvs_vu": 3.045,
+     "phi": 0.128,
+     "plateau_decades": 0.92,
+     "plateau_from_vu": 0.02,
+     "plateau_to_vu": 0.1666,
+     "bond_distances_ang": [
+      2.311,
+      2.311,
+      2.329,
+      2.329,
+      2.559,
+      2.559,
+      2.753,
+      2.753
+     ],
+     "estimated_parameters": false
+    },
+    "P": {
+     "element": "P",
+     "oxidation_state": 5,
+     "oxidation_source": "bond valence",
+     "cn": 4,
+     "bvs_vu": 4.509,
+     "phi": 0.001,
+     "plateau_decades": 1.75,
+     "plateau_from_vu": 0.02,
+     "plateau_to_vu": 1.127,
+     "bond_distances_ang": [
+      1.56,
+      1.56,
+      1.56,
+      1.56
+     ],
+     "estimated_parameters": false
+    }
+   }
+  }
+ }
+}

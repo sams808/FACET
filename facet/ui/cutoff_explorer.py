@@ -402,6 +402,14 @@ class CutoffExplorer(QWidget):
     def _shells(self) -> list[Shell]:
         return shells_mod.shell_curve(self.result, self.axis)
 
+    def estimated_contacts(self) -> set[int]:
+        """Indices into the site's contacts whose bond-valence parameter is
+        estimated from the O'Keeffe-Brese expression rather than fitted."""
+        if self.result is None:
+            return set()
+        return {i for i, c in enumerate(self.result.contacts)
+                if c.has_valence and c.param is not None and not c.param.fitted}
+
     def _dominant_param(self):
         """The bond-valence parameter to read the distance axis against."""
         if self.result is None:
@@ -808,14 +816,26 @@ class CutoffExplorer(QWidget):
         p.drawLine(QPointF(self._rail.left(), self._rail.center().y()),
                    QPointF(self._rail.right(), self._rail.center().y()))
 
+        estimated = self.estimated_contacts()
         for s in self._shells():
             x = self._shell_x(s)
             bonded = s.valence >= self.v_bond
             h = self._rail.height() * (0.95 if bonded else 0.55)
             col = self._ink if bonded else self._muted
-            p.setPen(QPen(col, 2.2 if bonded else 1.2))
+            pen = QPen(col, 2.2 if bonded else 1.2)
+            if s.index in estimated:
+                # an estimated parameter: the tick is dashed, and an "est."
+                # sits above it, the mark the Site tab and the report use
+                pen.setStyle(Qt.DashLine)
+            p.setPen(pen)
             p.drawLine(QPointF(x, self._rail.center().y() - h / 2),
                        QPointF(x, self._rail.center().y() + h / 2))
+            if s.index in estimated:
+                fnt = self._small_font()
+                p.setFont(fnt)
+                fm = QFontMetricsF(fnt)
+                p.drawText(QRectF(x - 14, self._rail.top() - fm.height() - 1,
+                                  28, fm.height()), Qt.AlignHCenter, "est.")
 
     def _paint_bars(self, p: QPainter) -> None:
         """One bar per contact under the rail: its own contribution to the

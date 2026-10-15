@@ -170,6 +170,9 @@ class Report:
                         "b": _num(c.param.b) if c.param else None,
                         "parameter_fitted": c.param.fitted if c.param else None,
                         "parameter_source": c.param.source if c.param else "",
+                        "parameter_row": c.param.label if c.param else "",
+                        "estimated": ("" if (c.param is None or c.param.fitted)
+                                      else "est."),
                     })
         return rows
 
