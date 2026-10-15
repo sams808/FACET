@@ -540,6 +540,12 @@ and the sum below on their own axes; <b>one bar per contact</b> under the
 rail, each contact's own contribution with the running sum above it; a
 <b>running-sum column</b> in the Site tab's contact table; and a shortcut to
 the bond-label mode that writes on each drawn bond its share of the sum.</p>
+<p><b>Thin sticks for the contacts under the threshold</b>, in the same menu, is on by
+default: the contacts between the listing threshold and the bond threshold
+are drawn as thin faded sticks, with no share of the sum and no label, so
+the picture shows what the cut left out as well as what it counted. Off
+draws only the bonds the threshold counts; a drag of the cursor then
+changes the set of sticks once it settles. The choice is remembered.</p>
 <p><b>Focus the 3D view within the cut</b>, in the same menu, dims every atom
 but the selected site and those within the distance the threshold
 corresponds to for it &mdash; the explorer's distance axis read at the cursor

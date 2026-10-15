@@ -149,6 +149,10 @@ class PreviewWindow(QMainWindow):
         # bonding rather than a picture of the crystallography, so they should
         # not be what a structure looks like when it is first opened.
         self.show_vectors = False
+        # the contacts between the listing and the bond threshold, drawn as
+        # thin faded sticks so the cut shows what it left out; off draws
+        # only the bonds the threshold counts
+        self.show_subthreshold = bool(prefs.get("show_subthreshold", True))
         # the sites whose lone-pair lobe is drawn on their own (right click)
         self.vector_sites: set[int] = set()
         # one drawn atom with its neighbour shells, or None for the whole
@@ -1155,6 +1159,14 @@ class PreviewWindow(QMainWindow):
             f"lone-pair lobes drawn on {len(self.vector_sites)} site(s)"
             if self.vector_sites else "no lone-pair lobe drawn", 6000)
 
+    def _on_show_subthreshold(self, on: bool) -> None:
+        self.show_subthreshold = bool(on)
+        prefs.set("show_subthreshold", self.show_subthreshold)
+        self._rebuild()
+        self.statusBar().showMessage(
+            "contacts below the threshold drawn thin" if on
+            else "only the bonds the threshold counts are drawn", 6000)
+
     def _on_show_vectors(self, on: bool) -> None:
         self.show_vectors = bool(on)
         self._rebuild()
@@ -1889,6 +1901,10 @@ class PreviewWindow(QMainWindow):
 
         self.scene = (scenes[0] if len(scenes) == 1
                       else merge_scenes(scenes, [e.offset for e in entries]))
+        if not self.show_subthreshold and self.scene.n_bonds:
+            from ..gl.scene import keep_bonds
+            keep_bonds(self.scene, np.asarray(self.scene.bond_valence, float)
+                       >= float(self.project.v_bond))
         if self._isolated is not None:
             from ..gl.scene import isolate_atoms, neighbour_shells_of
             owner, atom, shells = self._isolated
@@ -2226,6 +2242,16 @@ class PreviewWindow(QMainWindow):
             act.toggled.connect(lambda on, n=name: self.explorer.set_option(n, on))
             m.addAction(act)
             self.explorer_option_actions[name] = act
+        self.subthreshold_action = QAction(
+            "&Thin sticks for the contacts under the threshold", self)
+        self.subthreshold_action.setCheckable(True)
+        self.subthreshold_action.setChecked(self.show_subthreshold)
+        self.subthreshold_action.setToolTip(
+            "The contacts between the listing threshold and the bond "
+            "threshold, as thin faded sticks with no share of the sum: what "
+            "the cut left out. Off draws only the bonds it counts.")
+        self.subthreshold_action.toggled.connect(self._on_show_subthreshold)
+        m.addAction(self.subthreshold_action)
         m.addSeparator()
 
         self.focus_action = QAction("F&ocus the 3D view within the cut", self)
@@ -2587,7 +2613,7 @@ class PreviewWindow(QMainWindow):
         per_site = (theme_mod.ColorMode.BVS, theme_mod.ColorMode.COORDINATION,
                     theme_mod.ColorMode.PHI,
                     theme_mod.ColorMode.VALENCE_DISCREPANCY)
-        if mode in per_site:
+        if mode in per_site or not self.show_subthreshold:
             self._recolour_timer.start()
         self._threshold_history_timer.start()
 

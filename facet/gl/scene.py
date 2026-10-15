@@ -614,6 +614,25 @@ def _build_planes(structure: Structure, scene: Scene, lattice_planes) -> None:
             scene.add_plane(vertices, normals, plane.color, plane.alpha, edges)
 
 
+_PER_BOND_ARRAYS = ("bond_a", "bond_b", "bond_radius", "bond_color_a",
+                    "bond_color_b", "bond_valence", "bond_distance",
+                    "bond_atoms", "bond_cation", "bond_occupancy",
+                    "_bond_base_a", "_bond_base_b")
+
+
+def keep_bonds(scene: Scene, keep: np.ndarray) -> None:
+    """Drop every drawn bond outside ``keep`` (one flag per bond) from the
+    scene's arrays; the atoms stay."""
+    keep = np.asarray(keep, bool)
+    if scene.n_bonds == 0 or keep.all():
+        return
+    for name in _PER_BOND_ARRAYS:
+        value = getattr(scene, name, None)
+        if value is not None and len(value) == len(keep):
+            setattr(scene, name, np.asarray(value)[keep])
+    scene.rebuild_overlays()
+
+
 def neighbour_shells_of(scene: Scene, atom: int, shells: int) -> np.ndarray:
     """Which drawn atoms lie within ``shells`` bonds of drawn atom ``atom``
     (0: the atom alone), over the bonds above the scene's threshold and

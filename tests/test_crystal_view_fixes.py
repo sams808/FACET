@@ -122,3 +122,29 @@ def test_a_click_on_a_stick_wins_over_the_atom_behind_it(qapp, window):
     # on a pick, so the selection is read through the window)
     assert picked == []
     assert window.site_index == expected_site
+
+
+def test_the_contacts_below_the_threshold_can_be_left_undrawn(qapp, window):
+    # eulytite's Bi: three contacts near 0.4 v.u. and three near 0.12, so a
+    # threshold of 0.3 leaves listed contacts below the cut
+    window.load(str(EULYTITE))
+    window._on_threshold(0.3)
+    window._recolour_timer.timeout.emit()
+    qapp.processEvents()
+    s = window.view.scene
+    v = np.asarray(s.bond_valence)
+    assert (v < s.v_bond).any() and (v >= s.v_bond).any()
+    n_all = s.n_bonds
+    assert window.subthreshold_action.isChecked()
+    window.subthreshold_action.setChecked(False)
+    s = window.view.scene
+    assert s.n_bonds == int((v >= window.project.v_bond).sum()) < n_all
+    assert (np.asarray(s.bond_valence) >= s.v_bond).all()
+    assert len(s.bond_atoms) == s.n_bonds
+    assert prefs.get("show_subthreshold") is False
+    # a threshold move with the contacts hidden rebuilds once the drag settles
+    window._on_threshold(1.5)
+    window._recolour_timer.timeout.emit()
+    assert window.view.scene.n_bonds == 0
+    window.subthreshold_action.setChecked(True)
+    assert window.view.scene.n_bonds == n_all
