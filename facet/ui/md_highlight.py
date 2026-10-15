@@ -66,9 +66,12 @@ __all__ = [
     "CHANNEL_COLOUR",
 ]
 
-DESCRIPTORS = ("CN", "former CN", "BVS", "phi", "Qn")
+DESCRIPTORS = ("CN", "former CN", "BVS", "phi", "Qn", "mean bond angle",
+               "tetrahedral deviation", "smallest ring",
+               "distance to channel")
 SENSES = ("≤", "≥", "=")
-COLOUR_MODES = ("element", "bond-valence sum", "coordination number",
+COLOUR_MODES = ("element", "shell from the atom",
+                "bond-valence sum", "coordination number",
                 "stereoactivity (phi)", "Qn", "modifier-rich O",
                 "channel membership")
 CHANNEL_MODES = ("by charge", "by modifier density", "by voids")
@@ -218,6 +221,13 @@ class FrameData:
     qn: np.ndarray | None = None
     modifier_count: np.ndarray | None = None
     params: object = None
+    # set from outside when known: the smallest ring each atom is in (from
+    # a rings analysis), the distance of each atom to the nearest channel
+    # grid point (from a channels rule), and the atom shells are read from
+    ring_size: np.ndarray | None = None
+    channel_distance: np.ndarray | None = None
+    shell_centre: int | None = None
+    _angles: tuple | None = field(default=None, repr=False)
     _spheres: object = field(default=None, repr=False)
     _landscapes: dict = field(default_factory=dict, repr=False)
     _void_regions: dict = field(default_factory=dict, repr=False)
@@ -317,6 +327,19 @@ class FrameData:
         (ValueError when it needs the formers and there are none)."""
         table = {"CN": self.cn, "former CN": self.former_cn,
                  "BVS": self.bvs, "phi": self.phi, "Qn": self.qn}
+        if name in ("mean bond angle", "tetrahedral deviation"):
+            mean, dev = self.angle_stats()
+            return mean if name == "mean bond angle" else dev
+        if name == "smallest ring":
+            if self.ring_size is None:
+                raise ValueError("smallest ring needs a rings analysis run "
+                                 "on this model (Setup > Rings)")
+            return np.asarray(self.ring_size, np.float64)
+        if name == "distance to channel":
+            if self.channel_distance is None:
+                raise ValueError("distance to channel needs a channels rule "
+                                 "by charge that is on")
+            return np.asarray(self.channel_distance, np.float64)
         if name not in table:
             raise ValueError(f"descriptor {name!r}: one of {DESCRIPTORS}")
         values = table[name]
@@ -324,6 +347,66 @@ class FrameData:
             raise ValueError(f"{name} needs the network formers (none are "
                              "named)")
         return np.asarray(values, np.float64)
+
+    def angle_stats(self) -> tuple[np.ndarray, np.ndarray]:
+        """Per atom, the mean angle between its bonds and the mean
+        deviation from the tetrahedral angle, in degrees; NaN with fewer
+        than two bonds. From the bonds the threshold counts."""
+        if self._angles is not None:
+            return self._angles
+        n = self.n_atoms
+        mean = np.full(n, np.nan)
+        dev = np.full(n, np.nan)
+        bonds = self.bonds
+        cation = np.asarray(bonds.cation, np.int64)
+        anion = np.asarray(bonds.anion, np.int64)
+        vec = np.asarray(bonds.vec_ang, np.float64)
+        # every bond seen from both ends
+        centre = np.concatenate([cation, anion])
+        arms = np.concatenate([vec, -vec])
+        order = np.argsort(centre, kind="stable")
+        centre, arms = centre[order], arms[order]
+        starts = np.searchsorted(centre, np.arange(n + 1))
+        for row in range(n):
+            lo, hi = starts[row], starts[row + 1]
+            if hi - lo < 2:
+                continue
+            v = arms[lo:hi]
+            norms = np.linalg.norm(v, axis=1)
+            ok = norms > 0
+            v, norms = v[ok], norms[ok]
+            if len(v) < 2:
+                continue
+            unit = v / norms[:, None]
+            cos = np.clip(unit @ unit.T, -1.0, 1.0)
+            iu = np.triu_indices(len(v), 1)
+            angles = np.degrees(np.arccos(cos[iu]))
+            mean[row] = angles.mean()
+            dev[row] = np.abs(angles - 109.4712206).mean()
+        self._angles = (mean, dev)
+        return self._angles
+
+    def neighbour_count(self, element: str) -> np.ndarray:
+        """Per atom, how many of its bonded neighbours are ``element``
+        ('any': all of them)."""
+        bonds = self.bonds
+        cation = np.asarray(bonds.cation, np.int64)
+        anion = np.asarray(bonds.anion, np.int64)
+        n = self.n_atoms
+        if element == "any":
+            return (np.bincount(cation, minlength=n)
+                    + np.bincount(anion, minlength=n)).astype(np.float64)
+        sym = self.elements
+        to_a = np.bincount(cation[sym[anion] == element], minlength=n)
+        to_c = np.bincount(anion[sym[cation] == element], minlength=n)
+        return (to_a + to_c).astype(np.float64)
+
+    def shells_from(self, centre: int, depth: int = 3) -> np.ndarray:
+        """The shell of each atom about ``centre`` (0 at the centre, -1
+        beyond ``depth``), over the bonds the threshold counts."""
+        from ..core.md_environment import neighbour_shells
+        _keep, shell = neighbour_shells(self.bonds, self.n_atoms, centre, depth)
+        return shell
 
     def landscape(self, probe: str, grid_spacing_ang: float,
                   r_cut_ang: float, cancelled=None):
@@ -519,6 +602,9 @@ class Rule:
     descriptor: str = "CN"
     sense: str = "≤"
     value: float = 0.0
+    neighbour: str = "any"          # neighbours rule: the element counted
+    rows: tuple = ()                # rows rule: the frame rows kept
+    rows_label: str = ""            # what those rows are ('Si Q3 environment 1')
     min_volume_ang3: float = 0.0
     min_elongation: float | None = None
     channel_by: str = "by charge"
@@ -545,6 +631,7 @@ class HighlightResult:
     n_regions: int = 0
     n_in_regions: int = 0
     problems: tuple[str, ...] = ()
+    keep: np.ndarray | None = None      # the atoms the rules kept, by row
 
 
 class ChannelUnavailable(ValueError):
@@ -815,6 +902,17 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
     note = ""
     if colour_by == "element":
         colours = base
+    elif colour_by == "shell from the atom":
+        centre = fd.shell_centre
+        if centre is None:
+            note = ("shell from the atom needs an atom under investigation "
+                    "(click one in the frame)")
+            colours = base
+        else:
+            shell = fd.shells_from(int(centre), 3)
+            rows = np.nonzero(shell >= 0)[0]
+            by_atom = {int(i): float(shell[i]) for i in rows}
+            colours = _ramp_over(by_atom, 0.0, 3.0, base, sites)
     elif colour_by in ("bond-valence sum", "coordination number",
                        "stereoactivity (phi)"):
         # the crystal window's modes, as facet.ui.md_scene._value_colours
@@ -865,7 +963,15 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
 # ---------------------------------------------------------------------------
 
 def _keep_of_rule(fd: FrameData, rule: Rule) -> np.ndarray:
-    values = fd.descriptor(rule.descriptor)
+    if rule.kind == "rows":
+        keep = np.zeros(fd.n_atoms, bool)
+        rows = np.asarray([int(r) for r in rule.rows], int)
+        keep[rows[(rows >= 0) & (rows < fd.n_atoms)]] = True
+        return keep
+    if rule.kind == "neighbours":
+        values = fd.neighbour_count(rule.neighbour)
+    else:
+        values = fd.descriptor(rule.descriptor)
     with np.errstate(invalid="ignore"):
         if rule.sense == "=":
             # equal to, for the integer descriptors (CN, former CN, Qn): a
@@ -992,6 +1098,45 @@ def _drop_overlays(scene, labels: Sequence[str]) -> None:
                             if getattr(m, "label", "") not in labels]
 
 
+def _channel_distance(fd: FrameData) -> np.ndarray | None:
+    """Each atom's distance to the nearest grid point of an accessible
+    region found for this frame (the channels rules by charge computed
+    them); None when none was computed. The atoms are wrapped into the box
+    and the grid is not imaged beyond it, so a distance across the box edge
+    reads to the nearer copy inside only."""
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:
+        return None
+    points = []
+    for key, regions in list(fd._regions.items()):
+        landscape = fd._landscapes.get(key[:3]) if isinstance(key, tuple) else None
+        if landscape is None:
+            # the landscape is cached under the first three parts of the key
+            for lk, lv in fd._landscapes.items():
+                if isinstance(key, tuple) and isinstance(lk, tuple) \
+                        and lk == key[:len(lk)]:
+                    landscape = lv
+                    break
+        if landscape is None:
+            continue
+        grid = np.asarray(regions.label_grid)
+        idx = np.argwhere(grid >= 0)
+        if not len(idx):
+            continue
+        spacing = np.asarray(landscape.spacing_ang, float)
+        origin = np.asarray(landscape.origin_ang, float)
+        points.append(origin[None, :] + idx * spacing[None, :])
+    if not points:
+        return None
+    cloud = np.vstack(points)
+    frac = np.asarray(fd.frame.frac, float) % 1.0
+    cart = frac @ np.asarray(fd.frame.box_ang, float) + np.asarray(
+        getattr(fd.frame, "origin_ang", np.zeros(3)), float)[None, :]
+    d, _ = cKDTree(cloud).query(cart)
+    return np.asarray(d, np.float64)
+
+
 def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
                 dim_rest: bool = True, colour_by: str = "element",
                 theme=None) -> HighlightResult:
@@ -1042,7 +1187,12 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
 
     keep = None
     n_matching = n
-    for rule in [r for r in active if r.kind == "show-only"]:
+    wants_channel_distance = any(
+        r.kind == "show-only" and r.descriptor == "distance to channel"
+        for r in active)
+    if wants_channel_distance:
+        fd.channel_distance = _channel_distance(fd)
+    for rule in [r for r in active if r.kind in ("show-only", "neighbours", "rows")]:
         try:
             this = _keep_of_rule(fd, rule)
         except ValueError as error:
@@ -1050,9 +1200,26 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
             continue
         keep = this if keep is None else keep & this
         n_matching = int(keep.sum())
-        parts.append(f"{_thousands(n_matching)} of {_thousands(n)} atoms "
-                     f"match ({rule.element}, {rule.descriptor} {rule.sense} "
-                     f"{rule.value:g})")
+        if rule.kind == "rows":
+            parts.append(f"{_thousands(n_matching)} of {_thousands(n)} atoms "
+                         f"match ({rule.rows_label or 'the rows given'})")
+        elif rule.kind == "neighbours":
+            parts.append(f"{_thousands(n_matching)} of {_thousands(n)} atoms "
+                         f"match ({rule.element} with bonds to "
+                         f"{rule.neighbour} {rule.sense} {rule.value:g})")
+        else:
+            parts.append(f"{_thousands(n_matching)} of {_thousands(n)} atoms "
+                         f"match ({rule.element}, {rule.descriptor} {rule.sense} "
+                         f"{rule.value:g})")
+    if keep is not None:
+        # the count by element, so '52 atoms' reads as '12 Si, 40 O'
+        by_element = []
+        for symbol in fd.species:
+            count = int((keep & (fd.elements == symbol)).sum())
+            if count:
+                by_element.append(f"{count} {symbol}")
+        if by_element:
+            parts.append("matched: " + ", ".join(by_element))
     if channel_keep is not None:
         keep = channel_keep if keep is None else keep & channel_keep
         parts.append(f"{_thousands(int(channel_keep.sum()))} atoms in "
@@ -1105,7 +1272,7 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
         parts.append("not drawn: " + "; ".join(problems))
     n_in = int(channel_keep.sum()) if channel_keep is not None else 0
     return HighlightResult(n_matching, n_spheres, " · ".join(parts),
-                           n_regions, n_in, tuple(problems))
+                           n_regions, n_in, tuple(problems), keep)
 
 
 # ---------------------------------------------------------------------------
@@ -1210,6 +1377,12 @@ class ShowOnlyRow(RuleRow):
             "the formers only (an O with former CN 1 is non-bridging); BVS "
             "and phi at v_bond; Qn: a former's bonds to bridging anions. "
             "former CN and Qn need the formers named in Setup.")
+        # the descriptor list grew long names; the box shows the one chosen
+        # and opens to the rest, rather than widening the whole column
+        self.descriptor.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.descriptor.setMinimumContentsLength(6)
+        self.descriptor.setMinimumWidth(0)
         self.sense = _combo(SENSES, 0)
         self.value = _spin(1, 0, 100, 1, 0)
         self.value.setFixedWidth(64)
@@ -1261,6 +1434,72 @@ class ShowOnlyRow(RuleRow):
                     descriptor=self.descriptor.currentText(),
                     sense=self.sense.currentText(),
                     value=float(self.value.value()))
+
+
+class NeighboursRow(RuleRow):
+    """Show only [element] bonded to [n] [neighbour element]: 'O bonded to
+    exactly one Si and one Na' is two of these rules."""
+
+    kind = "neighbours"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.element = _combo(["any"], 0)
+        self.neighbour = _combo(["any"], 0)
+        self.sense = _combo(SENSES, 2)
+        self.value = _spin(1, 0, 100, 1, 0)
+        self.value.setFixedWidth(64)
+        self._add("Show only", self.element, "with bonds to", self.neighbour,
+                  self.sense, self.value)
+        for w in (self.element, self.neighbour, self.sense):
+            w.currentIndexChanged.connect(lambda _i: self.changed.emit())
+        self.value.valueChanged.connect(lambda _v: self.changed.emit())
+        self._finish()
+
+    def set_frame_data(self, fd: FrameData | None) -> None:
+        for box in (self.element, self.neighbour):
+            current = box.currentText()
+            box.blockSignals(True)
+            box.clear()
+            box.addItems(["any"] + (list(fd.species) if fd is not None else []))
+            i = box.findText(current)
+            box.setCurrentIndex(i if i >= 0 else 0)
+            box.blockSignals(False)
+            chrome.fit_combo(box)
+
+    def rule(self) -> Rule:
+        return Rule(kind="neighbours", enabled=self.tick.isChecked(),
+                    element=self.element.currentText(),
+                    neighbour=self.neighbour.currentText(),
+                    sense=self.sense.currentText(),
+                    value=float(self.value.value()))
+
+
+class RowsRow(RuleRow):
+    """Show only a given set of frame rows: a group from the Environments
+    tab, or any set handed over by name. The rows are not edited here."""
+
+    kind = "rows"
+
+    def __init__(self, parent=None, rows=(), label: str = ""):
+        super().__init__(parent)
+        self._rows = tuple(int(r) for r in rows)
+        self._label = label
+        self.caption = QLabel("")
+        self._add("Show only", self.caption)
+        self._finish()
+        self.set_rows(self._rows, label)
+
+    def set_rows(self, rows, label: str = "") -> None:
+        self._rows = tuple(int(r) for r in rows)
+        self._label = label
+        self.caption.setText(f"{label or 'the rows given'} "
+                             f"({len(self._rows)} atoms)")
+        self.changed.emit()
+
+    def rule(self) -> Rule:
+        return Rule(kind="rows", enabled=self.tick.isChecked(),
+                    rows=self._rows, rows_label=self._label)
 
 
 class VoidsRow(RuleRow):
@@ -1455,8 +1694,8 @@ class ChannelsRow(RuleRow):
                                           == "by charge" else None))
 
 
-_ROW_CLASSES = {"show-only": ShowOnlyRow, "voids": VoidsRow,
-                "channels": ChannelsRow}
+_ROW_CLASSES = {"show-only": ShowOnlyRow, "neighbours": NeighboursRow,
+                "rows": RowsRow, "voids": VoidsRow, "channels": ChannelsRow}
 
 
 def _rule_stylesheet(theme) -> str:
@@ -1522,12 +1761,21 @@ class HighlightPage(QWidget):
         self.add = QPushButton("Add rule…")
         menu = QMenu(self.add)
         for text, kind in (("Show only atoms where…", "show-only"),
+                           ("Show only atoms with bonds to…", "neighbours"),
                            ("Voids above a volume", "voids"),
                            ("Channels", "channels")):
             action = menu.addAction(text)
             action.triggered.connect(lambda _c=False, k=kind: self.add_rule(k))
         self.add.setMenu(menu)
         add_row.addWidget(self.add)
+        # rule sets, named and kept between runs
+        self.sets = QPushButton("Rule sets…")
+        self.sets.setToolTip("Save these rules under a name, or load a set "
+                             "saved before; kept between runs.")
+        sets_menu = QMenu(self.sets)
+        sets_menu.aboutToShow.connect(self._fill_sets_menu)
+        self.sets.setMenu(sets_menu)
+        add_row.addWidget(self.sets)
         add_row.addStretch(1)
         column.addLayout(add_row)
 
@@ -1536,8 +1784,7 @@ class HighlightPage(QWidget):
         # in words. The hidden checkbox is the same state, kept for the
         # callers and tests that read or set ``dim``.
         self.rest = QComboBox()
-        self.rest.addItems(["are dimmed, paler and smaller",
-                            "are left out of the scene entirely"])
+        self.rest.addItems(["dimmed", "left out"])
         self.rest.setToolTip("Dimmed keeps the context of the box around "
                              "what the rules pick; left out draws only the "
                              "atoms picked, and the bonds among them.")
@@ -1555,7 +1802,7 @@ class HighlightPage(QWidget):
                                "every figure and table exported while the "
                                "rules are on (the window reads this box).")
         then = QHBoxLayout()
-        then.addWidget(QLabel("Atoms outside the rules"))
+        then.addWidget(QLabel("Outside the rules:"))
         then.addWidget(self.rest)
         then.addWidget(self.export)
         then.addStretch(1)
@@ -1568,6 +1815,103 @@ class HighlightPage(QWidget):
         column.addStretch(1)
 
     # -- rows ------------------------------------------------------------------
+    # -- rule sets ---------------------------------------------------------
+    def to_dict(self) -> dict:
+        """The rules as plain data, for a saved set."""
+        from dataclasses import asdict
+        return {"rules": [asdict(r) for r in self.rules()],
+                "colour_by": self.colour_by(), "dim_rest": self.dim_rest()}
+
+    def from_dict(self, data: dict) -> None:
+        for row in list(self.rows):
+            self.remove_rule(row)
+        for spec in data.get("rules", []):
+            kind = spec.get("kind", "show-only")
+            if kind not in _ROW_CLASSES:
+                continue
+            row = self.add_rule(kind)
+            if kind == "rows" and hasattr(row, "set_rows"):
+                row.set_rows(spec.get("rows", ()), spec.get("rows_label", ""))
+            for name in ("element", "neighbour", "descriptor", "sense",
+                         "channel_by", "probe"):
+                box = getattr(row, name, None)
+                if box is not None and hasattr(box, "findText") and name in spec:
+                    i = box.findText(str(spec[name]))
+                    if i >= 0:
+                        box.setCurrentIndex(i)
+            for name in ("value", "min_volume_ang3", "threshold",
+                         "grid_spacing_ang", "r_cut_ang"):
+                spin = getattr(row, name, None)
+                if spin is not None and hasattr(spin, "setValue") and name in spec:
+                    try:
+                        spin.setValue(float(spec[name]))
+                    except (TypeError, ValueError):
+                        pass
+            if hasattr(row, "tick"):
+                row.tick.setChecked(bool(spec.get("enabled", True)))
+        if "colour_by" in data and hasattr(self, "colour"):
+            i = self.colour.findText(str(data["colour_by"]))
+            if i >= 0:
+                self.colour.setCurrentIndex(i)
+        if "dim_rest" in data:
+            self.dim.setChecked(bool(data["dim_rest"]))
+        self._changed()
+
+    def save_set(self, name: str) -> None:
+        from ..core import prefs
+        sets = prefs.get("rule_sets", {}) or {}
+        sets[name] = self.to_dict()
+        prefs.set("rule_sets", sets)
+
+    def load_set(self, name: str) -> bool:
+        from ..core import prefs
+        sets = prefs.get("rule_sets", {}) or {}
+        if name not in sets:
+            return False
+        self.from_dict(sets[name])
+        return True
+
+    def _fill_sets_menu(self) -> None:
+        from ..core import prefs
+        menu = self.sets.menu()
+        menu.clear()
+        save = menu.addAction("Save these rules as…")
+        save.triggered.connect(self._ask_save_set)
+        sets = prefs.get("rule_sets", {}) or {}
+        if sets:
+            menu.addSeparator()
+            for name in sorted(sets):
+                act = menu.addAction(name)
+                act.triggered.connect(lambda _=False, n=name: self.load_set(n))
+            menu.addSeparator()
+            for name in sorted(sets):
+                act = menu.addAction(f"Forget {name}")
+                act.triggered.connect(lambda _=False, n=name: self._forget_set(n))
+
+    def _ask_save_set(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Save these rules",
+                                        "A name for this rule set:")
+        if ok and name.strip():
+            self.save_set(name.strip())
+
+    def _forget_set(self, name: str) -> None:
+        from ..core import prefs
+        sets = prefs.get("rule_sets", {}) or {}
+        sets.pop(name, None)
+        prefs.set("rule_sets", sets)
+
+    def show_rows(self, rows, label: str) -> RuleRow:
+        """One rows rule for ``rows`` (replacing an earlier rows rule),
+        on, so the frame shows that set at once."""
+        for existing in list(self.rows):
+            if getattr(existing, "kind", "") == "rows":
+                self.remove_rule(existing)
+        row = self.add_rule("rows")
+        row.set_rows(rows, label)
+        row.tick.setChecked(True)
+        return row
+
     def add_rule(self, kind: str) -> RuleRow:
         row = _ROW_CLASSES[kind]()
         row.changed.connect(self._changed)

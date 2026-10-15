@@ -84,7 +84,7 @@ def test_the_menus_carry_the_new_items_within_twelve_rows(window):
         assert len(_rows(window, title)) <= 12, title
     assert "Open recent" in _rows(window, "File")
     assert "Preferences…" in _rows(window, "Edit")
-    assert "Layout" in _rows(window, "View")
+    assert "Dock layouts" in _rows(window, "View")
     assert {"What changed", "Report a problem…"} <= set(_rows(window, "Help"))
 
 

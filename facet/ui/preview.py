@@ -603,7 +603,7 @@ class PreviewWindow(QMainWindow):
         save.setShortcut(QKeySequence.Save)
         save.triggered.connect(self._save_image)
 
-        vector = QAction("Export &vector…", self)
+        vector = QAction("Export vector &drawing…", self)
         vector.setToolTip("SVG or PDF: real vector geometry, not a bitmap in a "
                           "wrapper.")
         vector.triggered.connect(self._save_vector)
@@ -620,7 +620,7 @@ class PreviewWindow(QMainWindow):
         m.addAction(openf)
         m.addAction(openfolder)
         # the files opened before, newest first, kept between runs
-        self.recent_menu = QMenu("Open &recent", m)
+        self.recent_menu = QMenu("Open re&cent", m)
         self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         m.addMenu(self.recent_menu)
         self._build_examples_menu(m)
@@ -650,7 +650,7 @@ class PreviewWindow(QMainWindow):
             action = QAction(label, self)
             action.triggered.connect(handler)
             export.addAction(action)
-        site_page = QAction("Site ta&b as HTML…", self)
+        site_page = QAction("Site tab as &HTML…", self)
         site_page.setToolTip("The Site tab's text with the explorer's picture, "
                              "as one page.")
         site_page.triggered.connect(lambda: self.export_site_html())
@@ -757,7 +757,7 @@ class PreviewWindow(QMainWindow):
 
         v.addSeparator()
         v.addMenu(self._build_explorer_menu(v))
-        self.layout_menu = QMenu("&Layout", v)
+        self.layout_menu = QMenu("Dock la&youts", v)
         self.layout_menu.aboutToShow.connect(self._fill_layout_menu)
         v.addMenu(self.layout_menu)
 
@@ -874,7 +874,7 @@ class PreviewWindow(QMainWindow):
         shortcuts.triggered.connect(lambda: self._show_manual("shortcuts"))
         h.addAction(shortcuts)
         h.addSeparator()
-        changed = QAction("&What changed", self)
+        changed = QAction("What chan&ged", self)
         changed.setToolTip("Every version's commits, newest first.")
         changed.triggered.connect(self._show_changelog)
         h.addAction(changed)

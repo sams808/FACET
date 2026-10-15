@@ -808,6 +808,9 @@ def build_parser() -> argparse.ArgumentParser:
     what.add_argument("--v-list", type=float, metavar="V_VU",
                       help="tabulation threshold in v.u. (default "
                            "bv.V_LIST_DEFAULT)")
+    what.add_argument("--workers", type=int, default=1, metavar="N",
+                      help="processes for the frames' pair searches of the "
+                           "analyses outside the glass pass (default 1)")
     what.add_argument("--bv-params", metavar="FILE",
                       help="a bond-valence parameter file (bv_files.load)")
     what.add_argument("--no-estimated", action="store_true",
@@ -955,6 +958,8 @@ def _spec_from_args(args) -> dict:
         flags["v_bond_vu"] = args.v_bond
     if args.v_list is not None:
         flags["v_list_vu"] = args.v_list
+    if getattr(args, "workers", 1) and args.workers > 1:
+        flags["workers"] = int(args.workers)
     for name in ("timestep_fs", "frame_interval_ps", "temperature_k"):
         if getattr(args, name) is not None:
             flags[name] = getattr(args, name)

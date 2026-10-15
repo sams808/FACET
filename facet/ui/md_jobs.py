@@ -518,9 +518,20 @@ def load_frame_view(trajectory, k: int, ox_overrides: Mapping, params,
     n_bonds = None
     notes = []
     if with_bonds:
-        table, _ = bulk.analyse_frame(frame, ox_atom, params,
-                                      v_bond_vu=v_bond_vu,
-                                      v_list_vu=v_list_vu)
+        # the frame's table from the cache beside the preferences when the
+        # same file, frame, parameters and listing threshold were searched
+        # before; searched and cached otherwise
+        from ..core import md_cache
+        source = getattr(trajectory, "source_path", None)
+        table = md_cache.load(source, k, params, v_list_vu) if source else None
+        if table is None:
+            table, _ = bulk.analyse_frame(frame, ox_atom, params,
+                                          v_bond_vu=v_bond_vu,
+                                          v_list_vu=v_list_vu)
+            if source:
+                md_cache.save(source, k, table, v_list_vu)
+        else:
+            notes.append("valence table read from the frame cache")
         n_bonds = len(bulk.bonds_at(table, v_bond_vu))
         notes.append(f"{frame.n_atoms} atoms, {n_bonds} cation-anion bonds "
                      f"at v_bond {v_bond_vu:g} v.u. (bulk engine); contacts "

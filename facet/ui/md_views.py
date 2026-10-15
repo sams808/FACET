@@ -90,6 +90,7 @@ from .md_plot import (
     figure_for_table,
     file_stem,
     unit_text,
+    StatSeries,
 )
 
 __all__ = ["ResultBrowser", "DescriptorView", "RowTable", "family_key",
@@ -863,6 +864,52 @@ class _NameDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+def _subset_series(subset, name: str, container):
+    """The highlighted atoms' own distribution of a per-atom descriptor, as
+    a series to lay over the frame's: None when the figure is not of a
+    per-atom descriptor or there is no highlight."""
+    if subset is None:
+        return None
+    fd, keep = subset
+    match = re.fullmatch(r"(Qn|CN|BVS|phi) ([A-Z][a-z]?)(?: \((?:BV|distance)\))?",
+                         name)
+    if not match:
+        return None
+    descriptor, element = match[1], match[2]
+    try:
+        values = fd.descriptor(descriptor)
+    except ValueError:
+        return None
+    rows = keep & (fd.elements == element) & np.isfinite(values)
+    if not rows.any():
+        return None
+    picked = values[rows]
+    from ..core.md_stats import Distribution, Histogram
+    if isinstance(container, Distribution):
+        keys = list(container.keys)
+        try:
+            numeric = [float(k) for k in keys]
+        except (TypeError, ValueError):
+            return None
+        counts = np.array([(np.abs(picked - k) < 1e-6).sum() for k in numeric], float)
+        total = counts.sum() or 1.0
+        fraction = counts / total if container.kind == "fraction" else counts
+        return StatSeries(label=f"highlighted ({int(rows.sum())} atoms)",
+                          x=np.arange(len(keys), dtype=float), mean=fraction,
+                          kind="bars", markers=False)
+    if isinstance(container, Histogram):
+        edges = np.asarray(container.edges, float)
+        counts, _ = np.histogram(picked, bins=edges)
+        mid = 0.5 * (edges[:-1] + edges[1:])
+        y = counts.astype(float)
+        if getattr(container, "density", False):
+            width = np.diff(edges)
+            y = y / max(len(picked), 1) / np.where(width > 0, width, 1.0)
+        return StatSeries(label=f"highlighted ({int(rows.sum())} atoms)",
+                          x=mid, mean=y, kind="line", edges=edges, markers=False)
+    return None
+
+
 def rules_for_result(name: str, container) -> tuple[list[dict], str]:
     """The highlight rules that show one result on the frame, and words.
 
@@ -1057,6 +1104,10 @@ class ResultBrowser(QWidget):
         self.provenance_button.toggled.connect(self.provenance_text.setVisible)
         self.tree.currentItemChanged.connect(self._on_current)
         self.tree.itemDoubleClicked.connect(self._on_double_click)
+        self.view.plot.rangeSelected.connect(self._on_range_selected)
+        # the highlighted atoms of the frame, drawn as a second series on
+        # a per-atom descriptor's figure: (FrameData, keep rows) or None
+        self._subset = None
         self.view.figure_button.clicked.connect(self.choose_export_figure)
         self.view.rows_button.clicked.connect(self.choose_export_rows)
         # a figure saved from the plot's own context menu says so here
@@ -1302,6 +1353,33 @@ class ResultBrowser(QWidget):
         if item is not None:
             self._show(item)
 
+    def set_highlight_subset(self, fd, keep) -> None:
+        """The atoms the Highlight tab keeps on the frame shown; a
+        per-atom descriptor's figure then carries them as a series."""
+        self._subset = None if fd is None or keep is None else (fd, np.asarray(keep, bool))
+        if self._current and self._current[0] == "item":
+            self._show_descriptor(self._current[1], self._current[2])
+
+    def _on_range_selected(self, lo: float, hi: float) -> None:
+        """Ctrl+drag across a histogram or distribution: the bounds become
+        a pair of rules on the Highlight tab."""
+        if not self._current or self._current[0] != "item" or self.result is None:
+            return
+        name = self._current[2]
+        match = re.fullmatch(r"(Qn|CN|BVS|phi) ([A-Z][a-z]?)(?: \((?:BV|distance)\))?",
+                             name)
+        if not match:
+            self.statusMessage.emit(f"{display_name(name)} is not a per-atom "
+                                    "descriptor a range can pick atoms by.")
+            return
+        descriptor, element = match[1], match[2]
+        rules = [{"element": element, "descriptor": descriptor, "sense": "≥",
+                  "value": lo},
+                 {"element": element, "descriptor": descriptor, "sense": "≤",
+                  "value": hi}]
+        self.highlightRequested.emit(
+            rules, f"{element} atoms with {descriptor} between {lo:g} and {hi:g}")
+
     def _on_double_click(self, item, _column: int = 0) -> None:
         """Jump to the Highlight tab with the rules that show this result."""
         role = item.data(0, _ROLE) if item is not None else None
@@ -1353,6 +1431,9 @@ class ResultBrowser(QWidget):
         figure = None
         if isinstance(container, (Distribution, Histogram, Series, Scalar)):
             figure = figure_for(container, title=name)
+            subset = _subset_series(self._subset, name, container)
+            if figure is not None and subset is not None:
+                figure.series.append(subset)
         elif isinstance(container, Table) or hasattr(container, "as_rows"):
             summary = output.tables.get(f"{name} (R_chi)")
             base = name[:-len(" (R_chi)")] if name.endswith(" (R_chi)") \

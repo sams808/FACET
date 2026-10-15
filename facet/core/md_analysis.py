@@ -783,6 +783,10 @@ class AnalysisRequest:
     exafs: ExafsOptions = field(default_factory=ExafsOptions)
     feff: FeffOptions = field(default_factory=FeffOptions)
     dynamics: DynamicsOptions = field(default_factory=DynamicsOptions)
+    # processes for the frames' pair searches of the analyses that do not
+    # share the glass pass (1: in this process). The glass pass streams one
+    # search per frame through every consumer and stays serial.
+    workers: int = 1
 
     def __post_init__(self) -> None:
         put = object.__setattr__
@@ -2129,6 +2133,23 @@ class _FrameContext:
     copies: Mapping[str, list]
 
 
+def _table_in_worker(path: str, type_map: dict, read_options: dict, k: int,
+                     ox_overrides: dict, params, v_list_vu: float,
+                     r_search_ang: float):
+    """One frame's valence table, in a process of its own: the trajectory
+    is opened again by its path, the frame read, the search done."""
+    from . import md_readers, md_model, bulk as bulk_mod
+    trajectory = md_readers.read_trajectory(path, type_map=type_map or None,
+                                            **(read_options or {}))
+    frame = trajectory.frame(int(k))
+    ox = md_model.model_oxidation(frame.species, ox_overrides or None)
+    ox_atom = ox.per_atom(frame.elements)
+    table, _ = bulk_mod.analyse_frame(frame, ox_atom, params,
+                                      v_list_vu=v_list_vu,
+                                      r_search_ang=r_search_ang)
+    return table
+
+
 class _Run:
     """The state of one :func:`analyse` call."""
 
@@ -2267,6 +2288,12 @@ class _Run:
         if self._cancelled and not any(out.ok for out in self.outputs.values()):
             raise AnalysisCancelled("cancelled before any analysis was "
                                     "computed")
+        if self._cancelled:
+            # what was done is kept, and the result says it stopped early
+            self.model_notes.append(
+                f"partial: cancelled after {len(self.used)} of "
+                f"{len(self.frames)} chosen frames; the averages are over "
+                "the frames analysed")
         self.timings["total"] = time.perf_counter() - start
         result = self.assemble()
         self.extra_steps = steps_after
@@ -2707,6 +2734,43 @@ class _Run:
         self.outputs["glass"] = _glass_output(
             dataclasses.replace(result, provenance=provenance), seconds)
 
+    def prefetch_tables(self) -> dict:
+        """The valence tables of the chosen frames, searched in
+        ``request.workers`` processes; empty when one process is asked for
+        or the pool cannot start (the frames are then searched in turn)."""
+        workers = int(getattr(self.req, "workers", 1) or 1)
+        if workers <= 1 or not self.needs_table:
+            return {}
+        try:
+            from concurrent.futures import ProcessPoolExecutor
+            import pickle
+            pickle.dumps(self.params)
+        except Exception:                            # noqa: BLE001
+            return {}
+        path = getattr(self.t, "source_path", None)
+        if not path:
+            return {}
+        jobs = {}
+        try:
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                for k in self.frames:
+                    jobs[k] = pool.submit(
+                        _table_in_worker, str(path), dict(self.req.type_map or {}),
+                        dict(self.req.read_options or {}), int(k),
+                        dict(self.req.ox_overrides or {}), self.params,
+                        float(self.req.v_list_vu), float(self.r_bv))
+                out = {}
+                for k, job in jobs.items():
+                    if self.is_cancelled():
+                        break
+                    try:
+                        out[k] = job.result()
+                    except Exception:                # noqa: BLE001
+                        continue
+                return out
+        except Exception:                            # noqa: BLE001
+            return {}
+
     def own_pass1(self) -> None:
         for position, k in enumerate(self.frames):
             if self.is_cancelled():
@@ -2724,9 +2788,14 @@ class _Run:
                             "read")
                 continue
             table = results = bonds = None
+            cached = self._prefetched.get(k) if hasattr(self, "_prefetched") else None
             if self.needs_search:
                 blocks = self.search(k, frame, self.need_r[1], self.need_v[1])
-                if self.needs_table:
+                if cached is not None:
+                    table = cached
+                    results = bulk.at_threshold(table, self.req.v_bond_vu)
+                    bonds = bulk.bonds_at(table, self.req.v_bond_vu)
+                elif self.needs_table:
                     table = bulk.valence_table(
                         frame, blocks, self.ox_atom, self.params,
                         v_list_vu=self.req.v_list_vu, r_search_ang=self.r_bv)
@@ -2975,6 +3044,7 @@ class _Run:
         each contact count summed over them."""
         estimated: dict[str, int] = {}
         missing: dict[str, int] = {}
+        self._prefetched = self.prefetch_tables()
         for k in frames:
             if k not in self.pair_tallies:
                 continue

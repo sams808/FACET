@@ -39,6 +39,7 @@ class StructureView(QOpenGLWidget):
     labelsChanged = Signal(object)      # LabelSettings, after a keyboard cycle
     contextRequested = Signal(int, object)   # atom index or -1, and the position
     bondPicked = Signal(int)                 # a bond under the click, by index
+    selectionChanged = Signal(object)        # the set of atoms Ctrl-clicked
     pivotChanged = Signal(object)       # a caption for the rotation centre, or None
 
     def __init__(self, parent: QWidget | None = None):
@@ -90,6 +91,8 @@ class StructureView(QOpenGLWidget):
         # depth cueing about the focused atom, and the on-screen colour bar
         self.depth_dim_focus = False
         self.show_legend = True
+        # a set of atoms gathered with Ctrl+click, besides the one selected
+        self._selection: list[int] = []
         self._status = ""
         self.labels = labels_mod.LabelSettings()
         self.structure = None
@@ -117,12 +120,14 @@ class StructureView(QOpenGLWidget):
         self.scene = scene
         # a rebuild of the same atoms (a style change, a threshold, a label
         # mode) keeps the measurement chain; a different structure drops it
-        if not same and self._measure_chain:
-            alike = (scene is not None and previous is not None
-                     and scene.n_atoms == previous.n_atoms
-                     and np.array_equal(scene.atom_site, previous.atom_site))
-            if not alike:
-                self._measure_chain.clear()
+        alike = (scene is not None and previous is not None
+                 and scene.n_atoms == previous.n_atoms
+                 and np.array_equal(scene.atom_site, previous.atom_site))
+        if not same and self._measure_chain and not alike:
+            self._measure_chain.clear()
+        if not same and self._selection and not alike:
+            self._selection.clear()
+            self.selectionChanged.emit([])
         if scene is not None and scene.theme is not None:
             self.theme = scene.theme
 
@@ -643,7 +648,7 @@ class StructureView(QOpenGLWidget):
             self._paint_placeholder(painter)
             return
         self._paint_labels(painter)
-        if self._selected is not None:
+        if self._selected is not None or self._selection:
             self._paint_selection(painter)
         if len(self._measure_chain) >= 2:
             self._paint_measurement(painter)
@@ -849,6 +854,19 @@ class StructureView(QOpenGLWidget):
 
     def _paint_selection(self, painter: QPainter) -> None:
         s = self.scene
+        for j in self._selection:
+            if j == self._selected or j >= s.n_atoms:
+                continue
+            pj = self._visible(s.atom_position[j:j + 1])[0]
+            if pj[2] >= 0:
+                continue
+            scale = self._view_scale()
+            rj = self._screen_radius(s.atom_position[j], s.atom_radius[j])
+            painter.setPen(QPen(self._ink(self.theme.selection_color if self.theme
+                                          else (1.0, 0.84, 0.36)), 1.4 * scale,
+                                Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(QPointF(pj[0], pj[1]), rj + 3 * scale, rj + 3 * scale)
         i = self._selected
         if i is None or i >= s.n_atoms:
             return
@@ -1179,6 +1197,9 @@ class StructureView(QOpenGLWidget):
             moved = moved or straight > self.DRAG_TOLERANCE
 
         if (event.button() == Qt.LeftButton and not moved
+                and event.modifiers() & Qt.ControlModifier):
+            self._handle_set_click(position)
+        elif (event.button() == Qt.LeftButton and not moved
                 and not (event.modifiers() & Qt.ShiftModifier)):
             self._handle_select_click(position)
         elif event.button() == Qt.RightButton and not moved:
@@ -1319,6 +1340,29 @@ class StructureView(QOpenGLWidget):
             return None
         i = int(np.argmin(d))
         return i if d[i] <= 6.0 * self._view_scale() else None
+
+    @property
+    def selection(self) -> list[int]:
+        """The atoms gathered with Ctrl+click, in the order clicked."""
+        return list(self._selection)
+
+    def set_selection(self, atoms) -> None:
+        s = self.scene
+        self._selection = [int(a) for a in atoms
+                           if s is not None and 0 <= int(a) < s.n_atoms]
+        self.selectionChanged.emit(list(self._selection))
+        self.update()
+
+    def _handle_set_click(self, pos: QPoint) -> None:
+        index = self.pick_at(pos)
+        if index is None:
+            return
+        if index in self._selection:
+            self._selection.remove(index)
+        else:
+            self._selection.append(index)
+        self.selectionChanged.emit(list(self._selection))
+        self.update()
 
     def _handle_select_click(self, pos: QPoint) -> None:
         index = self.pick_at(pos)

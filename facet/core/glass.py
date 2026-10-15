@@ -1793,6 +1793,61 @@ def _qnm_order(label: str):
     return (int(head), int(digits))
 
 
+VALENCE_EDGES_VU = np.round(np.arange(0.0, 2.0 + 1e-9, 0.02), 4)
+REGION_CELLS = 2
+
+
+def _record_valences(col: _Collector, k: int, bonds, symbols: np.ndarray,
+                     cations, anions) -> None:
+    """Every bond's valence, binned by pair: the distance distribution on
+    the axis the cut is made on."""
+    v = getattr(bonds, "v_vu", None)
+    if v is None:
+        return
+    cation = np.asarray(bonds.cation, np.int64)
+    anion = np.asarray(bonds.anion, np.int64)
+    v = np.asarray(v, np.float64)
+    for c in cations:
+        for a in anions:
+            rows = (symbols[cation] == c) & (symbols[anion] == a)
+            col.binned(f"bond valence {c}-{a}", k, v[rows], VALENCE_EDGES_VU,
+                       "v.u.")
+
+
+def _record_regions(col: _Collector, k: int, frame, symbols: np.ndarray,
+                    cells: int = REGION_CELLS) -> None:
+    """The box split into cells x cells x cells, each cell's composition:
+    segregation shows as cells that differ."""
+    frac = np.asarray(frame.frac, np.float64) % 1.0
+    idx = np.minimum((frac * cells).astype(np.int64), cells - 1)
+    cell = idx[:, 0] * cells * cells + idx[:, 1] * cells + idx[:, 2]
+    keys = tuple(f"{x}{y}{z}" for x in range(cells) for y in range(cells)
+                 for z in range(cells))
+    for element in sorted(set(str(s) for s in symbols)):
+        rows = symbols == element
+        counts = np.bincount(cell[rows], minlength=cells ** 3)
+        col.counts(f"{element} by region", k,
+                   {key: int(n) for key, n in zip(keys, counts)},
+                   kind="count", keys=keys)
+        mean = counts.mean()
+        spread = float(np.abs(counts - mean).max() / mean) if mean > 0 else 0.0
+        col.scalar(f"{element} segregation", k, spread, "1")
+
+
+def _record_centres(col: _Collector, k: int, frame, symbols: np.ndarray) -> None:
+    """Each element's centre of mass, from the unwrapped positions when the
+    file carries them: a drift along the frames shows a run that moved."""
+    cart = getattr(frame, "unwrapped_cart_ang", None)
+    if cart is None:
+        cart = np.asarray(frame.cart_ang, np.float64)
+    cart = np.asarray(cart, np.float64)
+    for element in sorted(set(str(s) for s in symbols)):
+        rows = symbols == element
+        centre = cart[rows].mean(axis=0)
+        for axis, value in zip("xyz", centre):
+            col.scalar(f"centre of mass {element} {axis}", k, float(value), "Å")
+
+
 def _record_bonds(col: _Collector, k: int, bonds, symbols: np.ndarray,
                   cn: np.ndarray, cations, anions, formers, bridging,
                   angle_edges, length_edges, available) -> set[str]:
@@ -2162,6 +2217,9 @@ def analyse_trajectory(trajectory: Trajectory, ox: ModelOxidation, *,
         _record_bonds(col_bv, k, bonds, symbols, cn, cations, anions,
                       former_set, setup["bridging"], setup["angle_edges"],
                       setup["length_edges_bv"], None)
+        _record_valences(col_bv, k, bonds, symbols, cations, anions)
+        _record_regions(col_bv, k, frame, symbols)
+        _record_centres(col_bv, k, frame, symbols)
         for element in sorted(cations + anions):
             rows = symbols == element
             # the triangle inequality bounds phi by 1; an atom with one bond

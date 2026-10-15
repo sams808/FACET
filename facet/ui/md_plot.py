@@ -753,6 +753,7 @@ class StatPlot(Plot):
 
     # what a save from the context menu wrote, or why it did not
     statusMessage = Signal(str)
+    rangeSelected = Signal(float, float)     # Ctrl+drag across the x axis
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1635,6 +1636,12 @@ class StatPlot(Plot):
             x, y = self.data_at(event.position().x(), event.position().y())
             self.picked.emit(x, y)
             return
+        if event.button() == Qt.LeftButton and \
+                event.modifiers() & Qt.ControlModifier:
+            # Ctrl+drag across the x axis: a range, for a rule from a figure
+            x, _y = self.data_at(event.position().x(), event.position().y())
+            self._range_from = float(x)
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
@@ -1655,6 +1662,14 @@ class StatPlot(Plot):
     def mouseReleaseEvent(self, event) -> None:
         if self._picking:
             self._picking = False
+            return
+        start = getattr(self, "_range_from", None)
+        if start is not None:
+            self._range_from = None
+            x, _y = self.data_at(event.position().x(), event.position().y())
+            lo, hi = sorted((start, float(x)))
+            if hi > lo:
+                self.rangeSelected.emit(lo, hi)
             return
         moved = (self._drag is not None and
                  (event.position().toPoint() - self._drag).manhattanLength()

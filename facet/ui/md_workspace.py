@@ -248,6 +248,7 @@ class ElementsPanel(QWidget):
 
     elementChosen = Signal(str)
     compareRequested = Signal(str)
+    atomRequested = Signal(int)          # an atom id typed in the lookup
     COLUMNS = ("element", "atoms", "state", "CN")
 
     def __init__(self, parent=None):
@@ -274,8 +275,26 @@ class ElementsPanel(QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._menu)
         column.addWidget(self.table, 1)
+        # a lookup by atom id: the atom is selected, centred and read
+        lookup = QHBoxLayout()
+        lookup.addWidget(QLabel("Go to atom id"))
+        self.lookup = QLineEdit()
+        self.lookup.setPlaceholderText("id")
+        self.lookup.setToolTip("Type an atom id (as the file numbers them) "
+                               "and press Enter: the atom is selected, the "
+                               "view turns about it and the Atom tab reads it")
+        self.lookup.returnPressed.connect(self._on_lookup)
+        lookup.addWidget(self.lookup, 1)
+        column.addLayout(lookup)
         self.note = _hint("No frame is loaded yet.")
         column.addWidget(self.note)
+
+    def _on_lookup(self) -> None:
+        text = self.lookup.text().strip()
+        try:
+            self.atomRequested.emit(int(text))
+        except ValueError:
+            self.note.setText(f"{text!r} is not an atom id")
 
     def set_rows(self, rows: Sequence[Mapping], states: Mapping[str, int],
                  v_bond: float) -> None:
@@ -499,9 +518,28 @@ class ModelToolbar(QWidget):
         self.slab_thickness.setValue(8.0)
         self.slab_thickness.setSuffix(" Å")
         self.slab_thickness.setToolTip("The slab's thickness in Å")
-        for w in (self.slab_check, self.slab_axis, self.slab_centre,
+        self.slab_axis.setFixedWidth(44)
+        self.slab_centre.setFixedWidth(58)
+        self.slab_thickness.setFixedWidth(70)
+        # behind one button, so the toolbar row stays the width it was
+        from PySide6.QtWidgets import QMenu, QWidgetAction
+        panel = QWidget()
+        panel_row = QHBoxLayout(panel)
+        panel_row.setContentsMargins(8, 4, 8, 4)
+        for w in (self.slab_check, QLabel("normal to"), self.slab_axis,
+                  QLabel("centre"), self.slab_centre, QLabel("thickness"),
                   self.slab_thickness):
-            row.addWidget(w)
+            panel_row.addWidget(w)
+        self.slab_button = QToolButton()
+        self.slab_button.setText("Slab…")
+        self.slab_button.setPopupMode(QToolButton.InstantPopup)
+        self.slab_button.setToolTip(self.slab_check.toolTip())
+        slab_menu = QMenu(self.slab_button)
+        holder = QWidgetAction(slab_menu)
+        holder.setDefaultWidget(panel)
+        slab_menu.addAction(holder)
+        self.slab_button.setMenu(slab_menu)
+        row.addWidget(self.slab_button)
         self.slab_check.toggled.connect(lambda _on: self.slabChanged.emit())
         self.slab_axis.currentIndexChanged.connect(lambda _i: self.slabChanged.emit())
         self.slab_centre.valueChanged.connect(lambda _v: self.slabChanged.emit())
@@ -818,6 +856,8 @@ class ModelController(QObject):
         self.view.measured.connect(self.statusMessage)
         self.view.contextRequested.connect(self._on_context_menu)
         self.view.sitePicked.connect(self._on_atom_picked)
+        self.view.selectionChanged.connect(self._on_selection_changed)
+        self.elements.atomRequested.connect(self.go_to_atom)
         # the atom under investigation: its frame row and its SiteResult at
         # the strip's threshold, shown in the Atom tab and the explorer
         self._atom_row: int | None = None
@@ -915,6 +955,16 @@ class ModelController(QObject):
             "site. Right-click it for the angles, its environment and an "
             "XYZ of it.</p>")
         self.tabs.addTab(self.atom_text, "Atom")
+        # the Environments tab: one species grouped by its surroundings
+        from .md_environments_tab import EnvironmentsPage
+        self.environments = EnvironmentsPage(theme=self.theme)
+        self.environments.runRequested.connect(self.group_environments)
+        self.environments.framesRequested.connect(self.environments_over_frames)
+        self.environments.highlightRequested.connect(self._highlight_rows)
+        self.environments.representativeRequested.connect(
+            lambda row: self.export_environment(row))
+        self.environments.exportRequested.connect(self._export_environments)
+        self.tabs.addTab(chrome.in_scroll_area(self.environments), "Environments")
         self.tabs.addTab(self.notes_text, "Notes")
         self.tabs.setMinimumWidth(400)
         self.tabs.tabBar().setElideMode(Qt.ElideNone)
@@ -1175,7 +1225,14 @@ class ModelController(QObject):
         elapsed = self._run_job.elapsed_s() if self._run_job else 0.0
         prefix = "Cancelling; " if self._run_job and \
             self._run_job.cancel_requested else ""
-        self.statusMessage.emit(f"{prefix}{stage} ({elapsed:.0f} s)")
+        # an estimate from the rate so far, stated as about; it is the
+        # frames done over the time taken, so it settles after a few
+        remaining = ""
+        if done > 0 and total > done and elapsed > 2.0:
+            left = elapsed / done * (total - done)
+            remaining = (f", about {left:.0f} s left" if left < 120
+                         else f", about {left / 60:.0f} min left")
+        self.statusMessage.emit(f"{prefix}{stage} ({elapsed:.0f} s{remaining})")
 
     @Slot(object)
     def _on_run_finished(self, result) -> None:
@@ -1612,6 +1669,13 @@ class ModelController(QObject):
                                     f"frame {fv.k}: {error}")
             return
         self._fill_elements()
+        self._fill_environment_species()
+
+    def _fill_environment_species(self) -> None:
+        fv = self.frame_view
+        if fv is not None and getattr(self, "environments", None) is not None:
+            species = sorted(set(str(s) for s in fv.frame.elements))
+            self.environments.set_species(species)
 
     def _fill_elements(self) -> None:
         fv = self.frame_view
@@ -1661,6 +1725,7 @@ class ModelController(QObject):
         if fv is not None and fv.table is not None:
             self.view.set_threshold(float(v_bond_vu))
             self._fill_elements()
+            self._fill_environment_species()
             self._schedule_redraw()
             self._refresh_atom(float(v_bond_vu))
 
@@ -1733,6 +1798,16 @@ class ModelController(QObject):
                     f"Export the environment of {label} as XYZ…"
                 ).triggered.connect(lambda _=False, r=row: self.export_environment(r))
             menu.addSeparator()
+        rows = self.selected_rows()
+        if rows and fv.table is not None:
+            n = len(rows)
+            menu.addAction(f"Isolate the {n} selected atoms with their neighbours"
+                           ).triggered.connect(lambda _=False, r=rows: self.isolate(r, 1))
+            menu.addAction(f"Export the {n} selected atoms as XYZ…"
+                           ).triggered.connect(lambda _=False: self.export_selection())
+            menu.addAction("Clear the selection").triggered.connect(
+                lambda _=False: self.view.set_selection([]))
+            menu.addSeparator()
         show_all = menu.addAction("Show the whole frame again")
         show_all.setEnabled(self._isolated is not None)
         show_all.triggered.connect(lambda _=False: self.isolate(None))
@@ -1741,10 +1816,16 @@ class ModelController(QObject):
         menu.addAction("Reset the view").triggered.connect(self.view.reset_view)
         return menu
 
-    def isolate(self, row: int | None, shells: int = 1) -> None:
+    def isolate(self, row, shells: int = 1) -> None:
         """Draw only ``row`` and its neighbour shells at the strip's
-        threshold, or (``None``) the whole frame again."""
-        self._isolated = None if row is None else (int(row), int(shells))
+        threshold -- or, for a list of rows, those atoms and their shells --
+        or (``None``) the whole frame again."""
+        if isinstance(row, (list, tuple, set, np.ndarray)):
+            rows = [int(r) for r in row]
+            self._isolated = (tuple(rows), int(shells)) if rows else None
+            row = rows[0] if rows else None
+        else:
+            self._isolated = None if row is None else (int(row), int(shells))
         # frame what is drawn next: the cluster, or the whole box again
         self._reframe_next = True
         if self._isolated is not None:
@@ -1911,6 +1992,343 @@ class ModelController(QObject):
             apriori_reason="an MD frame has no bond network to split "
                            "the variation by", show_running=True))
 
+    # -- the Environments tab ------------------------------------------------
+    def go_to_atom(self, atom_id: int) -> None:
+        """Select the atom with this id, turn the view about it and read it."""
+        fv = self.frame_view
+        scene = self.view.scene
+        if fv is None or scene is None:
+            return
+        ids = np.asarray(fv.frame.atom_id)
+        rows = np.flatnonzero(ids == int(atom_id))
+        if not len(rows):
+            self.statusMessage.emit(f"No atom has id {atom_id} in this frame.")
+            return
+        row = int(rows[0])
+        here = np.flatnonzero(np.asarray(scene.atom_site) == row)
+        if len(here):
+            atom = int(here[0])
+            self.view.select_atom(atom)
+            self.view.center_on(np.asarray(scene.atom_position[atom], float),
+                                scene.atom_label[atom])
+        self.investigate(row)
+
+    def _environment_inputs(self):
+        fv = self.frame_view
+        if fv is None or fv.table is None:
+            return None
+        v_bond = self._strip_v_bond()
+        v_bond = fv.v_bond_vu if v_bond is None else v_bond
+        fd = self._frame_data_at(v_bond)
+        return fv, fd
+
+    def group_environments(self) -> None:
+        """Group this frame's atoms of the chosen species (a worker; the
+        empty spheres for the free volume can take a moment)."""
+        from ..core import md_environments as env_mod
+
+        found = self._environment_inputs()
+        if found is None:
+            self.statusMessage.emit("The frame is drawn without bonds: no "
+                                    "environments to group.")
+            return
+        fv, fd = found
+        settings = self.environments.settings()
+        if not settings["element"]:
+            self.environments.set_species(fd.species)
+            settings = self.environments.settings()
+        formers = fd.formers
+
+        def work(progress, cancelled):
+            envs = env_mod.environments(fd.frame, fd.bonds,
+                                        element=settings["element"],
+                                        formers=formers, qn=fd.qn)
+            if settings["qn"] is not None:
+                envs = [e for e in envs if e.qn == settings["qn"]]
+            groups = env_mod.group_environments(
+                envs, tol_distance_ang=settings["tol_distance_ang"],
+                tol_angle_deg=settings["tol_angle_deg"],
+                same_second_shell=settings["same_second_shell"])
+            per_atom = {"bvs": np.asarray(fd.bvs, float),
+                        "phi": np.asarray(fd.phi, float)}
+            try:
+                spheres = fd.spheres()
+                frac = getattr(spheres, "centre_frac", None)
+                radius = getattr(spheres, "radius_ang", None)
+                if frac is not None and radius is not None and len(frac):
+                    centres = (np.asarray(frac, float) % 1.0) @ np.asarray(
+                        fd.frame.box_ang, float) + np.asarray(
+                        getattr(fd.frame, "origin_ang", np.zeros(3)), float)
+                    per_atom["void_radius_ang"] = env_mod.nearest_void_radius(
+                        fd.frame, centres, np.asarray(radius, float))
+            except Exception:                        # noqa: BLE001
+                pass
+            env_mod.group_scalars(groups, per_atom)
+            return envs, groups, per_atom
+
+        job = md_jobs.Job(work, name="environments")
+        job.generation = self._model_generation
+        self._connect(job, succeeded=self._on_grouped,
+                      failed=lambda f: self.statusMessage.emit(
+                          f"Environments: {getattr(f, 'message', f)}"))
+        self._environment_job = job
+        self.statusMessage.emit(f"Grouping the {settings['element']} "
+                                "environments of this frame …")
+        job.start()
+
+    @Slot(object)
+    def _on_grouped(self, payload) -> None:
+        envs, groups, per_atom = payload
+        settings = self.environments.settings()
+        words = (f"{len(envs)} {settings['element']} atoms in {len(groups)} "
+                 f"groups at {self._strip_v_bond() or 0:.4f} v.u.; "
+                 f"tolerance {settings['tol_distance_ang']:g} Å, "
+                 f"{settings['tol_angle_deg']:g}°"
+                 + (", same second shell" if settings["same_second_shell"] else "")
+                 + ". Click a group to highlight it; double-click to export "
+                 "its representative.")
+        self.environments.show_groups(envs, groups, per_atom, words)
+        self._register_populations(groups, settings["element"])
+        self.statusMessage.emit(f"{len(groups)} environment groups found.")
+
+    def _register_populations(self, groups, element: str) -> None:
+        """The group populations as a distribution in the model's result,
+        so Compare can lay two runs' environments side by side."""
+        from ..core.md_analysis import AnalysisOutput
+        from ..core.md_stats import Distribution
+
+        result = self.result
+        if result is None or not groups:
+            return
+        keys = tuple(g.label for g in groups)
+        counts = np.array([[g.n for g in groups]], float)
+        total = counts.sum() or 1.0
+        try:
+            dist = Distribution(name=f"environments {element}", keys=keys,
+                                kind="fraction", per_frame=counts / total,
+                                n_items=np.array([int(total)]))
+        except Exception:                            # noqa: BLE001
+            return
+        outputs = dict(result.outputs)
+        previous = outputs.get("environments")
+        tables = dict(getattr(previous, "tables", {}) or {})
+        tables[f"environments {element}"] = dist
+        outputs["environments"] = AnalysisOutput(
+            name="environments", tables=tables,
+            provenance=getattr(previous, "provenance", None))
+        try:
+            result.outputs = outputs
+        except Exception:                            # noqa: BLE001
+            pass
+
+    def environments_over_frames(self) -> None:
+        """Group every frame the same way and follow each group's
+        population (the groups are this frame's; a frame's atoms join the
+        group whose means they fit, else count as 'other')."""
+        from ..core import bulk, md_environments as env_mod
+
+        found = self._environment_inputs()
+        groups = list(self.environments.groups)
+        if found is None or not groups or self.trajectory is None:
+            self.statusMessage.emit("Group this frame first.")
+            return
+        fv, fd = found
+        settings = self.environments.settings()
+        trajectory = self.trajectory
+        n_frames = int(getattr(trajectory, "n_frames", 0) or 0)
+        ox_atom, params = fv.ox_atom, fv.params
+        v_bond, v_list = fd.v_bond, fv.v_list_vu
+        formers = fd.formers
+        labels = [g.label for g in groups]
+
+        def work(progress, cancelled):
+            series = []
+            for k in range(n_frames):
+                if cancelled():
+                    break
+                progress(k, n_frames, f"frame {k}")
+                frame = trajectory.frame(k)
+                table, _ = bulk.analyse_frame(frame, ox_atom, params,
+                                              v_bond_vu=v_bond, v_list_vu=v_list)
+                from .md_highlight import FrameData
+                fdk = FrameData.from_frame(frame, table, k=k, v_bond=v_bond,
+                                           formers=formers, ox_atom=ox_atom,
+                                           params=params)
+                envs = env_mod.environments(frame, fdk.bonds,
+                                            element=settings["element"],
+                                            formers=formers, qn=fdk.qn)
+                if settings["qn"] is not None:
+                    envs = [e for e in envs if e.qn == settings["qn"]]
+                counts = {label: 0 for label in labels}
+                counts["other"] = 0
+                for e in envs:
+                    home = None
+                    for g in groups:
+                        sig = e.signature if settings["same_second_shell"] else e.signature[:4]
+                        if g.signature != sig:
+                            continue
+                        if len(g.mean_distances_ang) != len(e.distances_ang):
+                            continue
+                        dd = np.abs(g.mean_distances_ang - e.distances_ang).max() if len(e.distances_ang) else 0.0
+                        da = np.abs(g.mean_angles_deg - e.angles_deg).max() if len(e.angles_deg) else 0.0
+                        if dd <= settings["tol_distance_ang"] and da <= settings["tol_angle_deg"]:
+                            home = g
+                            break
+                    counts[home.label if home is not None else "other"] += 1
+                series.append((k, counts))
+            return series
+
+        job = md_jobs.Job(work, name="environments over frames")
+        job.generation = self._model_generation
+        self._connect(job, succeeded=self._on_populations,
+                      failed=lambda f: self.statusMessage.emit(
+                          f"Environments over frames: {getattr(f, 'message', f)}"))
+        self._environment_job = job
+        self.statusMessage.emit(f"Grouping {n_frames} frames …")
+        job.start()
+
+    @Slot(object)
+    def _on_populations(self, series) -> None:
+        """Each group's population against the frame, in the Figure page."""
+        from .md_plot import Figure, StatSeries
+
+        if not series:
+            return
+        labels = [k for k in series[0][1]]
+        frames = np.array([k for k, _ in series], float)
+        figure = Figure(series=[
+            StatSeries(label=label, x=frames,
+                       mean=np.array([c[label] for _, c in series], float),
+                       kind="line")
+            for label in labels],
+            x_name="frame", x_unit="1", y_name="atoms in the group", y_unit="1",
+            title="Environment populations over the frames")
+        self.environments_series = series
+        self.environments_figure = figure
+        browser = self.browser
+        if browser is not None:
+            shown = False
+            for target in (getattr(browser, "view", None), getattr(browser, "plot", None)):
+                for name in ("set_figure", "show_figure"):
+                    fn = getattr(target, name, None)
+                    if callable(fn):
+                        try:
+                            fn(figure)
+                            shown = True
+                            break
+                        except TypeError:
+                            continue
+                if shown:
+                    break
+            if shown:
+                self.show_canvas("figure")
+        words = "; ".join(f"{label}: " + "–".join(
+            str(v) for v in (min(c[label] for _, c in series),
+                             max(c[label] for _, c in series)))
+            for label in labels)
+        self.statusMessage.emit(f"Populations over {len(series)} frames: {words}")
+
+    def _highlight_rows(self, rows, words: str) -> None:
+        page = self.highlight
+        if page is None:
+            return
+        page.show_rows(rows, words)
+        self.statusMessage.emit(f"Highlighting {words}.")
+        self._schedule_redraw()
+
+    def _export_environments(self, what: str) -> None:
+        from ..core import exporters
+        from PySide6.QtWidgets import QFileDialog
+
+        fv = self.frame_view
+        if fv is None or not self.environments.groups:
+            return
+        name = "environment_groups.csv" if what == "groups" else "environment_atoms.csv"
+        path, _ = QFileDialog.getSaveFileName(self.view, "Write the table",
+                                              name, "CSV (*.csv)")
+        if not path:
+            return
+        rows = (self.environments.group_rows() if what == "groups"
+                else self.environments.atom_rows(fv.frame))
+        exporters.write_csv(rows, path, provenance=[
+            f"FACET environments of frame {fv.k} at v_bond "
+            f"{fv.v_bond_vu:.4f} v.u.", self.environments.summary.text()])
+        self.statusMessage.emit(f"Wrote {len(rows)} rows to {path}")
+
+    def _decorate_frame_data(self, fd):
+        """What the rules can read beyond the table: the smallest ring each
+        atom is in (from a rings result for this frame) and the atom under
+        investigation, for the shell colouring."""
+        fd.shell_centre = self._atom_row
+        fd.ring_size = self._ring_sizes(fd)
+        return fd
+
+    def _ring_sizes(self, fd):
+        """Per atom, the smallest ring it is a member of, from the rings
+        analysis of this frame when one was run; None otherwise."""
+        result = self.result
+        if result is None:
+            return None
+        output = result.outputs.get("rings") if hasattr(result, "outputs") else None
+        stats = None
+        if output is not None:
+            for value in getattr(output, "tables", {}).values():
+                if hasattr(value, "rings") and hasattr(value, "nodes"):
+                    stats = value
+                    break
+        if stats is None:
+            per_frame = getattr(getattr(result, "results", None), "get", lambda k: None)("rings")
+            if isinstance(per_frame, dict):
+                stats = per_frame.get(fd.k) or next(iter(per_frame.values()), None)
+        if stats is None or not getattr(stats, "rings", None):
+            return None
+        sizes = np.full(fd.n_atoms, np.nan)
+        for ring in stats.rings:
+            atoms = getattr(ring, "atoms", ())
+            n = len(atoms)
+            for a in atoms:
+                if 0 <= int(a) < fd.n_atoms and (np.isnan(sizes[a]) or n < sizes[a]):
+                    sizes[int(a)] = n
+        return sizes
+
+    def _on_selection_changed(self, atoms) -> None:
+        n = len(atoms)
+        if n:
+            self.statusMessage.emit(
+                f"{n} atom{'s' if n != 1 else ''} selected (Ctrl+click adds "
+                "or removes; right-click for the selection's actions)")
+
+    def selected_rows(self) -> list[int]:
+        scene = self.view.scene
+        if scene is None:
+            return []
+        return sorted({int(scene.atom_site[a]) for a in self.view.selection
+                       if a < scene.n_atoms})
+
+    def export_selection(self, path=None):
+        """The Ctrl-clicked atoms as XYZ, unwrapped about the first."""
+        from ..core.md_environment import write_environment_xyz
+        rows = self.selected_rows()
+        fv = self.frame_view
+        if fv is None or not rows:
+            self.statusMessage.emit("No atoms selected (Ctrl+click adds).")
+            return None
+        if path is None:
+            from PySide6.QtWidgets import QFileDialog
+            path, _ = QFileDialog.getSaveFileName(
+                self.view, "The selection as XYZ", "selection.xyz", "XYZ (*.xyz)")
+            if not path:
+                return None
+        keep = np.zeros(len(fv.frame.elements), bool)
+        keep[rows] = True
+        shell = np.where(keep, 0, -1)
+        out = write_environment_xyz(
+            path, fv.frame, keep, rows[0], shell=shell,
+            comment=f"FACET selection of {len(rows)} atoms, frame {fv.k}, "
+                    "unwrapped about the first")
+        self.statusMessage.emit(f"Wrote {len(rows)} atoms to {out}")
+        return out
+
     def _frame_data_at(self, v_bond: float):
         """The FrameData of the frame shown at ``v_bond`` (the strip's),
         with the frame's cached spheres and landscapes carried over from
@@ -1929,9 +2347,9 @@ class ModelController(QObject):
         if self.frame_data is not None and self._frame_data_key == key:
             return self.frame_data
         glass = self.result.provenance if self.result is not None else None
-        fd = FrameData.from_frame(fv.frame, fv.table, k=fv.k, v_bond=v_bond,
-                                  formers=formers, ox_atom=fv.ox_atom,
-                                  params=fv.params, glass=glass)
+        fd = self._decorate_frame_data(FrameData.from_frame(
+            fv.frame, fv.table, k=fv.k, v_bond=v_bond, formers=formers,
+            ox_atom=fv.ox_atom, params=fv.params, glass=glass))
         old = self.frame_data
         if old is not None and old.frame is fv.frame:
             fd._spheres = old._spheres
@@ -2017,11 +2435,15 @@ class ModelController(QObject):
                 # one atom with its neighbour shells at this threshold; the
                 # rest left out of the scene, not dimmed
                 row, shells = isolated
-                keep, _shell = neighbour_shells(
-                    bulk.bonds_at(table, v_bond), len(frame.elements), row,
-                    shells)
+                rows = list(row) if isinstance(row, tuple) else [row]
+                bonds_now = bulk.bonds_at(table, v_bond)
+                keep = np.zeros(len(frame.elements), bool)
+                for r in rows:
+                    k, _shell = neighbour_shells(bonds_now, len(frame.elements),
+                                                 r, shells)
+                    keep |= k
                 _hide(scene, keep)
-                _unwrap_about(scene, frame, row)
+                _unwrap_about(scene, frame, rows[0])
             return scene, outcome, time.perf_counter() - clock
 
         job = md_jobs.Job(work, name="highlight")
@@ -2064,6 +2486,9 @@ class ModelController(QObject):
         self.last_draw_s = float(seconds)
         if self.highlight is not None:
             self.highlight.show_result(outcome)
+        if self.browser is not None and self.frame_data is not None:
+            self.browser.set_highlight_subset(
+                self.frame_data, getattr(outcome, "keep", None))
         self.statusMessage.emit(self.status_line())
 
     @Slot(object)
