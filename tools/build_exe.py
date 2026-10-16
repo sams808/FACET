@@ -121,7 +121,7 @@ def make_icon() -> Path:
     logo_pixmap(256, ground=False).save(str(ASSETS / "facet_mark.png"))
     splash_pixmap().save(str(ASSETS / "facet_splash.png"))
     logo_pixmap(256).save(str(ICON), "ICO")
-    log(f"icon -> {ICON.relative_to(ROOT)}")
+    log(f"icon -> {_shown(ICON)}")
     return ICON
 
 
@@ -152,6 +152,16 @@ def prune_bundle(target: Path) -> None:
                 removed += file.stat().st_size
                 file.unlink()
     log(f"pruned {removed / 1e6:.0f} MB the application never loads")
+
+
+def _shown(path: Path) -> str:
+    """A path for the log: relative to the repository when it is inside it,
+    as it is, else (a build redirected to another folder while the
+    repository's dist/FACET is held open by a running FACET)."""
+    try:
+        return str(Path(path).relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 def write_licences(target: Path) -> None:
@@ -185,7 +195,7 @@ https://download.qt.io/.
 Other components, with their licences, are listed in
 THIRD_PARTY_NOTICES.md.
 """, encoding="utf-8")
-    log(f"licences -> {folder.relative_to(ROOT)}")
+    log(f"licences -> {_shown(folder)}")
 
 
 def write_build_record(target: Path) -> Path:
@@ -278,7 +288,7 @@ def build_app(clean: bool = True) -> Path:
     write_build_record(APP_DIR)
     prune_bundle(APP_DIR)
     size = sum(f.stat().st_size for f in APP_DIR.rglob("*") if f.is_file())
-    log(f"application -> {APP_DIR.relative_to(ROOT)}  ({size / 1e6:.0f} MB)")
+    log(f"application -> {_shown(APP_DIR)}  ({size / 1e6:.0f} MB)")
     return APP_DIR
 
 
