@@ -2,6 +2,11 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 1.0.5 — 2026-10-16
+
+- Version 1.0.5: a large cell opens in a second, not twenty  `bda27a7`  2026-10-16
+- Changelog for 1.0.4  `2868496`  2026-10-15
+
 ## 1.0.4 — 2026-10-15
 
 - Version 1.0.4: the contacts under the threshold can be left undrawn  `c8e764c`  2026-10-15
