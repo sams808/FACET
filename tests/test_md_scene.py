@@ -318,8 +318,10 @@ def test_the_scene_draws_on_the_qpainter_tier(qapp, tmp_path):
 
 def test_timing_against_build_scene(record_property, capsys):
     """Recorded, not tuned: the bulk path against the crystal path on the
-    same frame. The assertion leaves a margin of ten over measured ratios of
-    about a hundred, so that a loaded machine does not fail it."""
+    same frame. Measured ratios were about a hundred until 1.0.5 built the
+    crystal path's bonds from one tree query as well; they are now about
+    ten (19.5 ms against 186 ms for 576 atoms). The assertion keeps the
+    bulk path the faster one, with a margin of three for a loaded machine."""
     from facet.core import md_model
     from facet.gl.scene import build_scene
     from facet.ui.md_scene import build_md_scene, valence_table_for
@@ -346,4 +348,4 @@ def test_timing_against_build_scene(record_property, capsys):
         print(f"\n[md_scene timing] {frame.n_atoms} atoms: build_md_scene "
               f"{md_s * 1e3:.1f} ms (from a table {from_table_s * 1e3:.1f} "
               f"ms), build_scene {crystal_s * 1e3:.1f} ms")
-    assert md_s * 10 < crystal_s
+    assert md_s * 3 < crystal_s

@@ -55,8 +55,16 @@ def test_the_window_loads_a_structure_and_fills_its_panels(window):
     # which is the cations, not every site in the file
     assert window.site_list.count() == len(window.results)
     assert 0 < window.site_list.count() < len(window.structure.sites)
-    # every panel got the structure
+    # every panel got the structure -- the diffraction pattern and the PDF
+    # once their tab is shown (they are the costly ones, left until looked at)
+    assert window.diffraction.pattern is None
+    assert "diffraction" in window._lazy_stale and "pdf" in window._lazy_stale
+    tabs = window.crystal_tabs
+    tabs.setCurrentIndex(next(k for k in range(tabs.count())
+                              if tabs.tabText(k) == "Diffraction"))
     assert window.diffraction.pattern is not None
+    assert "diffraction" not in window._lazy_stale and "pdf" in window._lazy_stale
+    tabs.setCurrentIndex(0)
     assert window.planes_panel.structure is window.structure
     assert window.overrides_panel.structure is window.structure
     assert window.overrides_panel.overrides is window.project.current.overrides

@@ -998,6 +998,25 @@ showed, with the checks that now hold them:
   quartz: a click on a front stick reports the bond, a click on the atom's
   centre selects the atom's site.
 
+### Added in 1.0.5: speed, with the numbers unchanged
+
+A 681-atom chukhrovite cell took 21 s to open. The time went to three
+places, none of them the coordination analysis: the PDF panel's pair search
+out to r_max (7 s, for a tab not on screen), the first estimated R0 importing
+pymatgen for its table of r and c (3 s), and the scene's bonds built one
+Python call per contact (1.3 s per rebuild, with a quadratic de-duplication
+of the bonded images on top). The PDF and diffraction panels now compute
+when their tab is shown; the O'Keeffe-Brese table ships as
+`facet/core/okb_table.py`; the bonds come from one sparse tree query and
+array filters. The same file opens in 1.1 s and rebuilds in 0.55 s.
+
+Checked: on every bundled example the vectorised bonds are, contact for
+contact, the ones the per-pair enumeration found, each drawn once, with the
+same distance and valence to 1e-5, and no two drawn atoms within 0.05 Å
+(`test_scene_speed.py`); the bundled r and c equal pymatgen's value for
+value and the estimate equals the formula on pymatgen's table to 1e-12; the
+681-atom file gives the same 681 drawn atoms and 1232 contacts as before.
+
 ### What is not verified
 
 **No model from the group has been analysed yet.** Every number above measured

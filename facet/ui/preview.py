@@ -414,6 +414,7 @@ class PreviewWindow(QMainWindow):
         # screen are at least the real names.
         tabs.tabBar().setElideMode(Qt.ElideNone)
         self.crystal_tabs = tabs
+        tabs.currentChanged.connect(lambda _i: self._refresh_lazy_panels())
         self.column_stack = _PageStack()
         self.column_stack.addWidget(tabs)
 
@@ -1936,8 +1937,13 @@ class PreviewWindow(QMainWindow):
             self.project.results_for(active) if active else None,
             self._current_result(), self.project.v_bond,
             params=self.project.params, v_list=self.project.v_list)
-        self.diffraction.set_structure(active.structure if active else None)
-        self.pdf_panel.set_structure(active.structure if active else None)
+        # the diffraction pattern and the PDF are the costly ones (a pair
+        # search out to r_max on every rebuild): computed when their tab is
+        # the one shown, and marked stale otherwise, so a threshold drag or a
+        # style change does not pay for a panel nobody is looking at
+        self._lazy_structure = active.structure if active else None
+        self._lazy_stale = {"diffraction", "pdf"}
+        self._refresh_lazy_panels()
         self.exafs_panel.set_context(
             active.structure if active else None,
             active.selected_site if active else None)
@@ -1948,6 +1954,27 @@ class PreviewWindow(QMainWindow):
         self.disorder_panel.set_entry(active)
         self.volume_panel.set_context(
             active.structure if active else None, self.project.params)
+
+    def _refresh_lazy_panels(self) -> None:
+        """Give the diffraction and PDF panels the structure if their tab is
+        the one shown (or they are shown on their own); the others wait for
+        their tab."""
+        tabs = getattr(self, "crystal_tabs", None)
+        if tabs is None:
+            return
+        current = tabs.currentWidget()
+        structure = getattr(self, "_lazy_structure", None)
+        stale = getattr(self, "_lazy_stale", set())
+        for name, panel in (("diffraction", self.diffraction),
+                            ("pdf", self.pdf_panel)):
+            if name not in stale:
+                continue
+            shown = current is not None and (
+                panel is current or panel.isAncestorOf(current)
+                or current.isAncestorOf(panel))
+            if shown:
+                panel.set_structure(structure)
+                stale.discard(name)
 
     def _current_result(self):
         entry = self.project.current

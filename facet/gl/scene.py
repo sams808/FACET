@@ -897,22 +897,37 @@ def _add_bonded_images(structure: Structure, scene: Scene) -> None:
 
     from scipy.spatial import cKDTree
 
-    known = list(scene.atom_position)
-    tree = cKDTree(np.array(known, float))
+    tree = cKDTree(np.asarray(scene.atom_position, float))
     extra_pos, extra_col, extra_rad = [], [], []
     extra_label, extra_element, extra_site = [], [], []
     extra_shape, extra_anisotropic = [], []
-    added: list[np.ndarray] = []
 
     TOL = 0.05          # angstrom; far below any real interatomic distance
 
-    for i in range(scene.n_bonds):
-        end = np.asarray(scene.bond_b[i], float)
-        if tree.query(end, distance_upper_bound=TOL)[0] < TOL:
-            continue
-        if any(np.linalg.norm(end - p) < TOL for p in added):
-            continue
-        added.append(end)
+    # the bond ends not already drawn, then each once: ends within TOL of
+    # each other are one image, the first bond to reach it supplies it
+    # (a tree query over all ends at once, where a per-end scan of the
+    # images already added grew with the square of their number)
+    ends = np.asarray(scene.bond_b, float)
+    distance, _ = tree.query(ends, distance_upper_bound=TOL)
+    new_end = np.flatnonzero(~(distance < TOL))
+    first_of = np.arange(len(new_end))
+    if len(new_end) > 1:
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+        close = cKDTree(ends[new_end]).query_pairs(TOL, output_type="ndarray")
+        if len(close):
+            graph = coo_matrix((np.ones(len(close)), (close[:, 0], close[:, 1])),
+                               shape=(len(new_end), len(new_end)))
+            _n, group = connected_components(graph, directed=False)
+            lowest = np.full(group.max() + 1, len(new_end))
+            np.minimum.at(lowest, group, np.arange(len(new_end)))
+            first_of = lowest[group]
+    chosen = new_end[np.flatnonzero(first_of == np.arange(len(new_end)))]
+
+    for i in chosen:
+        i = int(i)
+        end = ends[i]
 
         source = int(scene.bond_atoms[i, 1])
         if 0 <= source < scene.n_atoms:
@@ -1101,6 +1116,7 @@ def _build_bonds(structure: Structure, scene: Scene, theme,
     Searching per atom is exact and costs little: the neighbour tree is built
     once for the structure, and querying it is milliseconds.
     """
+    from scipy.spatial import cKDTree
     from ..core.neighbors import NeighborFinder, search_radius_for
 
     rmax = search_radius_for(structure, params, v_list)
@@ -1110,61 +1126,101 @@ def _build_bonds(structure: Structure, scene: Scene, theme,
         return
 
     orth = structure.cell.orth
-    a_pos, b_pos, col_a, col_b = [], [], [], []
-    valence, distance, pairs, cation_end, occupancy = [], [], [], [], []
-    seen: set[tuple] = set()
+    atoms = structure.atoms
+    n = len(atoms)
+    site_of = np.array([a.site_index for a in atoms], np.int64)
+    anion_site = np.array([bool(s.is_anion) for s in structure.sites], bool)
+    is_anion = anion_site[site_of]
+    element_of = np.array([a.element for a in atoms])
+    occupancy_of = np.array([float(a.occupancy) for a in atoms], float)
+    cart = np.asarray(structure.cart_array(), float)
 
-    for i, j, d, image in finder.pairs_within(rmax):
-        site_i = structure.atoms[i].site_index
-        site_j = structure.atoms[j].site_index
-        anion_i = structure.sites[site_i].is_anion
-        anion_j = structure.sites[site_j].is_anion
-        # a bond valence is defined for a cation against an anion; a
-        # cation-cation contact is reported separately, not drawn as a bond
-        if anion_i == anion_j:
-            continue
-
-        key = _bond_key(i, j, image)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        cation = structure.atoms[j if anion_i else i]
-        anion = structure.atoms[i if anion_i else j]
-        site = structure.sites[cation.site_index]
-        param = params.get(site.element, site.ox, anion.element)
-        if param is None:
-            continue
-        v = float(param.valence(d))
-        if v <= v_list:
-            continue
-
-        shift = orth @ np.array(image, float)
-        a_pos.append(structure.atoms[i].cart)
-        b_pos.append(structure.atoms[j].cart + shift)
-        ca, cb = _bond_colors(theme, structure.atoms[i].element,
-                              structure.atoms[j].element, v)
-        col_a.append(ca)
-        col_b.append(cb)
-        valence.append(v)
-        distance.append(d)
-        pairs.append((i, j))
-        # i is the cation unless i is the anion; recorded rather than recomputed
-        # later, where the sites would have to be looked up again
-        cation_end.append(1 if anion_i else 0)
-        occupancy.append(float(anion.occupancy))
-
-    if not a_pos:
+    # every (home atom, image atom) pair within rmax, as arrays: the tree
+    # already holds every image; one sparse query replaces the per-pair loop
+    home_pos = finder._pos[finder._home]
+    found = cKDTree(home_pos).sparse_distance_matrix(
+        finder._tree, rmax, output_type="ndarray")
+    if found.shape[0] == 0:
         return
-    scene.bond_a = np.array(a_pos, np.float32)
-    scene.bond_b = np.array(b_pos, np.float32)
-    scene._bond_base_a = np.array(col_a, np.float32)
-    scene._bond_base_b = np.array(col_b, np.float32)
-    scene.bond_color_a = scene._bond_base_a.copy()
-    scene.bond_color_b = scene._bond_base_b.copy()
-    scene.bond_valence = np.array(valence, np.float32)
-    scene.bond_distance = np.array(distance, np.float32)
-    scene.bond_atoms = np.array(pairs, np.int32)
+    i = finder._atom[finder._home[found["i"]]].astype(np.int64)
+    j_all = found["j"]
+    j = finder._atom[j_all].astype(np.int64)
+    d = found["v"].astype(float)
+    image = finder._image[j_all].astype(np.int64)
+    keep = d > finder.dmin
+    # a bond valence is defined for a cation against an anion; a
+    # cation-cation contact is reported separately, not drawn as a bond
+    keep &= is_anion[i] != is_anion[j]
+    i, j, d, image = i[keep], j[keep], d[keep], image[keep]
+    if i.size == 0:
+        return
+    # in the order the per-atom loop produced them (home atom, then
+    # neighbour), so that of the two records of one contact the one seen
+    # from the lower home atom is the one kept: its bond_a is that atom and
+    # the image sits at the far end, which is what the bonded images and the
+    # neighbour shells of a cluster read
+    order = np.lexsort((j, i))
+    i, j, d, image = i[order], j[order], d[order], image[order]
+    # each contact once: the pair ordered, the translation flipped with it
+    flip = i > j
+    lo = np.where(flip, j, i)
+    hi = np.where(flip, i, j)
+    canon = np.where(flip[:, None], -image, image)
+    key = np.column_stack([lo, hi, canon])
+    _unique, first = np.unique(key, axis=0, return_index=True)
+    first = np.sort(first)
+    i, j, d, image = i[first], j[first], d[first], image[first]
+
+    # the valence of every contact: one parameter per element pair
+    anion_i = is_anion[i]
+    cation_atom = np.where(anion_i, j, i)
+    anion_atom = np.where(anion_i, i, j)
+    cation_site = site_of[cation_atom]
+    v = np.full(i.size, np.nan)
+    for cs in np.unique(cation_site):
+        site = structure.sites[int(cs)]
+        rows_c = cation_site == cs
+        for an in np.unique(element_of[anion_atom[rows_c]]):
+            rows = rows_c & (element_of[anion_atom] == an)
+            param = params.get(site.element, site.ox, str(an))
+            if param is None:
+                continue
+            v[rows] = np.exp((float(param.r0) - d[rows]) / float(param.b))
+    keep = np.isfinite(v) & (v > v_list)
+    if not keep.any():
+        return
+    i, j, d, image, v = i[keep], j[keep], d[keep], image[keep], v[keep]
+    anion_i = anion_i[keep]
+    anion_atom = anion_atom[keep]
+
+    shift = image.astype(float) @ orth.T
+    scene.bond_a = cart[i].astype(np.float32)
+    scene.bond_b = (cart[j] + shift).astype(np.float32)
+    # colours per contact: by the elements at each end, by the valence, or
+    # one colour, as _bond_colors decides for a single contact
+    mode = theme.bond_color_mode
+    if mode is theme_mod.BondColorMode.UNIFORM:
+        colour = np.asarray(theme.uniform_bond_color, np.float32)
+        col_a = np.tile(colour, (i.size, 1))
+        col_b = col_a.copy()
+    elif mode is theme_mod.BondColorMode.BY_VALENCE:
+        col_a = np.array([theme_mod.ramp(min(float(x) / 0.8, 1.0)) for x in v],
+                         np.float32)
+        col_b = col_a.copy()
+    else:
+        by_element = {e: np.asarray(theme.element_color(str(e)), np.float32)
+                      for e in np.unique(element_of)}
+        col_a = np.array([by_element[e] for e in element_of[i]], np.float32)
+        col_b = np.array([by_element[e] for e in element_of[j]], np.float32)
+    scene._bond_base_a = col_a
+    scene._bond_base_b = col_b
+    scene.bond_color_a = col_a.copy()
+    scene.bond_color_b = col_b.copy()
+    scene.bond_valence = v.astype(np.float32)
+    scene.bond_distance = d.astype(np.float32)
+    scene.bond_atoms = np.column_stack([i, j]).astype(np.int32)
+    cation_end = np.where(anion_i, 1, 0)
+    occupancy = occupancy_of[anion_atom]
     scene.bond_cation = np.array(cation_end, np.int8)
     scene.bond_occupancy = np.array(occupancy, np.float32)
     scene.bond_radius = (bond_radius_for(scene.bond_valence, scene.v_bond)

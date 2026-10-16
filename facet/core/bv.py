@@ -370,11 +370,16 @@ def _okb_params() -> dict[str, dict]:
     global _okb_cache
     if _okb_cache is None:
         try:
-            from pymatgen.analysis.bond_valence import BV_PARAMS
-
-            _okb_cache = {str(k): v for k, v in BV_PARAMS.items()}
+            # the table itself (facet.core.okb_table): no pymatgen import,
+            # which cost about two seconds on the first estimated pair
+            from .okb_table import OKB_PARAMS
+            _okb_cache = {str(k): dict(v) for k, v in OKB_PARAMS.items()}
         except Exception:
-            _okb_cache = {}
+            try:
+                from pymatgen.analysis.bond_valence import BV_PARAMS
+                _okb_cache = {str(k): v for k, v in BV_PARAMS.items()}
+            except Exception:
+                _okb_cache = {}
     return _okb_cache
 
 
