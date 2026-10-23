@@ -1071,6 +1071,17 @@ back; the slice is one mesh per colour bin with every defined cell; and the
 Volume tab, the window and the MD rule put the overlays on the scene with
 the field's colour bar, keep them across a rebuild, and isolate them.
 
+**1.2.1, found in the window.** On the 12 811-atom soda-lime glass at a
+0.5 Å grid the first release never finished drawing: a glass basicity field
+varies at the ångström scale, so the eight level surfaces crossed 300 000 to
+380 000 cubes each (3.1 million triangles) and the step chooser had
+*estimated* the count as n^(2/3) of the cubes, which is only true of a smooth
+field. The chooser now counts the cubes each level crosses, as the channel
+surfaces' does, and coarsens to a 200 000-triangle budget (step 4 there,
+160 000 triangles, under a second); the field and the meshing poll the cancel
+hook. A test meshes a field of uniform noise on a 64³ grid under the budget in
+seconds, and another checks the hooks stop both.
+
 What is **not** verified: no measured Λ of a crystal in the group's own work
 has been compared with the bond-valence mean, and the measured scales
 (Duffy 1996, Lebouteiller and Courtine 1998, Dimitrov and Sakka 1996) are

@@ -218,6 +218,63 @@ def test_the_slice_is_one_mesh_per_colour_bin_on_the_plane(field, bipo4):
     assert 0 < sum(m.n_triangles for m in fewer) < total
 
 
+def test_a_field_that_varies_everywhere_is_meshed_to_the_budget_in_seconds():
+    """A glass basicity field varies at the ångström scale, so every level
+    crosses a large share of the cubes: 3.1 million triangles at full
+    resolution on a 55 Å box at 0.5 Å, minutes of marching, no cancel.
+    The plan counts the cubes and coarsens; the whole gradient stays within
+    the budget and comes back in seconds."""
+    import time
+
+    from facet.core.structure import Cell
+
+    rng = np.random.default_rng(7)
+    n = 64
+    values = rng.uniform(0.4, 1.0, (n, n, n))
+    cell = Cell(32.0, 32.0, 32.0, 90.0, 90.0, 90.0, np.eye(3) * 32.0)
+    grid = volume.Grid(values, cell, name="noise")
+    levels = F.gradient_levels(0.4, 1.0, 8)
+    # at full resolution the surfaces would be millions of triangles
+    assert F.straddling_cubes(values, levels[3], 1) > 0.5 * (n - 1) ** 3
+    step, predicted = F.gradient_plan(values, levels)
+    assert step > 1 and predicted <= F.TRIANGLE_BUDGET
+    clock = time.perf_counter()
+    meshes = F.gradient_meshes(grid, levels, 0.4, 1.0)
+    seconds = time.perf_counter() - clock
+    total = sum(m.n_triangles for m in meshes)
+    assert 0 < total <= 1.5 * F.TRIANGLE_BUDGET
+    assert seconds < 20.0, seconds
+    # a cube with an undefined corner is never walked
+    holed = values.copy()
+    holed[: n // 2] = np.nan
+    assert F.straddling_cubes(holed, levels[3], 1) < F.straddling_cubes(
+        values, levels[3], 1)
+
+
+def test_the_cancel_hook_stops_the_field_and_the_gradient(bipo4):
+    from facet.core import bulk, md_channels, md_model
+
+    s, full = bipo4
+    frame, _ = md_model.supercell_frame(s, (2, 2, 2))
+    ox = md_model.model_oxidation(frame.species)
+    ox_atom = ox.per_atom(frame.elements)
+    table, _ = bulk.analyse_frame(frame, ox_atom, bv.DEFAULT, v_list_vu=0.03)
+    lam = B.frame_basicity(table, "pauling", v_bond=0.075).value
+    with pytest.raises(md_channels.AnalysisCancelled):
+        F.basicity_landscape(frame, ox_atom, lam, probe="Na", probe_ox=1,
+                             grid_spacing_ang=0.5, r_cut_ang=6.0,
+                             cancelled=lambda: True)
+    fld = F.basicity_landscape(frame, ox_atom, lam, probe="Na", probe_ox=1,
+                               grid_spacing_ang=0.5, r_cut_ang=6.0,
+                               cancelled=lambda: False)
+    lo, hi = fld.range
+    with pytest.raises(md_channels.AnalysisCancelled):
+        F.gradient_meshes(fld.grid, F.gradient_levels(lo, hi, 3), lo, hi,
+                          cancelled=lambda: True)
+    n_points, seconds = F.landscape_seconds(frame, ox_atom, 0.5, 6.0)
+    assert n_points == fld.n_points and seconds > 0
+
+
 # -- the panel and the window -----------------------------------------------------
 
 def test_the_volume_tab_builds_the_field_and_asks_for_the_overlays(qapp):

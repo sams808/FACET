@@ -61,9 +61,21 @@ GRADIENT_LEVELS_DEFAULT = 8
 GRADIENT_ALPHA_DEFAULT = 0.22
 SLICE_ALPHA_DEFAULT = 0.75
 SLICE_BINS_DEFAULT = 24
-# the most triangles a gradient or a slice is allowed; a finer grid is
-# meshed at a coarser step rather than drawn as a million triangles
-TRIANGLE_BUDGET = 400_000
+# The most triangles a whole gradient (every level together) is allowed: a
+# finer grid is meshed at a coarser step rather than drawn as millions of
+# triangles. Measured on a 12 811-atom glass box of 55 Å at a 0.5 Å grid:
+# eight levels at step 1 are 3.1 million triangles (the middle levels cross
+# 300 000-380 000 cubes each) and take minutes in the Python marching; at
+# step 4 they are 160 000 and take under a second. Marching tetrahedra
+# gives about 6.2 triangles per cube the level crosses (the channel
+# surfaces' measure).
+TRIANGLE_BUDGET = 200_000
+TRIANGLES_PER_CUBE = 6.2
+MAX_MESH_STEP = 6
+# the seconds one (grid point, anion image) pair of the field costs, from
+# the channel landscapes' measure on this class of machine, for the
+# estimate a panel states before the field runs
+PAIRS_PER_S = 7.5e6
 
 
 @dataclass
@@ -185,19 +197,41 @@ def basicity_grid(structure, results, scale=basicity_mod.DEFAULT_SCALE, *,
 
 # --- an MD frame ----------------------------------------------------------------
 
+def landscape_seconds(frame, ox_atom, grid_spacing_ang: float,
+                      r_cut_ang: float) -> tuple[int, float]:
+    """``(grid points, seconds)``: the grid the spacing asks for over the
+    frame's box and about how long the field takes, from the anions within
+    ``r_cut_ang`` of each point at the box's density and :data:`PAIRS_PER_S`."""
+    from . import md_channels
+
+    box = np.asarray(frame.box_ang, np.float64)
+    _, n_points, _refusal = md_channels.grid_guard(box, float(grid_spacing_ang),
+                                                   None)
+    ox = np.asarray(ox_atom, np.int64).reshape(-1)
+    anions = int((ox < 0).sum())
+    volume = float(frame.volume_ang3)
+    per_point = max(1.0, anions / max(volume, 1e-9)
+                    * 4.0 / 3.0 * math.pi * float(r_cut_ang) ** 3)
+    return int(n_points), float(n_points) * per_point / PAIRS_PER_S
+
+
 def basicity_landscape(frame, ox_atom, lambda_atom, *, probe: str,
                        probe_ox: int, grid_spacing_ang: float,
                        r_cut_ang: float, params: bv.ParameterSet | None = None,
                        floor_vu: float = VALENCE_FLOOR_DEFAULT,
                        scale: str = basicity_mod.DEFAULT_SCALE,
-                       max_grid_points: int | None = None) -> BasicityField:
+                       max_grid_points: int | None = None,
+                       cancelled: Callable[[], bool] | None = None
+                       ) -> BasicityField:
     """The basicity a probe would sense over an MD frame's box.
 
     ``lambda_atom`` is one lambda per atom of the frame
     (:func:`facet.core.basicity.frame_basicity`; NaN for a cation or an
     anion without one); ``ox_atom`` one oxidation state per atom. The grid
     is :func:`facet.core.md_channels.bv_landscape`'s (its cap applies), the
-    contacts those within ``r_cut_ang``.
+    contacts those within ``r_cut_ang``. ``cancelled`` is asked once per
+    chunk of grid points and stops the sum with
+    :class:`facet.core.md_channels.AnalysisCancelled`.
     """
     from scipy.spatial import cKDTree
 
@@ -252,6 +286,10 @@ def basicity_landscape(frame, ox_atom, lambda_atom, *, probe: str,
     lam_safe = np.where(has, lam_atom, 0.0)
     per_chunk = max(1, min(int(n_points), 200_000))
     for start in range(0, int(n_points), per_chunk):
+        if cancelled is not None and cancelled():
+            raise md_channels.AnalysisCancelled(
+                f"the basicity field was cancelled at grid point {start} "
+                f"of {int(n_points)}")
         stop = min(int(n_points), start + per_chunk)
         points = bulk._lattice(md_channels._grid_frac(shape, start, stop), box)
         found = cKDTree(points).sparse_distance_matrix(
@@ -380,35 +418,77 @@ def _finite_normals(normals: np.ndarray) -> np.ndarray:
     return out
 
 
-def _mesh_step(values: np.ndarray, levels: Sequence[float]) -> int:
-    """The coarsening that keeps the gradient within the triangle budget."""
-    from .volume import isosurface  # noqa: F401  (the budget is its measure)
+def straddling_cubes(values: np.ndarray, level: float, step: int = 1) -> int:
+    """How many grid cubes of ``values[::step]`` the level crosses
+    (periodic; a cube with an undefined corner crosses nothing), which is
+    what the marching tetrahedra will walk."""
+    v = np.asarray(values, float)[::step, ::step, ::step]
+    if min(v.shape) < 2:
+        return 0
+    finite = np.isfinite(v)
+    inside = finite & (v <= level)
+    any_in = inside.copy()
+    all_in = inside.copy()
+    all_finite = finite.copy()
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                if (dx, dy, dz) == (0, 0, 0):
+                    continue
+                shift = (-dx, -dy, -dz)
+                any_in |= np.roll(inside, shift, axis=(0, 1, 2))
+                all_in &= np.roll(inside, shift, axis=(0, 1, 2))
+                all_finite &= np.roll(finite, shift, axis=(0, 1, 2))
+    return int((any_in & ~all_in & all_finite).sum())
 
-    n_cubes = int(np.prod(np.asarray(values.shape) - 1))
-    # about 3.5 triangles per straddling cube, and a level surface crosses
-    # roughly n^(2/3) of n cubes: an estimate, refined by the step loop
-    for step in range(1, 5):
-        per_level = (n_cubes / step ** 3) ** (2.0 / 3.0) * 3.5
-        if per_level * max(len(levels), 1) <= TRIANGLE_BUDGET:
-            return step
-    return 4
+
+def gradient_plan(values: np.ndarray, levels: Sequence[float], *,
+                  budget: int = TRIANGLE_BUDGET,
+                  max_step: int = MAX_MESH_STEP) -> tuple[int, int]:
+    """``(step, predicted triangles)``: the smallest coarsening of the grid
+    at which every level surface together fits the triangle budget, by
+    counting the cubes each level crosses (``straddling_cubes`` times
+    :data:`TRIANGLES_PER_CUBE`); the largest step when none fits.
+
+    Counting rather than estimating: a basicity field over a glass varies
+    at the ångström scale, so a level surface crosses a large share of all
+    the cubes -- not the n^(2/3) a smooth field would -- and an estimate
+    sent a 55 Å box at 0.5 Å into minutes of marching.
+    """
+    v = np.asarray(values, float)
+    predicted = 0
+    for step in range(1, max(1, int(max_step)) + 1):
+        if min(v[::step, ::step, ::step].shape) < 2:
+            break
+        predicted = int(sum(straddling_cubes(v, float(level), step)
+                            for level in levels) * TRIANGLES_PER_CUBE)
+        if predicted <= budget:
+            return step, predicted
+    return max(1, min(step, int(max_step))), predicted
 
 
 def gradient_meshes(grid: volume.Grid, levels: Sequence[float], lo: float,
                     hi: float, *, alpha: float = GRADIENT_ALPHA_DEFAULT,
                     step: int | None = None, colour_of: Callable | None = None,
-                    label: str = "basicity") -> list:
+                    label: str = "basicity",
+                    cancelled: Callable[[], bool] | None = None) -> list:
     """One translucent :class:`~facet.gl.vectors.OverlayMesh` per level, in
-    the ramp colour of that level over [lo, hi]."""
+    the ramp colour of that level over [lo, hi]. ``step`` None takes
+    :func:`gradient_plan`'s; ``cancelled`` is asked before each level."""
     from ..gl.vectors import OverlayMesh
 
     ramp = _ramp(colour_of)
     values = np.asarray(grid.values, float)
     if step is None:
-        step = _mesh_step(values, levels)
+        step, _ = gradient_plan(values, levels)
     out = []
     span = max(float(hi) - float(lo), 1e-12)
     for level in levels:
+        if cancelled is not None and cancelled():
+            from .md_channels import AnalysisCancelled
+
+            raise AnalysisCancelled("the gradient was cancelled before the "
+                                    f"level at {float(level):.4g}")
         vertices, faces, normals = volume.isosurface(grid, float(level),
                                                      step=int(step))
         vertices = np.asarray(vertices, np.float32)

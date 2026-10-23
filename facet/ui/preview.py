@@ -2902,11 +2902,16 @@ class PreviewWindow(QMainWindow):
         n_triangles = 0
         if spec.show_gradient:
             levels = field_mod.gradient_levels(lo, hi, spec.levels)
+            step, _predicted = field_mod.gradient_plan(
+                np.asarray(drawn.values), levels)
             meshes = field_mod.gradient_meshes(
-                drawn, levels, lo, hi, alpha=spec.gradient_alpha,
+                drawn, levels, lo, hi, alpha=spec.gradient_alpha, step=step,
                 colour_of=colour_of, label="field gradient")
             scene.overlay_meshes.extend(meshes)
             n_triangles += sum(m.n_triangles for m in meshes)
+            if step > 1:
+                notes.append(f"surfaces meshed at every {step}th grid point "
+                             "to stay within the triangle budget")
         if spec.show_slice and structure is not None:
             h, k, l = spec.plane
             if (h, k, l) != (0, 0, 0):

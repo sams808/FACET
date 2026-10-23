@@ -351,7 +351,8 @@ class FrameData:
                 probe=str(probe), probe_ox=probe_ox,
                 grid_spacing_ang=float(grid_spacing_ang),
                 r_cut_ang=float(r_cut_ang), params=self.params,
-                floor_vu=float(floor_vu), scale=scale)
+                floor_vu=float(floor_vu), scale=scale,
+                cancelled=_cancel_hook(None))
         return self._landscapes[key]
 
     @classmethod
@@ -1480,11 +1481,19 @@ def _apply_basicity_map(scene, fd: FrameData, rule: Rule, theme
     drawn = field_mod.restricted(grid, keep) if not keep.all() else grid
     n_triangles = 0
     levels = field_mod.gradient_levels(lo, hi, rule.levels)
+    # the coarsening that keeps the whole gradient within the triangle
+    # budget, by counting the cubes each level crosses (a glass field
+    # crosses most of them); the note states it
+    step, _predicted = field_mod.gradient_plan(np.asarray(drawn.values),
+                                               levels)
     meshes = field_mod.gradient_meshes(drawn, levels, lo, hi,
                                        alpha=float(rule.alpha),
-                                       label="basicity")
+                                       step=step, label="basicity",
+                                       cancelled=_cancel_hook(None))
     scene.overlay_meshes.extend(meshes)
     n_triangles += sum(m.n_triangles for m in meshes)
+    if step > 1:
+        words.append(f"meshed at step {step} ({step * (rule.grid_spacing_ang or 0.5):g} Å)")
     if rule.slice_axis is not None:
         axis = int(rule.slice_axis) % 3
         box = np.asarray(fd.frame.box_ang, float)
@@ -2223,6 +2232,19 @@ class BasicityMapRow(RuleRow):
             grid = grid_points_note(fd, float(self.grid_spacing_ang.value()))
             if grid:
                 notes.append(grid)
+            try:
+                from ..core import basicity_field as field_mod
+
+                _n, seconds = field_mod.landscape_seconds(
+                    fd.frame, fd.ox_atom, float(self.grid_spacing_ang.value()),
+                    float(self.r_cut_ang.value()))
+                about = (f"about {seconds:.0f} s" if seconds >= 1.5
+                         else "about a second")
+                notes.append(f"the field takes {about} on this machine, "
+                             "once per probe and grid; the surfaces are "
+                             "coarsened to a triangle budget")
+            except Exception:                 # a frame without a box
+                pass
             notes.append(f"scale: {fd.basicity_scale}")
         self.set_note(" · ".join(notes))
 

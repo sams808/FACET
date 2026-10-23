@@ -816,7 +816,13 @@ a value.</p>
 nearest anion more, so the field changes with the probe chosen; the legend
 names it. The field is a construction of the probe picture, stated as such
 &mdash; what a cation placed at that point would sense &mdash; and not a
-measured quantity at every point.</p>
+measured quantity at every point. Over a glass the field varies at the
+&aring;ngstr&ouml;m scale, so a level surface crosses a large share of the
+grid: the surfaces are meshed at every <i>n</i>th grid point to stay within
+a triangle budget, and the count line says which <i>n</i>; a finer grid
+sharpens the slice and the numbers, not the surfaces. The field itself
+takes seconds on a large box (the rule's note gives an estimate) and is
+kept until the probe or the grid changes.</p>
 <p {note}>The MD workspace has the same analysis as <i>basicity</i>: the
 composition's &Lambda;, the &lambda; of every anion atom as a histogram per
 anion element, its mean, and the means by speciation (free, non-bridging,
