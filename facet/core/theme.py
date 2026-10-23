@@ -52,6 +52,9 @@ class ColorMode(Enum):
     COORDINATION = "coordination number"
     PHI = "stereoactivity (phi)"
     VALENCE_DISCREPANCY = "valence discrepancy"
+    # the microscopic optical basicity of each anion site, from
+    # facet.core.basicity; the cations keep their element colour
+    BASICITY = "microscopic basicity"
     UNIFORM = "uniform"
 
 
@@ -537,6 +540,10 @@ def scale_range(values: dict[int, float], theme: Theme,
     if mode is ColorMode.VALENCE_DISCREPANCY:
         m = max(abs(lo), abs(hi), 0.05)
         return -m, m                       # symmetric, so zero sits mid-ramp
+    if mode is ColorMode.BASICITY:
+        # lambda spans a few hundredths within one structure: a structure
+        # whose anions all read the same gets a band of 0.1 about it
+        return (lo - 0.05, hi + 0.05) if hi - lo < 1e-9 else (lo, hi)
     if hi - lo < 1e-9:
         return lo - 0.5, hi + 0.5
     return lo, hi

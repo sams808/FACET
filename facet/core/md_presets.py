@@ -120,7 +120,8 @@ def _merged(*parts: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
-_STRUCTURE = ("glass", "rings", "components", "polyhedral-sharing")
+_STRUCTURE = ("glass", "rings", "components", "polyhedral-sharing",
+              "basicity")
 
 PRESETS: tuple[Preset, ...] = (
     Preset("Silicate",
@@ -141,12 +142,15 @@ PRESETS: tuple[Preset, ...] = (
     Preset("Phosphate",
            "Speciation and Qn over P, connectivity, polyhedral sharing and "
            "the polyhedron shape; no rings (phosphate chains).",
-           ("glass", "components", "polyhedral-sharing", "polyhedron-shape"),
+           ("glass", "components", "polyhedral-sharing", "polyhedron-shape",
+            "basicity"),
            ("P",)),
     Preset("Oxyfluoride",
-           "Speciation over the formers present with the anion environments "
-           "and the Warren-Cowley order of the halide around them.",
-           ("glass", "components", "polyhedral-sharing", "warren-cowley"),
+           "Speciation over the formers present with the anion environments, "
+           "the Warren-Cowley order of the halide around them and the "
+           "optical basicity on the common oxide/fluoride scale.",
+           ("glass", "components", "polyhedral-sharing", "warren-cowley",
+            "basicity"),
            ("Si", "Al", "P", "B"), halide=True),
     Preset("Ion conduction / channels",
            "Where a mobile ion can move: the voids (Voronoi cells, empty "

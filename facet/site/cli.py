@@ -38,6 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"listing threshold in v.u. (default {bv.V_LIST_DEFAULT})")
     parser.add_argument("--format", default="txt", choices=("txt", "md", "tex"),
                         help="plain text, Markdown tables or LaTeX tables")
+    from facet.core.basicity import DEFAULT_SCALE, SCALE_KEYS
+    parser.add_argument("--basicity-scale", default=DEFAULT_SCALE,
+                        choices=SCALE_KEYS + ("none",), metavar="SCALE",
+                        help="the scale of basicity moderating parameters "
+                             "for the optical-basicity rows: "
+                             + ", ".join(SCALE_KEYS)
+                             + f" (default {DEFAULT_SCALE}), or 'none'")
     return parser
 
 
@@ -74,8 +81,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
     else:
         chosen = results[:1]
+    scale = None if args.basicity_scale == "none" else args.basicity_scale
+    full = results if args.anions else None
+    if scale is not None and full is None:
+        # the anions' own contacts, which the basicity of every site reads
+        full = coordination.analyse_structure(
+            structure, bv.DEFAULT, v_bond=args.v_bond, v_list=args.v_list,
+            cations_only=False)
+
+    def basicity_of(r):
+        if scale is None:
+            return None
+        from facet.core.basicity import site_basicity
+        return site_basicity(r, full, scale, v_bond=args.v_bond)
+
     pieces = [site_text(r, args.v_bond, fmt=args.format,
-                        source=f"{path.name}, FACET") for r in chosen]
+                        source=f"{path.name}, FACET", basicity=basicity_of(r))
+              for r in chosen]
     sep = "\n\n" if args.format == "txt" else "\n\n---\n\n" if args.format == "md" else "\n\n"
     print(sep.join(pieces))
     return 0

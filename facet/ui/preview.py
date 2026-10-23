@@ -224,6 +224,9 @@ class PreviewWindow(QMainWindow):
         self.structure_panel.removeRequested.connect(self._on_remove)
 
         self.utilities = UtilitiesPanel()
+        # the scale of basicity moderating parameters chosen on the Tools
+        # tab drives the Site tab and the Atom tab of every model too
+        self.utilities.basicityScaleChanged.connect(self._on_basicity_scale)
 
         self.diffraction = DiffractionPanel()
         self.diffraction.apply_theme(self.theme)
@@ -1898,7 +1901,8 @@ class PreviewWindow(QMainWindow):
                 show_void_cones=(self.show_void_cones and entry is active),
                 vector_scale=self.vector_scale,
                 ellipsoid_probability=self.probability_box.currentData()
-                or 0.50))
+                or 0.50,
+                site_scalars=self._basicity_site_scalars(entry)))
 
         self.scene = (scenes[0] if len(scenes) == 1
                       else merge_scenes(scenes, [e.offset for e in entries]))
@@ -1936,7 +1940,9 @@ class PreviewWindow(QMainWindow):
             active.structure if active else None,
             self.project.results_for(active) if active else None,
             self._current_result(), self.project.v_bond,
-            params=self.project.params, v_list=self.project.v_list)
+            params=self.project.params, v_list=self.project.v_list,
+            full_results=((lambda e=active: self.project.full_results_for(e))
+                          if active else None))
         # the diffraction pattern and the PDF are the costly ones (a pair
         # search out to r_max on every rebuild): computed when their tab is
         # the one shown, and marked stale otherwise, so a threshold drag or a
@@ -2633,13 +2639,16 @@ class PreviewWindow(QMainWindow):
             entry.structure if entry else None,
             results,
             current, self.project.v_bond,
-            params=self.project.params, v_list=self.project.v_list)
+            params=self.project.params, v_list=self.project.v_list,
+            full_results=((lambda e=active: self.project.full_results_for(e))
+                          if active else None))
         # atom colours that encode a per-site number follow too, once the
         # drag settles
         mode = getattr(self.theme, "color_mode", None)
         per_site = (theme_mod.ColorMode.BVS, theme_mod.ColorMode.COORDINATION,
                     theme_mod.ColorMode.PHI,
-                    theme_mod.ColorMode.VALENCE_DISCREPANCY)
+                    theme_mod.ColorMode.VALENCE_DISCREPANCY,
+                    theme_mod.ColorMode.BASICITY)
         if mode in per_site or not self.show_subthreshold:
             self._recolour_timer.start()
         self._threshold_history_timer.start()
@@ -3220,7 +3229,59 @@ class PreviewWindow(QMainWindow):
                         and self.running_sum_column.isChecked())
         self.analysis.setHtml(site_html(
             r, v, muted, split=split, apriori_of=a_priori_of,
-            apriori_reason=apriori_reason, show_running=show_running))
+            apriori_reason=apriori_reason, show_running=show_running,
+            basicity=self._site_basicity(entry, r, v)))
+
+    def _site_basicity(self, entry, r, v: float):
+        """The optical basicity of the selected site (``facet.core.basicity``:
+        an anion's own lambda, the anions about a cation), from the entry's
+        analysis that covers the anions. None when it cannot be computed;
+        the Site tab then shows the rest."""
+        if entry is None or r is None:
+            return None
+        try:
+            from ..core import basicity as basicity_mod
+
+            return basicity_mod.site_basicity(
+                r, self.project.full_results_for(entry),
+                self.utilities.basicity_scale(), v_bond=v)
+        except Exception as error:          # a parameter or reader fault
+            self.statusBar().showMessage(
+                f"Optical basicity not computed: {error}", 8000)
+            return None
+
+    def _on_basicity_scale(self, key: str) -> None:
+        """The Tools tab's scale changed: the Site tab, every model's Atom
+        tab and the colouring by basicity read the new one."""
+        for controller in self.models:
+            try:
+                controller.set_basicity_scale(key)
+            except Exception:                 # a model without an atom read
+                pass
+        self._update_analysis()
+        if getattr(self.theme, "color_mode", None) is theme_mod.ColorMode.BASICITY:
+            self._rebuild()
+
+    def _basicity_site_scalars(self, entry) -> dict | None:
+        """The microscopic basicity of each anion site of ``entry``, by site
+        index, for the crystal view's basicity colour mode; None in every
+        other mode (no analysis of the anions is run for nothing)."""
+        if getattr(self.theme, "color_mode", None) is not \
+                theme_mod.ColorMode.BASICITY or entry is None \
+                or entry.kind != "crystal":
+            return None
+        try:
+            from ..core import basicity as basicity_mod
+
+            sb = basicity_mod.structure_basicity(
+                entry.structure, self.project.full_results_for(entry),
+                self.utilities.basicity_scale(), v_bond=self.project.v_bond)
+        except Exception as error:          # a parameter or reader fault
+            self.statusBar().showMessage(
+                f"Colouring by basicity not possible: {error}", 8000)
+            return None
+        return {index: m.value for index, m in sb.anions.items()
+                if m.defined and m.value == m.value}
 
     # -- export ------------------------------------------------------------
     def _provenance(self) -> list[str]:

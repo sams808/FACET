@@ -11,6 +11,30 @@ import math
 from .coordination import SiteResult
 
 
+def _basicity_rows(info) -> list[tuple[str, str]]:
+    """The optical-basicity rows from a MicroBasicity (an anion) or an
+    EnvironmentBasicity (a cation) of facet.core.basicity; none for None."""
+    if info is None:
+        return []
+    if hasattr(info, "shares"):
+        if not info.defined:
+            return [("Microscopic optical basicity λ", "—")]
+        listed = ("" if info.value_listed != info.value_listed
+                  else f" ({info.value_listed:.3f} to the listing cut)")
+        shares = "; ".join(f"{s.label} {s.share:.3f}"
+                           + ("" if s.moderator is None or s.moderator.measured
+                              else " (chi)")
+                           for s in info.shares if s.bonded)
+        return [("Microscopic optical basicity λ",
+                 f"{_num(info.value, 3)}{listed}, {info.scale} scale"),
+                ("Shares of the anion charge", shares or "—")]
+    detail = ("" if not info.n_anions
+              else f" ({_num(info.value_host, 3)} with this site's own bonds "
+                   f"left out; {info.n_anions} anions; {info.scale} scale)")
+    return [("Optical basicity about this site",
+             f"{_num(info.value, 3)}{detail}")]
+
+
 def _rows(r: SiteResult, v_bond: float) -> list[tuple[str, str]]:
     bonded = [c for c in r.contacts if c.has_valence and c.valence > v_bond]
     bvs = sum(c.valence * c.occupancy for c in bonded)
@@ -85,10 +109,12 @@ PLATEAU_HEAD = ("CN", "threshold range / v.u.", "decades", "gap / Å", "")
 
 
 def site_text(r: SiteResult, v_bond: float, *, fmt: str = "txt",
-              source: str = "") -> str:
-    """The site as text (``fmt`` 'txt'), Markdown ('md') or LaTeX ('tex')."""
+              source: str = "", basicity=None) -> str:
+    """The site as text (``fmt`` 'txt'), Markdown ('md') or LaTeX ('tex').
+    ``basicity`` is the site's optical basicity from
+    :func:`facet.core.basicity.site_basicity`, or None to leave it out."""
     fmt = fmt.lower()
-    rows = _rows(r, v_bond)
+    rows = _rows(r, v_bond) + _basicity_rows(basicity)
     contacts = _contacts(r, v_bond)
     plateaus = _plateaus(r, v_bond)
     head = _headline(r, source)

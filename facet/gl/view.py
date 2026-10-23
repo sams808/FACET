@@ -1110,20 +1110,36 @@ class StructureView(QOpenGLWidget):
             painter.setPen(colour)
             painter.drawText(rect, Qt.AlignCenter, text)
 
-    def _paint_legend(self, painter: QPainter) -> None:
-        """A colour bar with its range when atoms are coloured by a value."""
+    def _legend_range(self) -> tuple[str, float, float, bool] | None:
+        """``(title, lo, hi, diverging)`` of the colour bar, or None when the
+        atoms are not coloured by a value. The scene's own legend (set by
+        whatever coloured it: the crystal builder, the MD highlight rules)
+        comes first; a crystal scene without one is read from the theme's
+        mode and the results, as before."""
+        legend = getattr(self.scene, "value_legend", None)
+        if legend:
+            title, lo, hi, diverging = legend
+            return str(title), float(lo), float(hi), bool(diverging)
         theme = self.theme
         mode = getattr(theme, "color_mode", None) if theme else None
         if mode is None or self.results is None or not self.results:
-            return
+            return None
         if mode in (theme_mod.ColorMode.ELEMENT, theme_mod.ColorMode.SITE,
                     theme_mod.ColorMode.UNIFORM):
-            return
+            return None
         values = theme_mod.site_values(self.results, mode)
         if not values:
-            return
+            return None
         lo, hi = theme_mod.scale_range(values, theme, mode)
-        diverging = mode is theme_mod.ColorMode.VALENCE_DISCREPANCY
+        return mode.value, lo, hi, mode is theme_mod.ColorMode.VALENCE_DISCREPANCY
+
+    def _paint_legend(self, painter: QPainter) -> None:
+        """A colour bar with its range when atoms are coloured by a value."""
+        theme = self.theme
+        legend = self._legend_range()
+        if legend is None or theme is None:
+            return
+        title, lo, hi, diverging = legend
         width, height = self._view_size()
         scale = self._view_scale()
         bar_w, bar_h = 14 * scale, 110 * scale
@@ -1148,7 +1164,7 @@ class StructureView(QOpenGLWidget):
                          Qt.AlignRight | Qt.AlignVCenter, f"{lo:.3g}")
         painter.drawText(QRectF(x - 160 * scale, y + bar_h + 2 * scale,
                                 160 * scale + bar_w, 16 * scale),
-                         Qt.AlignRight | Qt.AlignVCenter, mode.value)
+                         Qt.AlignRight | Qt.AlignVCenter, title)
         painter.setFont(self.font())
 
     def set_depth_dim_focus(self, on: bool) -> None:

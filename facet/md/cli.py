@@ -72,7 +72,7 @@ EXIT_WRITE = 5
 
 # The option groups of a request, in the order the template prints them.
 GROUPS = ("glass", "scattering", "network", "order", "voids", "channels",
-          "nmr", "exafs", "feff", "dynamics")
+          "nmr", "exafs", "feff", "dynamics", "basicity")
 # Top-level request fields a request file or --set may give, by name, with
 # the friendlier names the command line uses.
 _TOP_ALIASES = {"ox": "ox_overrides", "type_map": "type_map",
@@ -435,7 +435,8 @@ def _group_class(name: str):
             "voids": ma.VoidOptions, "channels": ma.ChannelOptions,
             "nmr": ma.NmrOptions,
             "exafs": ma.ExafsOptions, "feff": ma.FeffOptions,
-            "dynamics": ma.DynamicsOptions}[name]
+            "dynamics": ma.DynamicsOptions,
+            "basicity": ma.BasicityOptions}[name]
 
 
 def _fields(cls) -> dict[str, dataclasses.Field]:

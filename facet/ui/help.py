@@ -598,6 +598,11 @@ threshold.</p>
     <td>How far the threshold can move without the coordination number
     changing, in decades of valence and in &aring;ngstr&ouml;ms of
     distance.</td></tr>
+<tr><td><b>Microscopic optical basicity &lambda;</b></td>
+    <td>For an anion site: Duffy and Ingram's &lambda; from the bond valences
+    it receives, with each cation's share listed below the notes. For a
+    cation site: the mean &lambda; of the anions about it. See <i>Optical
+    basicity</i>.</td></tr>
 </table>
 <p>Below that, every contact found at the tabulation threshold, with its
 distance, its partial valence, a filled marker if it is above the bond threshold
@@ -701,6 +706,85 @@ drag the explorer is telling you that the vector sum depends on contacts near
 the cut.</p>
 """),
 
+        ("basicity", "Optical basicity", f"""
+<h1>Optical basicity, bulk and per anion</h1>
+<p>Duffy and Ingram's optical basicity &Lambda; (J. Non-Cryst. Solids 21
+(1976) 373) expresses the electron-donor power of the oxide ions of a
+material on a scale anchored at CaO = 1, as the Pb<sup>2+</sup>, Tl<sup>+</sup>
+and Bi<sup>3+</sup> probe ions sense it in their 6s&ndash;6p spectra. Each
+cation lowers it through a <i>basicity moderating parameter</i> &gamma;,
+related to the Pauling electronegativity by &gamma; = 1.36 (&chi; &minus;
+0.26); a single oxide has &Lambda; = 1/&gamma;, and a composition has
+&Lambda; = 1 &minus; &Sigma;<sub>A</sub> X<sub>A</sub> (1 &minus;
+1/&gamma;<sub>A</sub>), X<sub>A</sub> the share of the oxygen charge that
+cation A neutralises (their eq. 4).</p>
+<h2>The microscopic basicity of one anion</h2>
+<p>The same equation applied to one oxygen atom is what Duffy and Ingram
+called its microscopic optical basicity &lambda; (their section 1.4): each
+cation attached to it takes a share of its charge, and in 1976 that share
+was the Pauling bond strength z/CN. A bridging Si&ndash;O&ndash;Si oxygen
+comes to 0.48, a terminal Si&ndash;O to 0.74, Si&ndash;O&ndash;Al(IV) to
+0.59. FACET has that share for every contact of every anion site: the bond
+valence <i>s</i> it receives. So, for an anion of charge &minus;|z|,</p>
+<p style="margin-left:2em">&lambda; = 1 &minus; &Sigma;<sub>j</sub>
+(<i>s</i><sub>j</sub>/|z|)(1 &minus; 1/&gamma;<sub>j</sub>)</p>
+<p>over the contacts above the bond threshold, occupancy-weighted; the sum
+to the listing cut is given beside it, as &phi; is. The share the bonded
+contacts do not carry counts at &gamma; = 1, as in the equation, which is
+what makes a terminal oxygen more basic than a bridging one. Fluoride
+sites are on the same scale through Duffy's common oxide/fluoride scale
+(J. Non-Cryst. Solids 109 (1989) 35): &gamma; in a fluoride environment is
+2.3 times the oxide value, so &Lambda;(NaF) = 0.50. Other anions have no
+published scale here and are left out, with a note.</p>
+<p>The <b>Site</b> tab shows &lambda; for an anion site with every cation's
+share, and for a cation site the bond-valence-weighted mean &lambda; of the
+anions about it &mdash; the basicity the site sits in &mdash; together with
+the same mean taken with that site's own bonds left out of each anion's sum,
+which is the environment as the rest of the structure leaves it. <i>Tools
+&rsaquo; Basicity</i> gives the whole structure: &Lambda; from the
+composition, the mean &lambda; over the anion sites (each weighted by its
+atoms and its charge, the weight the composition gives it), every anion and
+cation site as rows, and the moderating parameters used. The two numbers
+agree when every cation's bonds carry exactly its formal charge, and differ
+by the departure of the bond-valence sums from the charges otherwise: on
+the bundled quartz the Si sum is 4.18 and the bridging oxygens come to
+0.45 against 0.48 from the composition.</p>
+<h2>The scales</h2>
+<p>Four scales of &gamma; are offered, chosen on the Basicity tab (the Site
+tab follows). The default derives every cation's &gamma; from Pauling's
+electronegativity as he tabulated it in 1960, which is the table Duffy and
+Ingram's values come from (Si 2.09, Na 0.87, K 0.73, Mg 1.28, B 2.36,
+P 2.50). The other three are measured tables: Duffy's spectroscopic
+&gamma; (J. Chem. Educ. 73 (1996) 1138, Table 1), Lebouteiller and
+Courtine's &Lambda; by cation, oxidation state and coordination (J. Solid
+State Chem. 137 (1998) 94, Table 2) and Dimitrov and Sakka's &Lambda; from
+refractive index and band gap (J. Appl. Phys. 79 (1996) 1736, Table I). A
+cation a table does not list falls back to the electronegativity relation,
+and every value says which it is &mdash; in the share table a <i>chi</i>
+marks it. Duffy wrote (1996) that the oxides of the transition elements
+measure more basic than the electronegativity relation gives; on the
+bundled BiPO<sub>4</sub> the relation puts Bi<sup>3+</sup> at 0.45 and the
+measured tables at 1.19, and the structure's &Lambda; moves from 0.42 to
+0.65 with the scale. The scale is part of the number, and every export
+names it.</p>
+<h2>Seeing it on the structure</h2>
+<p><i>Theme &rsaquo; Colour by &rsaquo; microscopic basicity</i> puts every
+oxide and fluoride anion of a crystal on the colour ramp by its &lambda;,
+the cations keeping their element colour, with the colour bar on the view
+giving the range (autoscaled to the structure, or pinned in the Theme panel
+so two structures share one scale). In the MD workspace the same mode is
+<i>Colour atoms by &rsaquo; microscopic basicity</i> on the Highlight tab,
+over the whole box at the threshold in force; both follow the scale chosen
+under <i>Tools &rsaquo; Basicity</i>. Terminal oxygens, bridging oxygens and
+the oxygens about a modifier-rich pocket then read as a gradient rather than
+as rows of a table.</p>
+<p {note}>The MD workspace has the same analysis as <i>basicity</i>: the
+composition's &Lambda;, the &lambda; of every anion atom as a histogram per
+anion element, its mean, and the means by speciation (free, non-bridging,
+bridging, tricluster) when the formers are named. An atom read in the Atom
+tab shows its &lambda; as a site does.</p>
+"""),
+
         ("utilities", "Tools", f"""
 <h1>Tools</h1>
 <p>Whole-structure tables, each recomputed for the active structure.</p>
@@ -732,6 +816,10 @@ by a search in the opposite direction from the cation one. Cation and anion
 totals count the same bonds from opposite ends, so their agreement is a check on
 the arithmetic rather than a restatement of it. The charge balance line reports
 the residual.</li>
+<li><b>Basicity</b> &mdash; the optical basicity: &Lambda; from the
+composition, the mean microscopic &lambda; of the anions from their bond
+valences, every anion and cation site as rows, and the moderating parameters
+on the chosen scale. See <i>Optical basicity</i>.</li>
 </ul>
 <p {note}>A tab is computed when you show it, not before. Recomputing all ten on
 every move of the threshold took nearly four seconds on a structure of a few

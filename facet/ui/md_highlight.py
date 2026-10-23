@@ -73,7 +73,8 @@ SENSES = ("≤", "≥", "=")
 COLOUR_MODES = ("element", "shell from the atom",
                 "bond-valence sum", "coordination number",
                 "stereoactivity (phi)", "Qn", "modifier-rich O",
-                "modifier density", "channel membership")
+                "modifier density", "channel membership",
+                "microscopic basicity")
 # the hot map's surface: a warm colour the element palettes keep clear of
 HOTMAP_COLOUR = (0.95, 0.35, 0.15)
 HOTMAP_ALPHA = 0.30
@@ -248,6 +249,11 @@ class FrameData:
     ring_size: np.ndarray | None = None
     channel_distance: np.ndarray | None = None
     shell_centre: int | None = None
+    # the scale of basicity moderating parameters the microscopic-basicity
+    # colouring reads (facet.core.basicity.SCALE_KEYS); set from the
+    # window's Tools tab, FACET's default otherwise
+    basicity_scale: str = "pauling"
+    _basicity: dict = field(default_factory=dict, repr=False)
     _angles: tuple | None = field(default=None, repr=False)
     _spheres: object = field(default=None, repr=False)
     _landscapes: dict = field(default_factory=dict, repr=False)
@@ -296,6 +302,23 @@ class FrameData:
                    np.asarray(ox_atom), v_bond, former_set, cn,
                    np.asarray(results.bvs_vu), np.asarray(results.phi),
                    former_cn, qn, modifiers, params)
+
+    def basicity_values(self, scale: str | None = None) -> np.ndarray:
+        """The microscopic optical basicity of every atom at this frame's
+        v_bond on ``scale`` (the frame data's own when None): lambda for an
+        oxide or fluoride anion whose cations the scale covers, NaN for
+        every other atom (``facet.core.basicity.frame_basicity``). Computed
+        once per scale."""
+        from ..core import basicity as basicity_mod
+
+        key = str(scale or self.basicity_scale)
+        found = self._basicity.get(key)
+        if found is None:
+            found = basicity_mod.frame_basicity(
+                self.table, key, v_bond=self.v_bond,
+                formers=sorted(self.formers) or None)
+            self._basicity[key] = found
+        return found.value
 
     @classmethod
     def from_view(cls, view, formers=(), glass=None) -> "FrameData":
@@ -1014,6 +1037,7 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
     cations = np.nonzero(~np.asarray(fd.table.is_anion))[0]
     anions = np.nonzero(np.asarray(fd.table.is_anion))[0]
     note = ""
+    legend = None                       # (title, lo, hi) of the colour bar
     if colour_by == "element":
         colours = base
     elif colour_by == "shell from the atom":
@@ -1027,6 +1051,7 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
             rows = np.nonzero(shell >= 0)[0]
             by_atom = {int(i): float(shell[i]) for i in rows}
             colours = _ramp_over(by_atom, 0.0, 3.0, base, sites)
+            legend = ("shell from the atom", 0.0, 3.0)
     elif colour_by in ("bond-valence sum", "coordination number",
                        "stereoactivity (phi)"):
         # the crystal window's modes, as facet.ui.md_scene._value_colours
@@ -1037,6 +1062,7 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
         by_atom = {int(i): float(values[i]) for i in cations}
         lo, hi = theme_mod.scale_range(by_atom, theme, mode)
         colours = _ramp_over(by_atom, lo, hi, base, sites)
+        legend = (colour_by, lo, hi)
     elif colour_by == "Qn":
         if fd.qn is None:
             note = "Qn needs the network formers (none are named)"
@@ -1047,6 +1073,7 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
             finite = list(by_atom.values())
             hi = max(max(finite) if finite else 0.0, 1.0)
             colours = _ramp_over(by_atom, 0.0, hi, base, sites)
+            legend = ("Qn", 0.0, hi)
     elif colour_by == "modifier-rich O":
         if fd.modifier_count is None:
             note = "modifier-rich O needs the network formers (none are named)"
@@ -1056,6 +1083,7 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
             finite = list(by_atom.values())
             hi = max(max(finite) if finite else 0.0, 1.0)
             colours = _ramp_over(by_atom, 0.0, hi, base, sites)
+            legend = ("modifiers on the anion", 0.0, hi)
     elif colour_by == "modifier density":
         modifiers = list(fd.modifiers)
         if not modifiers:
@@ -1066,6 +1094,7 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
             by_atom = {int(i): float(counts[i]) for i in range(fd.n_atoms)}
             hi = max(float(counts.max()) if counts.size else 0.0, 1.0)
             colours = _ramp_over(by_atom, 0.0, hi, base, sites)
+            legend = (f"modifiers within {HOTMAP_RADIUS_ANG:g} Å", 0.0, hi)
     elif colour_by == "channel membership":
         if membership is None:
             note = "channel membership needs a channels rule that is on"
@@ -1076,9 +1105,31 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
             by_atom = {int(i): float(membership[i]) for i in inside}
             colours = _ramp_over(by_atom, 0.0, max(n_regions - 1, 1), base,
                                  sites)
+            legend = ("channel region", 0.0, float(max(n_regions - 1, 1)))
+    elif colour_by == "microscopic basicity":
+        # the anions on the ramp by their lambda (facet.core.basicity, at
+        # v_bond on the frame data's scale), the cations in their element
+        # colour; a pinned theme range holds, else the frame's own span
+        values = fd.basicity_values()
+        rows = np.nonzero(np.isfinite(values))[0]
+        if not len(rows):
+            note = ("microscopic basicity: no anion of this frame has a "
+                    "lambda (an oxide or fluoride anion whose cations the "
+                    f"{fd.basicity_scale} scale covers)")
+            colours = base
+        else:
+            by_atom = {int(i): float(values[i]) for i in rows}
+            lo, hi = theme_mod.scale_range(by_atom, theme,
+                                           theme_mod.ColorMode.BASICITY)
+            colours = _ramp_over(by_atom, lo, hi, base, sites)
+            legend = (f"microscopic basicity λ ({fd.basicity_scale})", lo, hi)
     else:
         raise ValueError(f"colour_by {colour_by!r}: one of {COLOUR_MODES}")
     scene.atom_color = np.asarray(colours, np.float32).reshape(-1, 3)
+    # the view's colour bar: what the ramp spans, for every value mode
+    scene.value_legend = (None if legend is None
+                          else (legend[0], float(legend[1]), float(legend[2]),
+                                False))
     return note
 
 
@@ -2148,7 +2199,10 @@ class HighlightPage(QWidget):
             "colour modes, on the frame at v_bond (cations on the ramp, "
             "anions in their element colour). Qn and modifier-rich O need "
             "the formers named in Setup; channel membership needs a "
-            "channels rule that is on.")
+            "channels rule that is on. Microscopic basicity puts every "
+            "oxide and fluoride anion on the ramp by its lambda (Tools > "
+            "Basicity chooses the scale); the colour bar on the view gives "
+            "the range.")
         self.colour.currentIndexChanged.connect(lambda _i: self._changed())
         colour_row.addWidget(self.colour)
         colour_row.addStretch(1)

@@ -48,8 +48,9 @@ class ReportDialog(QDialog):
         intro = QLabel(
             "Every site of every file, at the thresholds below: coordination "
             "number, bond valences and their sums, distances, plateaus, the "
-            "distance each pair's cutoff corresponds to, and the charge "
-            "balance. The same five tables in whichever format is chosen.")
+            "distance each pair's cutoff corresponds to, the charge "
+            "balance and the optical basicity. The same six tables in "
+            "whichever format is chosen.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -96,6 +97,17 @@ class ReportDialog(QDialog):
         self.anions = QCheckBox("Analyse the anion sites as well")
         self.anions.setChecked(anions)
         form.addRow("", self.anions)
+        from ..core import basicity as basicity_mod
+        self.basicity_scale = QComboBox()
+        for key, scale in basicity_mod.SCALES.items():
+            self.basicity_scale.addItem(scale.name, key)
+        self.basicity_scale.addItem("not computed", None)
+        self.basicity_scale.setToolTip(
+            "The scale of basicity moderating parameters for the optical-"
+            "basicity table: lambda of every anion site from its bond "
+            "valences, Lambda of every composition. Every value names its "
+            "source.")
+        form.addRow("Optical basicity", self.basicity_scale)
         self.second = QDoubleSpinBox()
         self.second.setDecimals(4)
         self.second.setRange(0.0, 5.0)
@@ -172,7 +184,8 @@ class ReportDialog(QDialog):
         second = self.second.value() if self.second.value() > 0 else None
         return report_mod.template_fields(
             self.format.currentData(), self.v_bond.value(), self.v_list.value(),
-            self.anions.isChecked(), second)
+            self.anions.isChecked(), second,
+            basicity_scale=self.basicity_scale.currentData())
 
     def apply_template(self, fields: dict) -> None:
         i = self.format.findData(fields.get("format"))
@@ -185,6 +198,10 @@ class ReportDialog(QDialog):
         self.anions.setChecked(bool(fields.get("anions", False)))
         other = fields.get("v_bond_other")
         self.second.setValue(float(other) if other else 0.0)
+        if "basicity_scale" in fields:
+            at = self.basicity_scale.findData(fields["basicity_scale"])
+            if at >= 0:
+                self.basicity_scale.setCurrentIndex(at)
 
     def _fill_templates(self) -> None:
         menu = self.templates.menu()
@@ -240,7 +257,8 @@ class ReportDialog(QDialog):
             report = report_mod.analyse_files(
                 files, params=self.params, v_bond=self.v_bond.value(),
                 v_list=self.v_list.value(), anions=self.anions.isChecked(),
-                progress=step, v_bond_other=second)
+                progress=step, v_bond_other=second,
+                basicity_scale=self.basicity_scale.currentData())
             progress.setValue(len(files))
             self.written = report_mod.write_report(report, out, fmt)
             if fmt == "html" and self.figures.isChecked():

@@ -130,6 +130,9 @@ class Scene:
     iso_color: tuple[float, float, float] = (0.98, 0.78, 0.30)
     iso_alpha: float = 0.55
     iso_label: str = ""
+    # (title, lo, hi, diverging) when the atom colours encode a value, for
+    # the view's colour bar; None when they are element or site colours
+    value_legend: tuple | None = None
 
     # --- lattice planes ---------------------------------------------------
     # One entry per drawn plane: (vertices, normals, colour, alpha). A list
@@ -522,11 +525,15 @@ def build_scene(structure: Structure,
                 show_void_cones: bool = False,
                 vector_scale: float = 0.6,
                 ellipsoid_probability: float = 0.50,
-                vector_sites=None) -> Scene:
+                vector_sites=None,
+                site_scalars=None) -> Scene:
     """Build a drawable scene for a structure.
 
     `results` is reused when supplied, so opening a structure does not analyse
     it twice. Contacts down to `v_list` are included; `v_bond` only styles them.
+    `site_scalars` (a value per site index) feeds the colour modes whose
+    number the results do not carry -- the microscopic basicity of each
+    anion site -- and is read only in those modes.
     """
     from ..core import coordination
 
@@ -548,7 +555,7 @@ def build_scene(structure: Structure,
     # set before the atoms are built: it decides how large every ellipsoid is
     scene.ellipsoid_probability = float(ellipsoid_probability)
 
-    _build_atoms(structure, scene, style, theme, results)
+    _build_atoms(structure, scene, style, theme, results, site_scalars)
     _build_bonds(structure, scene, theme, params, v_list)
     _add_bonded_images(structure, scene)
 
@@ -981,7 +988,7 @@ def _add_bonded_images(structure: Structure, scene: Scene) -> None:
 
 
 def _build_atoms(structure: Structure, scene: Scene, style: Style,
-                 theme, results) -> None:
+                 theme, results, site_scalars=None) -> None:
     atoms = structure.atoms
     if not atoms:
         return
@@ -990,7 +997,8 @@ def _build_atoms(structure: Structure, scene: Scene, style: Style,
     scene.atom_site = np.array([a.site_index for a in atoms], np.int32)
     scene.atom_label = [a.label for a in atoms]
     scene.atom_element = [a.element for a in atoms]
-    scene.atom_color = _atom_colors(structure, atoms, theme, results)
+    scene.atom_color, scene.value_legend = _atom_colors(
+        structure, atoms, theme, results, site_scalars)
 
     info = [elements.info(a.element) for a in atoms]
     if style is Style.SPACE_FILLING:
@@ -1059,21 +1067,34 @@ def _build_ellipsoids(structure: Structure, scene: Scene) -> None:
         np.linalg.norm(shapes, axis=1).max(axis=1), 1e-3).astype(np.float32)
 
 
-def _atom_colors(structure: Structure, atoms, theme, results) -> np.ndarray:
-    """Apply the theme's colour mode."""
+def _atom_colors(structure: Structure, atoms, theme, results,
+                 site_scalars=None) -> tuple[np.ndarray, tuple | None]:
+    """Apply the theme's colour mode: the colours, and the legend
+    ``(title, lo, hi, diverging)`` when they encode a value, else None.
+
+    ``site_scalars`` carries a value per site index for the modes whose
+    number is not a field of the SiteResult -- the microscopic optical
+    basicity of each anion site, computed by the caller from an analysis
+    that covers the anions (:mod:`facet.core.basicity`).
+    """
     mode = theme.color_mode
 
     if mode is theme_mod.ColorMode.UNIFORM:
         return np.tile(np.array(theme.uniform_atom_color, np.float32),
-                       (len(atoms), 1))
+                       (len(atoms), 1)), None
 
     if mode is theme_mod.ColorMode.SITE:
         cycle = theme_mod.SITE_CYCLE
         return np.array([cycle[a.site_index % len(cycle)] for a in atoms],
-                        np.float32)
+                        np.float32), None
 
-    if mode is not theme_mod.ColorMode.ELEMENT and results:
+    if mode is theme_mod.ColorMode.BASICITY:
+        values = {int(k): float(v) for k, v in (site_scalars or {}).items()}
+    elif mode is not theme_mod.ColorMode.ELEMENT and results:
         values = theme_mod.site_values(results, mode)
+    else:
+        values = {}
+    if values:
         lo, hi = theme_mod.scale_range(values, theme, mode)
         diverging = mode is theme_mod.ColorMode.VALENCE_DISCREPANCY
         out = []
@@ -1082,12 +1103,14 @@ def _atom_colors(structure: Structure, atoms, theme, results) -> np.ndarray:
                 out.append(theme_mod.color_for_value(values[a.site_index],
                                                      lo, hi, diverging))
             else:
-                # anions carry no per-site scalar; keep them elemental so the
-                # framework stays readable behind the coloured cations
+                # the sites without a scalar (the anions of a cation mode,
+                # the cations of the basicity mode) keep their element
+                # colour, so the framework stays readable behind the ramp
                 out.append(theme.element_color(a.element))
-        return np.array(out, np.float32)
+        return np.array(out, np.float32), (mode.value, lo, hi, diverging)
 
-    return np.array([theme.element_color(a.element) for a in atoms], np.float32)
+    return np.array([theme.element_color(a.element) for a in atoms],
+                    np.float32), None
 
 
 def _bond_key(i: int, j: int, image) -> tuple:

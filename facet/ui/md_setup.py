@@ -64,6 +64,7 @@ ANALYSES_BY_QUESTION: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ("bond-order", "Steinhardt bond order"),
         ("tetrahedral-order", "Tetrahedral order"),
         ("polyhedron-shape", "Polyhedron shape"),
+        ("basicity", "Optical basicity (Duffy)"),
     )),
     ("Voids and channels", (
         ("voronoi", "Voronoi cells"),
@@ -180,6 +181,7 @@ _INPUT_FIELDS = {
     "kinetic-temperature": (("dynamics", "velocities"),),
     "conductivity": ((None, "charges_e"), (None, "temperature_k")),
     "bond-lifetimes": (("dynamics", "gap_tolerance_frames"),),
+    "basicity": (("basicity", "scale"),),
 }
 _STATIC_NOTE = {"glass": "bond valence and distance"}
 _SHORT_LABEL = {"ring_criterion": "", "ring_max_size": "≤ {} nodes",
@@ -191,7 +193,8 @@ _SHORT_LABEL = {"ring_criterion": "", "ring_max_size": "≤ {} nodes",
                 "lineshape": "", "fwhm_ppm": "{} ppm", "absorber": "absorber {}",
                 "edge": "{} edge", "unwrap": "unwrap {}", "lag_t_ps": "lags {} ps",
                 "velocities": "velocities: {}", "charges_e": "charges {}",
-                "temperature_k": "{} K", "gap_tolerance_frames": "gap {} frames"}
+                "temperature_k": "{} K", "gap_tolerance_frames": "gap {} frames",
+                "scale": "{} scale"}
 
 
 class SetupPage(QWidget):

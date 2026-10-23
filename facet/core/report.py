@@ -49,7 +49,7 @@ FORMAT_NAMES = {
     "md": "Markdown (.md)",
     "txt": "Plain text (.txt)",
 }
-TABLES = ("sites", "contacts", "plateaus", "cutoffs", "balance")
+TABLES = ("sites", "contacts", "plateaus", "cutoffs", "balance", "basicity")
 # with a second threshold: the sites whose coordination number changes
 # between the two, first, and every site at the second threshold
 TABLES_TWO = ("cn_changes", "sites_at_second")
@@ -68,6 +68,8 @@ class StructureReport:
     results: list = field(default_factory=list)
     cutoffs: bv_report.CutoffTable | None = None
     balance: dict = field(default_factory=dict)
+    # facet.core.basicity.StructureBasicity, or None when not computed
+    basicity: object | None = None
     error: str | None = None
 
 
@@ -81,6 +83,9 @@ class Report:
     structures: list[StructureReport] = field(default_factory=list)
     # a second bond threshold to compare against, or None
     v_bond_other: float | None = None
+    # the scale of basicity moderating parameters (facet.core.basicity
+    # .SCALE_KEYS), or None when the optical basicity was not computed
+    basicity_scale: str | None = "pauling"
 
     # -- provenance ----------------------------------------------------------
     def provenance(self) -> list[str]:
@@ -99,6 +104,13 @@ class Report:
         if self.v_bond_other is not None:
             lines.insert(2, f"compared against a second bond threshold "
                             f"{self.v_bond_other:.4f} v.u.")
+        if self.basicity_scale:
+            from . import basicity as basicity_mod
+            scale = basicity_mod.scale_named(self.basicity_scale)
+            lines.append(f"optical basicity: {scale.name} ({scale.source}); "
+                         "lambda of each anion from its bond valences, "
+                         "Lambda of each composition from Duffy and Ingram's "
+                         "equation")
         for s in self.structures:
             lines.append(f"  {s.path}" + (f"  -- {s.error}" if s.error else ""))
         return lines
@@ -230,7 +242,59 @@ class Report:
             for k, v in s.balance.items():
                 if isinstance(v, (int, float, str, bool)) or v is None:
                     row[k] = _num(v) if isinstance(v, float) else v
+            if s.basicity is not None:
+                row["optical_basicity_composition"] = _num(s.basicity.bulk.value)
+                row["optical_basicity_bonds"] = _num(s.basicity.mean)
+                row["optical_basicity_bonds_listed"] = _num(s.basicity.mean_listed)
+                row["basicity_scale"] = s.basicity.scale
             rows.append(row)
+        return rows
+
+    def basicity_rows(self) -> list[dict]:
+        """One row per anion site (its own lambda and the shares behind it)
+        and per cation site (the lambda of the anions about it)."""
+        rows = []
+        for s in self.structures:
+            sb = s.basicity
+            if sb is None:
+                continue
+            by_index = {r.site_index: r for r in s.results}
+            for index, m in sb.anions.items():
+                r = by_index.get(index)
+                shares = "; ".join(
+                    f"{x.label} {x.share:.4f}"
+                    + ("" if x.moderator is None or x.moderator.measured
+                       else " (chi)")
+                    for x in m.shares if x.bonded)
+                rows.append({
+                    "structure": s.name, "kind": "anion", "site": m.label,
+                    "element": m.element, "oxidation_state": m.ox,
+                    "multiplicity": r.multiplicity if r else None,
+                    "cn": r.cn_valence if r else None,
+                    "sum_bonded": _num(m.sum_bonded),
+                    "lambda": _num(m.value),
+                    "lambda_listed": _num(m.value_listed),
+                    "lambda_host": None,
+                    "unmoderated_share": _num(m.unmoderated),
+                    "shares": shares,
+                    "gamma_measured": ", ".join(m.measured_species),
+                    "gamma_from_electronegativity": ", ".join(m.derived_species),
+                    "scale": m.scale, "notes": "; ".join(m.notes)})
+            for index, e in sb.environments.items():
+                r = by_index.get(index)
+                rows.append({
+                    "structure": s.name, "kind": "cation", "site": e.label,
+                    "element": e.element, "oxidation_state": e.ox,
+                    "multiplicity": r.multiplicity if r else None,
+                    "cn": r.cn_valence if r else None,
+                    "sum_bonded": _num(r.bvs) if r else None,
+                    "lambda": _num(e.value), "lambda_listed": None,
+                    "lambda_host": _num(e.value_host),
+                    "unmoderated_share": None,
+                    "shares": "; ".join(f"{label} {w:.4f}"
+                                        for label, w, _, _ in e.anions),
+                    "gamma_measured": "", "gamma_from_electronegativity": "",
+                    "scale": e.scale, "notes": "; ".join(e.notes)})
         return rows
 
     def tables(self) -> dict[str, list[dict]]:
@@ -241,7 +305,8 @@ class Report:
             out["sites_at_second"] = second
         out.update({"sites": self.site_rows(), "contacts": self.contact_rows(),
                     "plateaus": self.plateau_rows(), "cutoffs": self.cutoff_rows(),
-                    "balance": self.balance_rows()})
+                    "balance": self.balance_rows(),
+                    "basicity": self.basicity_rows()})
         return out
 
     def second_threshold_rows(self) -> tuple[list[dict], list[dict]]:
@@ -305,6 +370,7 @@ def analyse_files(paths: Iterable[str | Path],
                   anions: bool = False,
                   progress: Callable[[int, int, str], bool] | None = None,
                   v_bond_other: float | None = None,
+                  basicity_scale: str | None = "pauling",
                   ) -> Report:
     """Read and analyse every file. A file that cannot be read is kept in the
     report with its reason, so the table says which files are missing and
@@ -312,6 +378,9 @@ def analyse_files(paths: Iterable[str | Path],
 
     ``progress(done, total, name)`` is called before each file; returning
     False stops the run, and the report then holds what was done.
+    ``basicity_scale`` names the scale of the optical-basicity table
+    (``facet.core.basicity.SCALE_KEYS``); None leaves that table out, which
+    saves the analysis of the anion sites when ``anions`` is False.
     """
     params = params or bv.DEFAULT
     if v_bond < v_list:
@@ -321,20 +390,25 @@ def analyse_files(paths: Iterable[str | Path],
     if v_bond_other is not None and v_bond_other < v_list:
         raise ValueError(f"the second threshold ({v_bond_other}) is below "
                          f"v_list ({v_list})")
+    if basicity_scale is not None:
+        from . import basicity as basicity_mod
+        basicity_scale = basicity_mod.scale_named(basicity_scale).key
     report = Report(v_bond=float(v_bond), v_list=float(v_list),
                     parameter_set=getattr(params, "name", None) or "built-in",
                     anions=bool(anions),
                     generated=_dt.datetime.now().isoformat(timespec="seconds"),
-                    v_bond_other=None if v_bond_other is None else float(v_bond_other))
+                    v_bond_other=None if v_bond_other is None else float(v_bond_other),
+                    basicity_scale=basicity_scale)
     for i, path in enumerate(files):
         if progress is not None and progress(i, len(files), path.name) is False:
             break
-        report.structures.append(_one(path, params, v_bond, v_list, anions))
+        report.structures.append(_one(path, params, v_bond, v_list, anions,
+                                      basicity_scale))
     return report
 
 
 def _one(path: Path, params, v_bond: float, v_list: float,
-         anions: bool) -> StructureReport:
+         anions: bool, basicity_scale: str | None = None) -> StructureReport:
     item = StructureReport(name=path.name, path=str(path))
     try:
         structure = cif.read(str(path))
@@ -355,6 +429,18 @@ def _one(path: Path, params, v_bond: float, v_list: float,
                                                 v_bond=v_bond, v_list=v_list)
     except Exception as error:                        # noqa: BLE001
         item.error = f"analysis failed: {type(error).__name__}: {error}"
+        return item
+    if basicity_scale is not None:
+        from . import basicity as basicity_mod
+        try:
+            full = item.results if anions else coordination.analyse_structure(
+                structure, params, v_bond=v_bond, v_list=v_list,
+                cations_only=False)
+            item.basicity = basicity_mod.structure_basicity(
+                structure, full, basicity_scale, v_bond=v_bond)
+        except Exception as error:                    # noqa: BLE001
+            item.notes.append(f"optical basicity not computed: "
+                              f"{type(error).__name__}: {error}")
     return item
 
 
@@ -433,12 +519,14 @@ def _provenance_json(report: Report, beside: Path) -> Path:
 
 def template_fields(fmt: str, v_bond: float, v_list: float, anions: bool,
                     v_bond_other: float | None = None,
-                    tables: Sequence[str] | None = None) -> dict:
+                    tables: Sequence[str] | None = None,
+                    basicity_scale: str | None = "pauling") -> dict:
     """What a saved report template holds."""
     return {"format": fmt, "v_bond": float(v_bond), "v_list": float(v_list),
             "anions": bool(anions),
             "v_bond_other": None if v_bond_other is None else float(v_bond_other),
-            "tables": list(tables) if tables else None}
+            "tables": list(tables) if tables else None,
+            "basicity_scale": basicity_scale}
 
 
 def save_template(name: str, fields: dict) -> None:

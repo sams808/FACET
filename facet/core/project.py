@@ -60,6 +60,13 @@ class Entry:
     # the cached contacts, it never searches for them again.
     _at_results: list | None = field(default=None, repr=False)
     _at_v_bond: float | None = field(default=None, repr=False)
+    # The analysis that covers the anions as sites, for what needs an anion's
+    # own contacts -- the optical basicity of each anion and the environment
+    # of each cation. Cached like `_results`, reclassified like `_at_results`.
+    _full: list | None = field(default=None, repr=False)
+    _full_key: tuple | None = field(default=None, repr=False)
+    _at_full: list | None = field(default=None, repr=False)
+    _at_full_v: float | None = field(default=None, repr=False)
     # The threshold this structure was first analysed with -- the one in force
     # when the file was opened. Kept so the explorer can mark where the
     # numbers first shown for this file came from once the cut has moved.
@@ -144,6 +151,31 @@ class Entry:
             self._at_v_bond = float(v_bond)
         return self._at_results
 
+    def full_results(self, params: bv.ParameterSet, v_bond: float,
+                     v_list: float) -> list:
+        """The analysis with the anions as sites too, cached and
+        reclassified as :meth:`results` is.
+
+        The ordinary results are handed back when they already cover the
+        anions; otherwise one further search, kept for as long as the
+        parameters and the listing threshold stand.
+        """
+        key = (id(params), round(v_list, 6))
+        if self._results is not None and \
+                self._results_key == (key[0], key[1], True):
+            return self.results(params, v_bond, v_list, anions=True)
+        if self._full is None or self._full_key != key:
+            self._full = coordination.analyse_structure(
+                self.structure, params, v_bond=v_bond, v_list=v_list,
+                cations_only=False)
+            self._full_key = key
+            self._at_full, self._at_full_v = None, None
+        if self._at_full is None or self._at_full_v != float(v_bond):
+            self._at_full = [coordination.reclassify(r, v_bond)
+                             for r in self._full]
+            self._at_full_v = float(v_bond)
+        return self._at_full
+
     def network(self, params: bv.ParameterSet, v_bond: float,
                 v_list: float):
         """A priori bond valences and the two indices, cached.
@@ -178,6 +210,10 @@ class Entry:
         self._results_key = None
         self._at_results = None
         self._at_v_bond = None
+        self._full = None
+        self._full_key = None
+        self._at_full = None
+        self._at_full_v = None
         self._network = None
         self._network_key = None
         self._configuration = None
@@ -417,6 +453,13 @@ class Project:
             return []
         return entry.results(self.params, self.v_bond, self.v_list,
                              self.include_anions)
+
+    def full_results_for(self, entry: Entry) -> list:
+        """The analysis of one entry with the anions as sites, at the
+        thresholds in force (see ``Entry.full_results``)."""
+        if entry is None or entry.kind != "crystal":
+            return []
+        return entry.full_results(self.params, self.v_bond, self.v_list)
 
     def set_include_anions(self, on: bool) -> None:
         """Analyse the anions as sites too, not only as ligands."""

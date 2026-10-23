@@ -2087,7 +2087,34 @@ class ModelController(QObject):
         self.atom_text.setHtml(site_html(
             r, r.v_bond, chrome.muted_hex(self.theme), headline=head,
             apriori_reason="an MD frame has no bond network to split "
-                           "the variation by", show_running=True))
+                           "the variation by", show_running=True,
+            basicity=self._atom_basicity(r)))
+
+    def _atom_basicity(self, r):
+        """The optical basicity of the atom read: its own lambda for an
+        anion, the lambda of the anions about it for a cation, each anion
+        read from the same valence table (``facet.core.basicity``). None
+        when it cannot be computed."""
+        try:
+            from ..core import basicity as basicity_mod
+
+            scale = getattr(self, "basicity_scale", basicity_mod.DEFAULT_SCALE)
+            if r.ox is not None and r.ox < 0:
+                return basicity_mod.micro_basicity(r, scale)
+            anions = {}
+            for c in r.contacts:
+                row = int(c.site_index)
+                if not c.has_valence or not c.valence > r.v_bond \
+                        or row in anions:
+                    continue
+                other = self.atom_result(row, v_bond=r.v_bond)
+                if other is not None and other.ox is not None and other.ox < 0:
+                    anions[row] = basicity_mod.micro_basicity(
+                        other, scale, v_bond=r.v_bond)
+            return basicity_mod.environment_basicity(r, anions, scale,
+                                                     v_bond=r.v_bond)
+        except Exception:                     # the tab shows the rest
+            return None
 
     # -- the Environments tab ------------------------------------------------
     def go_to_atom(self, atom_id: int) -> None:
@@ -2354,11 +2381,26 @@ class ModelController(QObject):
 
     def _decorate_frame_data(self, fd):
         """What the rules can read beyond the table: the smallest ring each
-        atom is in (from a rings result for this frame) and the atom under
-        investigation, for the shell colouring."""
+        atom is in (from a rings result for this frame), the atom under
+        investigation, for the shell colouring, and the scale the basicity
+        colouring reads."""
         fd.shell_centre = self._atom_row
         fd.ring_size = self._ring_sizes(fd)
+        fd.basicity_scale = str(getattr(self, "basicity_scale", "pauling"))
         return fd
+
+    def set_basicity_scale(self, key: str) -> None:
+        """The scale of basicity moderating parameters (the window's Tools
+        tab): the Atom tab and a view coloured by basicity follow."""
+        self.basicity_scale = str(key)
+        fd = getattr(self, "frame_data", None)
+        if fd is not None:
+            fd.basicity_scale = self.basicity_scale
+        if getattr(self, "_atom_result", None) is not None:
+            self._fill_atom_text()
+        if self.highlight is not None and \
+                self.highlight.colour_by() == "microscopic basicity":
+            self.redraw()
 
     def _ring_sizes(self, fd):
         """Per atom, the smallest ring it is a member of, from the rings

@@ -9,7 +9,7 @@ Everything here reports numbers. Nothing here says what they mean.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -68,6 +68,10 @@ def _fill(table: QTableWidget, rows: list[list]) -> None:
 class UtilitiesPanel(QWidget):
     """Per-structure and per-site tables, recomputed on demand."""
 
+    # the key of the scale of basicity moderating parameters chosen on the
+    # Basicity tab, for the Site tab to follow
+    basicityScaleChanged = Signal(str)
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.structure = None
@@ -75,6 +79,9 @@ class UtilitiesPanel(QWidget):
         self.site_result = None
         self.v_bond = 0.075
         self.theme = None
+        # the analysis covering the anions, as a callable or a list, from
+        # the window's project cache; None makes the panel search itself
+        self._full_results = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -215,6 +222,51 @@ class UtilitiesPanel(QWidget):
             "same bonds counted from opposite ends."),
             "Anions")
 
+        # Optical basicity: Duffy and Ingram's Lambda from the composition,
+        # the microscopic lambda of every anion site from the bond valences
+        # it receives, and the anions about every cation site, on a chosen
+        # scale of basicity moderating parameters.
+        from ..core import basicity as basicity_mod
+
+        self.basicity_text = QTextBrowser()
+        self.basicity_text.setFrameShape(QTextBrowser.NoFrame)
+        self.basicity_anions = _table(["anion site", "element", "atoms", "CN",
+                                       "Σ s / v.u.", "λ (bond)",
+                                       "λ (listed)", "shares of |z|"])
+        self.basicity_cations = _table(["cation site", "element", "CN",
+                                        "λ̄ about it",
+                                        "λ̄ host only", "anions"])
+        scale_row = QHBoxLayout()
+        scale_row.addWidget(QLabel("scale"))
+        self.basicity_scale_box = QComboBox()
+        for key, scale in basicity_mod.SCALES.items():
+            self.basicity_scale_box.addItem(scale.name, key)
+        self.basicity_scale_box.setToolTip(
+            "The set of basicity moderating parameters gamma. The first "
+            "derives every cation's from Pauling's 1960 electronegativity "
+            "through Duffy and Ingram's relation; the others are measured "
+            "tables, with that relation behind them for a cation they do "
+            "not list. Every value says which it is.")
+        self.basicity_scale_box.currentIndexChanged.connect(
+            self._on_basicity_scale)
+        scale_row.addWidget(self.basicity_scale_box)
+        scale_row.addStretch(1)
+        basicity_holder = QWidget()
+        basicity_box = QVBoxLayout(basicity_holder)
+        basicity_box.setContentsMargins(0, 0, 0, 0)
+        basicity_box.addWidget(self.basicity_text, 3)
+        basicity_box.addWidget(self.basicity_anions, 3)
+        basicity_box.addWidget(self.basicity_cations, 2)
+        self.tabs.addTab(self._wrap(
+            basicity_holder,
+            "Optical basicity (Duffy and Ingram): Λ from the composition, "
+            "and the microscopic λ of each anion site from the bond "
+            "valences it receives, λ = 1 − Σ (s/|z|)(1 − "
+            "1/γ) over its bonded contacts. The two agree when every "
+            "cation's bonds carry its formal charge; their difference is "
+            "the departure of the sums from the charges.", scale_row),
+            "Basicity")
+
     def _refresh_cutoffs(self) -> None:
         """The cutoff table: this program's central claim, as numbers."""
         from ..core import bv
@@ -313,9 +365,12 @@ class UtilitiesPanel(QWidget):
         self.theme = theme
         if self.structure is not None:
             self._refresh_summary()
+            if "Basicity" not in self._stale:
+                self._refresh_basicity()
 
     def update_for(self, structure, results, site_result, v_bond: float,
-                   params=None, v_list: float | None = None) -> None:
+                   params=None, v_list: float | None = None,
+                   full_results=None) -> None:
         from ..core import bv
 
         self.structure = structure
@@ -324,13 +379,16 @@ class UtilitiesPanel(QWidget):
         self.v_bond = v_bond
         self.params = params or bv.DEFAULT
         self.v_list = (v_list if v_list is not None else bv.V_LIST_DEFAULT)
+        self._full_results = full_results
         if structure is None:
             self.summary.setHtml("")
             self.file_report.setHtml("")
+            self.basicity_text.setHtml("")
             self.apriori.setRowCount(0)
             for t in (self.angles, self.shells, self.reflections,
                       self.connectivity, self.cutoffs, self.stability,
-                      self.valences):
+                      self.valences, self.basicity_anions,
+                      self.basicity_cations):
                 t.setRowCount(0)
             self.balance.setText("")
             return
@@ -356,7 +414,130 @@ class UtilitiesPanel(QWidget):
         "Cutoffs": "_refresh_cutoffs",
         "Stability": "_refresh_stability",
         "Anions": "_refresh_anions",
+        "Basicity": "_refresh_basicity",
     }
+
+    # -- optical basicity ------------------------------------------------------
+    def basicity_scale(self) -> str:
+        """The key of the scale chosen on the Basicity tab."""
+        key = self.basicity_scale_box.currentData()
+        from ..core import basicity as basicity_mod
+
+        return str(key) if key else basicity_mod.DEFAULT_SCALE
+
+    def set_basicity_scale(self, key: str) -> None:
+        at = self.basicity_scale_box.findData(str(key))
+        if at >= 0:
+            self.basicity_scale_box.setCurrentIndex(at)
+
+    def _on_basicity_scale(self, _index: int) -> None:
+        self._stale.add("Basicity")
+        self._refresh_current()
+        self.basicityScaleChanged.emit(self.basicity_scale())
+
+    def _refresh_basicity(self) -> None:
+        from ..core import basicity as basicity_mod
+
+        if self.structure is None:
+            self.basicity_text.setHtml("")
+            self.basicity_anions.setRowCount(0)
+            self.basicity_cations.setRowCount(0)
+            return
+        muted = chrome.muted_hex(self.theme)
+        try:
+            sb = basicity_mod.structure_basicity(
+                self.structure, self._with_anions(), self.basicity_scale(),
+                v_bond=self.v_bond)
+        except Exception as error:               # a parameter or reader fault
+            self.basicity_text.setHtml(
+                f"<p style='color:{muted}'>Optical basicity not computed: "
+                f"{_escape(error)}</p>")
+            self.basicity_anions.setRowCount(0)
+            self.basicity_cations.setRowCount(0)
+            return
+        scale = basicity_mod.scale_named(sb.scale)
+        s = self.structure
+
+        def num(value, decimals=3):
+            return "&mdash;" if value != value else f"{value:.{decimals}f}"
+
+        element_rows = "".join(
+            f"<tr><td>&lambda; of {element}, {n:g} atom-charges</td>"
+            f"<td align='right'>{num(mean)} <span style='color:{muted}'>"
+            f"({num(listed)} to the listing cut)</span></td></tr>"
+            for element, (mean, listed, n) in sb.by_element.items())
+        species_rows = "".join(
+            f"<tr><td>{r.moderator.species if r.moderator else r.element}</td>"
+            f"<td align='right'>{r.count:g}</td>"
+            f"<td align='right'>{num(r.fraction, 4)}</td>"
+            f"<td align='right'>{num(r.moderator.gamma) if r.moderator else '&mdash;'}</td>"
+            f"<td align='right'>{num(r.moderator.basicity) if r.moderator else '&mdash;'}</td>"
+            f"<td style='color:{muted}'>"
+            f"{_escape(r.moderator.origin) if r.moderator else 'none on this scale'}"
+            f"</td></tr>"
+            for r in sb.bulk.rows)
+        anion_rows = "".join(
+            f"<tr><td>{element}</td><td align='right'>{n:g}</td>"
+            f"<td align='right'>{charge:g}</td>"
+            f"<td align='right'>&gamma; &times; {factor:g}</td></tr>"
+            for element, n, charge, factor in sb.bulk.anions)
+        notes = "".join(
+            f"<p style='color:{muted};font-size:11px;margin:3px 0'>{_escape(n)}</p>"
+            for n in list(sb.bulk.notes) + list(sb.notes))
+        self.basicity_text.setHtml(f"""
+        <h3 style='margin-bottom:2px'>Optical basicity</h3>
+        <table width='100%' cellpadding='3'>
+          <tr><td>&Lambda; from the composition (Duffy &amp; Ingram, eq. 4)</td>
+              <td align='right'><b>{num(sb.bulk.value)}</b></td></tr>
+          <tr><td>Mean &lambda; of the anions, from the bond valences</td>
+              <td align='right'><b>{num(sb.mean)}</b> <span style='color:{muted}'>
+              ({num(sb.mean_listed)} to the listing cut)</span></td></tr>
+          <tr><td>Difference, bonds &minus; composition</td>
+              <td align='right'>{'&mdash;' if sb.difference != sb.difference else f'{sb.difference:+.3f}'}</td></tr>
+          {element_rows}
+        </table>
+        <h4 style='margin-bottom:2px'>Moderating parameters, {_escape(scale.name)}</h4>
+        <table width='100%' cellspacing='0' cellpadding='2' style='font-size:11px'>
+          <tr style='color:{muted}'><th align='left'>species</th>
+              <th align='right'>atoms</th><th align='right'>X<sub>A</sub></th>
+              <th align='right'>&gamma;</th><th align='right'>&Lambda; oxide</th>
+              <th align='left'>&gamma; from</th></tr>
+          {species_rows}
+        </table>
+        <table width='100%' cellspacing='0' cellpadding='2' style='font-size:11px'>
+          <tr style='color:{muted}'><th align='left'>anion</th>
+              <th align='right'>atoms</th><th align='right'>charge</th>
+              <th align='right'>on the scale as</th></tr>
+          {anion_rows}
+        </table>
+        <p style='color:{muted};font-size:11px'>{_escape(scale.source)}.
+        &gamma; = 1.36 (&chi; &minus; 0.26) for a cation the scale does not
+        list. Bond threshold {self.v_bond:.4f} v.u.</p>
+        {notes}
+        """)
+
+        def atoms_of(index):
+            site = s.sites[index]
+            return float(site.occupancy) * (site.multiplicity or 1)
+
+        by_index = {r.site_index: r for r in self._with_anions()}
+        _fill(self.basicity_anions, [
+            [m.label, m.element, atoms_of(index),
+             by_index[index].cn_valence if index in by_index else None,
+             m.sum_bonded, m.value, m.value_listed,
+             "; ".join(f"{x.label} {x.share:.3f}"
+                       + ("" if x.moderator is None or x.moderator.measured
+                          else " (chi)")
+                       for x in m.shares if x.bonded)
+             or ("; ".join(m.notes) if m.notes else "")]
+            for index, m in sb.anions.items()])
+        _fill(self.basicity_cations, [
+            [e.label, e.element,
+             by_index[index].cn_valence if index in by_index else None,
+             e.value, e.value_host,
+             "; ".join(f"{label} {value:.3f}"
+                       for label, _, value, _ in e.anions)]
+            for index, e in sb.environments.items()])
 
     def _on_tab_shown(self, index: int) -> None:
         self._refresh_current()
@@ -571,6 +752,12 @@ class UtilitiesPanel(QWidget):
                 self.structure.sites[r.site_index].is_anion
                 for r in self.results):
             return self.results
+        if self._full_results is not None:
+            # the window's own cache: one search, shared with the Site tab
+            found = (self._full_results() if callable(self._full_results)
+                     else self._full_results)
+            if found:
+                return found
         return coordination.analyse_structure(
             self.structure, self.params, v_bond=self.v_bond,
             v_list=self.v_list, cations_only=False)

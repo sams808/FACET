@@ -1017,6 +1017,51 @@ same distance and valence to 1e-5, and no two drawn atoms within 0.05 Å
 value and the estimate equals the formula on pymatgen's table to 1e-12; the
 681-atom file gives the same 681 drawn atoms and 1232 contacts as before.
 
+### Added in 1.1.0: optical basicity, against the papers that defined it
+
+`facet/core/basicity.py` is checked against the published numbers rather than
+against itself (`tests/test_basicity.py`, 51 tests):
+
+* **The relation.** γ = 1.36 (χ − 0.26) over Pauling's 1960 electronegativity
+  table gives back 16 of the 17 basicity moderating parameters of Duffy and
+  Ingram's Table 1 (J. Non-Cryst. Solids 21 (1976) 373) to ±0.01; aluminium
+  is the one the paper itself did not take from the relation (1.65 printed,
+  1.69 from χ = 1.5). The Allred-revised two-decimal scale FACET uses to
+  assign anions would give Si 1.90 and Λ(SiO₂) = 0.45, where every
+  optical-basicity table says 0.48 — the 1960 table is the one the
+  literature values come from, and that is a fact the tests pin.
+* **The oxides and fluorides.** 1/γ gives Duffy's 1989 oxide values (Na₂O
+  1.15, MgO 0.78, Al₂O₃ 0.60, SiO₂ 0.48, B₂O₃ 0.42, P₂O₅ 0.40) and 1/(2.3γ)
+  the fluoride ones (NaF 0.50, CaF₂ 0.43, SiF₄ 0.21, PF₅ 0.17) to ±0.01.
+* **One anion.** With the Pauling bond strength z/CN as the share, 18 of the
+  20 microscopic basicities of their Table 3 come back to ±0.015 (Si–O 0.74,
+  Si–O–Si 0.48, Si–O–Al(IV) 0.59, B(III)–O 0.71, P–O–P 0.25, Al(IV)–O 0.85).
+  The two others, P–O–Al(VI) 0.54 and Al(VI)–O–Al(VI) 0.83, do not follow
+  from the paper's own γ values (0.53 and 0.80 do) and are not pinned.
+* **A composition.** The sixteen compounds of Duffy's 1996 Table 2 (J. Chem.
+  Educ. 73 (1996) 1138), from Na₂Si₂O₅ 0.61 to H₂SO₄ 0.29, come back on his
+  Table 1 scale to ±0.016; NaF to 0.50 and cryolite to Duffy's 1989
+  all-fluoride equation.
+* **An identity, not a tolerance.** The anion-charge-weighted mean of λ
+  equals the composition's Λ exactly when every cation's bond-valence sum is
+  its formal charge (a synthetic MgO-like structure, to 1e-12), and on quartz
+  the difference equals −(BVS − z)(1 − 1/γ) n_Si / (2 n_O) to 2e-3 — which
+  is why the Tools tab reports the difference as the departure of the sums
+  from the charges.
+* **Two workspaces, one number.** A quartz supercell frame's per-atom λ
+  from the valence table equals the crystal path's λ of the same atom
+  through `md_site` to 1e-12, and the driver's `basicity` analysis, the
+  report's table, `facet.site` and the window's Basicity and Site tabs are
+  exercised on the bundled structures, with the scale switch checked to
+  reach the Site tab.
+
+What is **not** verified: no measured Λ of a crystal in the group's own work
+has been compared with the bond-valence mean, and the measured scales
+(Duffy 1996, Lebouteiller and Courtine 1998, Dimitrov and Sakka 1996) are
+transcribed, not re-derived — their transcription was checked against the
+rendered pages and, for the Dimitrov values, against Lebouteiller and
+Courtine's Table 1, which reprints them.
+
 ### What is not verified
 
 **No model from the group has been analysed yet.** Every number above measured

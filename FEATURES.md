@@ -124,6 +124,7 @@ says what is missing; what remains planned is listed as such.
 | Parameter-set switching with citations | – | – | **done** | reads the IUCr bvparm distribution, softBV-style tables and its own JSON; per-pair b is kept, and every value carries its provenance |
 | **Bond-valence vector drawn (the "lone pair")** | – | – | **done** | a lobe along −V/\|V\| with V = Σ v_i û_i, length φ × mean bond length × a display scale; φ = 0 draws nothing. Presented as the vector sum, which is what can be measured |
 | **Void cone drawn** | – | – | **done** | the measured half-angle about the void axis, on the sites whose polyhedra are shown; the degeneracy of the axis is stated |
+| **Optical basicity, bulk and per anion** | – | – | **done** | Duffy & Ingram's Λ from the composition, and the microscopic λ of every anion site from the bond valences it receives (their 1976 equation with the bond valence as the share of the anion's charge); the anions about each cation site; four scales of the moderating parameter (Pauling 1960 through the relation, Duffy 1996, Lebouteiller & Courtine 1998, Dimitrov & Sakka 1996), every value naming its source; fluorides on Duffy's 1989 common scale; Site tab, Tools ▸ Basicity, the report, `facet.site`, and the MD analysis `basicity`; drawn as a colour gradient over the anions in both workspaces (Theme ▸ Colour by, Highlight ▸ Colour atoms by), with the colour bar on the view |
 
 ## 7. Symmetry
 

@@ -209,7 +209,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import bulk, bv, elements, glass, md_channels, md_dynamics, \
+from . import basicity, bulk, bv, elements, glass, md_channels, md_dynamics, \
     md_network, md_order, md_scattering, md_spectroscopy
 from .md_model import Frame, FrameError, Trajectory, model_oxidation, \
     validate_symbol
@@ -242,6 +242,12 @@ ANALYSIS_SUMMARIES: dict[str, str] = {
              "N4, Al CN, linkages, anion environments, bond angles and "
              "lengths, phi and plateau widths, partial g(r) and N(r) with "
              "their first minima, composition, density (glass)",
+    "basicity": "optical basicity: Lambda of the composition (Duffy and "
+                "Ingram's equation) and the microscopic lambda of every "
+                "anion from the bond valences it receives, as histograms "
+                "per anion element and means by speciation when the formers "
+                "are named; four scales of the moderating parameter, each "
+                "value with its source (basicity)",
     "scattering": "partial and total S(Q), F(Q), G(r), D(r), T(r), "
                   "Bhatia-Thornton, FSDP (md_scattering)",
     "rings": "ring statistics R_C, R_N, P_N, P_max, P_min and ring sizes, "
@@ -326,7 +332,7 @@ PER_FRAME_ANALYSES = ("glass", "scattering", "rings", "coordination-sequences",
                       "bond-order", "tetrahedral-order", "polyhedron-shape",
                       "voronoi", "empty-spheres", "free-volume", "channels",
                       "modifier-density", "void-regions", "nmr", "exafs",
-                      "bond-lifetimes")
+                      "bond-lifetimes", "basicity")
 TRAJECTORY_ANALYSES = ("msd", "self-correlations", "distinct-van-hove", "vacf",
                        "kinetic-temperature", "conductivity")
 POST_ANALYSES = ("nmr-comparison", "scattering-comparison", "feff")
@@ -749,6 +755,25 @@ class DynamicsOptions:
 
 
 @dataclass(frozen=True)
+class BasicityOptions:
+    """Method choices of the optical-basicity analysis
+    (``basicity.frame_basicity``).
+
+    ``scale``: the set of basicity moderating parameters, one of
+    :data:`facet.core.basicity.SCALE_KEYS`. The default, 'pauling', derives
+    every cation's gamma from Pauling's 1960 electronegativity through Duffy
+    and Ingram's relation, which is the table their published values come
+    from; 'duffy', 'lebouteiller' and 'dimitrov' are the measured tables,
+    with the relation behind them for a cation they do not list. ``bin``:
+    the width of the lambda histograms, in units of Lambda; 0.01 is the
+    resolution the published tables carry.
+    """
+
+    scale: str = basicity.DEFAULT_SCALE
+    bin: float = 0.01
+
+
+@dataclass(frozen=True)
 class AnalysisRequest:
     """Which analyses to run on a model, and every input they take.
 
@@ -793,6 +818,7 @@ class AnalysisRequest:
     exafs: ExafsOptions = field(default_factory=ExafsOptions)
     feff: FeffOptions = field(default_factory=FeffOptions)
     dynamics: DynamicsOptions = field(default_factory=DynamicsOptions)
+    basicity: BasicityOptions = field(default_factory=BasicityOptions)
     # processes for the frames' pair searches of the analyses that do not
     # share the glass pass (1: in this process). The glass pass streams one
     # search per frame through every consumer and stays serial.
@@ -1616,6 +1642,11 @@ def invalid_inputs(request: AnalysisRequest) -> tuple[MissingInput, ...]:
     else:
         c.number("bond-lifetimes", "dynamics.residence_t_max_ps",
                  d.residence_t_max_ps, above=0.0)
+
+    # -- optical basicity -----------------------------------------------------
+    b = req.basicity
+    c.choice("basicity", "basicity.scale", b.scale, basicity.SCALE_KEYS)
+    c.number("basicity", "basicity.bin", b.bin, above=0.0)
     return tuple(c.out)
 
 
@@ -2605,6 +2636,7 @@ class _Run:
         candidates = [(_ScatteringConsumer, {"scattering"}),
                       (_ExafsConsumer, {"exafs"}),
                       (_NmrConsumer, {"nmr"}),
+                      (_BasicityConsumer, {"basicity"}),
                       (_LifetimeConsumer, {"bond-lifetimes"}),
                       (_VoronoiConsumer, {"voronoi"}),
                       (_OrderConsumer, {"bond-order", "tetrahedral-order",
@@ -3909,6 +3941,178 @@ class _NmrConsumer(_Consumer):
                   histogram.name: histogram}
         return {name: self.output(name, tables, provenance, raw=spectrum,
                                   notes=tuple(spectrum.notes) + tuple(notes))}
+
+
+# -- optical basicity ---------------------------------------------------------
+
+class _BasicityConsumer(_Consumer):
+    """``basicity.frame_basicity`` on the valence table of each frame: the
+    microscopic lambda of every anion, the composition's Lambda."""
+
+    names = ("basicity",)
+    cost = 1
+
+    def __init__(self, run: _Run):
+        super().__init__(run)
+        self.needs_table = True
+        self.frames: dict[int, basicity.FrameBasicity] = {}
+        self.elements: dict[int, np.ndarray] = {}
+
+    def frame(self, ctx, phase):
+        def work():
+            if ctx.table is None:
+                raise ValueError("no valence table for this frame")
+            self.frames[ctx.k] = basicity.frame_basicity(
+                ctx.table, self.req.basicity.scale,
+                v_bond=self.req.v_bond_vu, formers=self.run.formers)
+            self.elements[ctx.k] = np.asarray(ctx.table.elements).astype(str)
+        self.attempt("basicity", ctx.k, work)
+
+    def finish(self):
+        name = "basicity"
+        used = sorted(self.used[name])
+        if not used:
+            return {name: self.output(name, {}, None)}
+        o = self.req.basicity
+        scale = basicity.scale_named(o.scale)
+        results = [self.frames[k] for k in used]
+        symbols = [self.elements[k] for k in used]
+        notes: list[str] = sorted({n for r in results for n in r.notes})
+        if self.run.formers is None:
+            notes.append("no formers are named, so the means by speciation "
+                         "(free, NBO, BO, tricluster) are not given")
+
+        def work():
+            tables: dict[str, object] = {}
+            tables["optical basicity, composition"] = Scalar(
+                "optical basicity, composition", "1",
+                np.array([r.bulk.value for r in results]), frames=used,
+                notes=("Duffy and Ingram's equation over the composition "
+                       "with the model's oxidation states, equivalent "
+                       "fractions over the cation charge; the anions outside "
+                       "the scale are left out",))
+            anions = [s for s in self.run.anions if s in basicity.ANION_FACTORS]
+            if not anions:
+                return tables
+            all_values = [r.value for r in results]
+            edges, edge_notes = _edges_over(
+                [v[np.isfinite(v)] for v in all_values], o.bin)
+            method = (f"bin width {o.bin:g} (basicity.bin); lambda = 1 - sum "
+                      "over the contacts of (s / |z|)(1 - 1 / gamma), the "
+                      f"{scale.key} scale",) + edge_notes
+            for h in md_order.element_histograms(
+                    list(zip(symbols, all_values)), edges,
+                    name="micro basicity", unit="1", frames=used,
+                    elements=anions, notes=method).values():
+                tables[h.name] = h
+            listed = [r.value_listed for r in results]
+            edges_l, notes_l = _edges_over(
+                [v[np.isfinite(v)] for v in listed], o.bin)
+            for h in md_order.element_histograms(
+                    list(zip(symbols, listed)), edges_l,
+                    name="micro basicity to the listing cut", unit="1",
+                    frames=used, elements=anions,
+                    notes=method[:1] + notes_l).values():
+                tables[h.name] = h
+            for symbol in anions:
+                means, means_listed = [], []
+                for r, el in zip(results, symbols):
+                    mask = (el == symbol) & np.isfinite(r.value)
+                    means.append(float(r.value[mask].mean()) if mask.any()
+                                 else float("nan"))
+                    mask_l = (el == symbol) & np.isfinite(r.value_listed)
+                    means_listed.append(float(r.value_listed[mask_l].mean())
+                                        if mask_l.any() else float("nan"))
+                tables[f"mean micro basicity {symbol} (BV)"] = Scalar(
+                    f"mean micro basicity {symbol} (BV)", "1",
+                    np.array(means), frames=used,
+                    notes=("over the atoms with a lambda (contacts above "
+                           "the bond threshold)",))
+                tables[f"mean micro basicity {symbol} to the listing cut"] = \
+                    Scalar(f"mean micro basicity {symbol} to the listing cut",
+                           "1", np.array(means_listed), frames=used,
+                           notes=("over the atoms with a lambda (every "
+                                  "listed contact)",))
+                if self.run.formers is None:
+                    continue
+                for count, label in basicity.CLASS_NAMES.items():
+                    per_frame = []
+                    for r, el in zip(results, symbols):
+                        cls = r.classes
+                        chosen = (cls >= 3) if count == 3 else (cls == count)
+                        mask = (el == symbol) & chosen & np.isfinite(r.value)
+                        per_frame.append(float(r.value[mask].mean())
+                                         if mask.any() else float("nan"))
+                    present = [p == p for p in per_frame]
+                    if not any(present):
+                        continue
+                    if not all(present):
+                        notes.append(f"{symbol} {label}: present in "
+                                     f"{sum(present)} of {len(present)} "
+                                     "frames, so no mean over the frames")
+                        continue
+                    key = f"mean micro basicity {symbol} {label} (BV)"
+                    tables[key] = Scalar(
+                        key, "1", np.array(per_frame), frames=used,
+                        notes=(f"{label}: an anion bonded to "
+                               f"{'3 or more' if count == 3 else count} "
+                               "of the named formers above the bond "
+                               "threshold",))
+            rows = []
+            seen = set()
+            for r in results:
+                for row in r.bulk.rows:
+                    m = row.moderator
+                    key = (row.element, row.ox)
+                    if key in seen or m is None:
+                        continue
+                    seen.add(key)
+                    rows.append({"species": m.species, "gamma": m.gamma,
+                                 "Lambda oxide (1)": m.basicity,
+                                 "from": m.origin, "coordination in the table":
+                                 m.coordination, "note": m.note or None,
+                                 "source": m.source})
+            for symbol in anions:
+                rows.append({"species": f"{symbol} (anion)",
+                             "gamma": None, "Lambda oxide (1)": None,
+                             "from": f"gamma x {basicity.ANION_FACTORS[symbol]:g}"
+                             " in this environment", "coordination in the table":
+                             None, "note": None,
+                             "source": basicity.DUFFY_1989_SOURCE
+                             if basicity.ANION_FACTORS[symbol] != 1.0
+                             else basicity.PAULING_SOURCE})
+            tables["basicity moderating parameters"] = Table(
+                "basicity moderating parameters", tuple(rows),
+                (scale.name + ": " + scale.source,))
+            first = results[0].bulk
+            tables["equivalent fractions"] = Table(
+                "equivalent fractions", tuple(
+                    {"species": f"{r.element}{r.ox}+", "atoms": r.count,
+                     "charge (e)": r.charge, "X_A (1)": r.fraction,
+                     "contribution to Lambda (1)":
+                     (r.fraction * (1.0 / r.moderator.gamma)
+                      if r.moderator is not None else None)}
+                    for r in first.rows),
+                tuple(first.notes) + ("X_A = z_A n_A / sum(z n) over the "
+                                      "cations, from the first frame used",))
+            return tables
+        try:
+            tables = self.timed(name, work)
+        except ValueError as error:
+            return {name: self.failed(name, error)}
+        provenance = self.run.provenance(
+            used, self.skipped_with_run(name), bonds=True, formers=True,
+            method={"scale": scale.key, "scale name": scale.name,
+                    "scale source": scale.source,
+                    "histogram bin (basicity.bin)": float(o.bin),
+                    "anion factors on gamma": tuple(
+                        f"{symbol} x {factor:g}"
+                        for symbol, factor in basicity.ANION_FACTORS.items()),
+                    "relation": "gamma = 1.36 (chi - 0.26) for a cation the "
+                                "scale does not list"},
+            notes=notes)
+        return {name: self.output(name, tables, provenance, raw=results,
+                                  notes=tuple(notes))}
 
 
 # -- bond lifetimes -----------------------------------------------------------

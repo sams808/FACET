@@ -118,6 +118,17 @@ number changes. Anion bond-valence sums, from their own neighbour search. A
 charge balance that checks the two against each other. Bond-valence maps and
 energy landscapes in 3D, and 2D sections through them.
 
+**Optical basicity.** Duffy and Ingram's Λ from the composition, and — because
+the bond valence of every contact is the share of the anion's charge that
+cation takes — the microscopic λ of every anion site from its own bonds, as
+their 1976 equation defines it for one oxygen. A cation site shows the mean λ
+of the anions about it. Four scales of the moderating parameter γ (Pauling's
+1960 electronegativity through the relation, Duffy 1996, Lebouteiller and
+Courtine 1998, Dimitrov and Sakka 1996), each value naming its source, and
+fluorides on Duffy's common oxide/fluoride scale. The composition value and the
+bond-valence mean agree when every cation delivers its formal charge; their
+difference is the departure of the sums from the charges, stated as such.
+
 **Diffraction.** Powder patterns with real scattering factors — X-ray, neutron and
 electron — and a measured pattern overlaid, scaled by one least-squares factor
 and nothing else.

@@ -180,7 +180,7 @@ def test_a_preset_is_restricted_to_what_the_model_allows():
                                 "voids.radii": "vdw"}
     assert silicate.analyses == tuple(
         a for a in ma.ANALYSES if a in ("glass", "rings", "components",
-                                        "polyhedral-sharing",
+                                        "polyhedral-sharing", "basicity",
                                         "tetrahedral-order", "empty-spheres"))
     # the halide of an oxyfluoride, and its absence
     oxy = md_presets.preset_named("Oxyfluoride")
@@ -221,7 +221,7 @@ def test_the_page_ticks_a_preset_and_an_edit_flips_to_custom(qapp, glass):
         assert set(page.ticked()) == set(applied.analyses)
         assert page.chips["Si"].isChecked() and not page.chips["Na"].isChecked()
         assert page.formers() == frozenset({"Si"})
-        assert page.groups["Structure"].text(1) == "5 of 9"
+        assert page.groups["Structure"].text(1) == "6 of 10"
         assert page.groups["Voids and channels"].text(1).startswith("1 of")
         assert page.items["rings"].text(1) == "king, ≤ 12 nodes"
         assert page.items["empty-spheres"].text(1) == "vdw radii"

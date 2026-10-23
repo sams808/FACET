@@ -78,6 +78,18 @@ carry different terms. FACET is deliberate about this:
 * **Read from a file, never bundled.** The softBV set carries its own terms
   and is read from the user's own copy; so is any later bvparm release.
 
+* **Optical-basicity tables, transcribed.** `facet/core/basicity.py` carries
+  Pauling's 1960 electronegativity scale (one decimal, *The Nature of the
+  Chemical Bond*, 3rd ed., Table 3-8), Duffy's basicity moderating parameters
+  (J. Chem. Educ. 73 (1996) 1138, Table 1, sixteen cations), Lebouteiller and
+  Courtine's known Λ values by cation (J. Solid State Chem. 137 (1998) 94,
+  Table 2, thirty cations) and Dimitrov and Sakka's Λ from refractivity (J.
+  Appl. Phys. 79 (1996) 1736, Table I, thirty-three oxides) — short tables of
+  published numerical facts, cited at every use, with Duffy and Ingram's
+  relation γ = 1.36 (χ − 0.26) (J. Non-Cryst. Solids 21 (1976) 373) behind
+  them. `tests/test_basicity.py` re-derives the papers' own worked values
+  from them.
+
 ## Crystal structure files
 
 FACET ships no structural data. Sample structures used for testing are read

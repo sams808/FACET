@@ -138,28 +138,41 @@ def _contacts(source) -> tuple[np.ndarray, ...]:
 
 
 def _value_colours(table: bulk.ValenceTable, mode, theme, v_bond: float,
-                   base: np.ndarray) -> np.ndarray:
-    """The crystal window's continuous colour modes, per atom: the cations
-    take the ramp colour of their value at ``v_bond`` (``bulk.at_threshold``,
-    field for field the SiteResult value ``theme.site_values`` reads), the
-    anions keep ``base``."""
-    results = bulk.at_threshold(table, v_bond)
-    if mode is theme_mod.ColorMode.BVS:
-        values = results.bvs_vu
-    elif mode is theme_mod.ColorMode.COORDINATION:
-        values = results.cn.astype(np.float64)
-    elif mode is theme_mod.ColorMode.PHI:
-        values = results.phi
+                   base: np.ndarray) -> tuple[np.ndarray, tuple | None]:
+    """The crystal window's continuous colour modes, per atom, and the
+    legend ``(title, lo, hi, diverging)`` of the ramp: the cations take the
+    ramp colour of their value at ``v_bond`` (``bulk.at_threshold``, field
+    for field the SiteResult value ``theme.site_values`` reads), the anions
+    keep ``base``. The basicity mode is the other way about: the oxide and
+    fluoride anions on the ramp by their lambda (``facet.core.basicity``,
+    FACET's default scale; the Highlight tab's mode of the same name
+    follows the Tools tab's scale), the cations in ``base``."""
+    if mode is theme_mod.ColorMode.BASICITY:
+        from ..core import basicity as basicity_mod
+
+        values = basicity_mod.frame_basicity(
+            table, basicity_mod.DEFAULT_SCALE, v_bond=v_bond).value
+        rows = np.nonzero(np.isfinite(values))[0]
     else:
-        values = results.valence_discrepancy_vu
-    cations = np.nonzero(~table.is_anion)[0]
-    by_atom = {int(i): float(values[i]) for i in cations}
+        results = bulk.at_threshold(table, v_bond)
+        if mode is theme_mod.ColorMode.BVS:
+            values = results.bvs_vu
+        elif mode is theme_mod.ColorMode.COORDINATION:
+            values = results.cn.astype(np.float64)
+        elif mode is theme_mod.ColorMode.PHI:
+            values = results.phi
+        else:
+            values = results.valence_discrepancy_vu
+        rows = np.nonzero(~table.is_anion)[0]
+    by_atom = {int(i): float(values[i]) for i in rows}
+    if not by_atom:
+        return base.copy(), None
     lo, hi = theme_mod.scale_range(by_atom, theme, mode)
     diverging = mode is theme_mod.ColorMode.VALENCE_DISCREPANCY
     out = base.copy()
     for i, value in by_atom.items():
         out[i] = theme_mod.color_for_value(value, lo, hi, diverging)
-    return out
+    return out, (mode.value, lo, hi, diverging)
 
 
 def build_md_scene(frame: Frame, bonds=None, *, theme=None, ox=None,
@@ -219,6 +232,7 @@ def build_md_scene(frame: Frame, bonds=None, *, theme=None, ox=None,
 
     mode = theme.color_mode
     element_colour = palette[inverse]
+    value_legend = None
     if mode is theme_mod.ColorMode.UNIFORM:
         atom_colour = np.tile(np.array(theme.uniform_atom_color, np.float32),
                               (n, 1))
@@ -227,7 +241,8 @@ def build_md_scene(frame: Frame, bonds=None, *, theme=None, ox=None,
         atom_colour = cycle[np.arange(n) % len(cycle)]
     elif mode is not theme_mod.ColorMode.ELEMENT and \
             isinstance(table, bulk.ValenceTable):
-        atom_colour = _value_colours(table, mode, theme, v_bond, element_colour)
+        atom_colour, value_legend = _value_colours(table, mode, theme, v_bond,
+                                                   element_colour)
     else:
         atom_colour = element_colour
     atom_colour = np.asarray(atom_colour, np.float32)
@@ -245,6 +260,7 @@ def build_md_scene(frame: Frame, bonds=None, *, theme=None, ox=None,
         if len(keys) else cart
 
     scene = Scene(style=style, v_bond=float(v_bond), theme=theme)
+    scene.value_legend = value_legend
     scene.poly_color = theme.polyhedron_color
     scene.poly_alpha = theme.polyhedron_alpha
     scene.atom_position = position.astype(np.float32)

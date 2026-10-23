@@ -351,6 +351,21 @@ def _comparison_headlines(tables) -> list[Headline]:
     return lines
 
 
+def _basicity_headlines(tables) -> list[Headline]:
+    lines = []
+    bulk = _scalar(tables, "optical basicity, composition")
+    if bulk is not None:
+        lines.append(Headline(f"Optical basicity Λ from the composition: "
+                              f"{_pm(bulk)}"))
+    for name, container in tables.items():
+        match = re.fullmatch(r"mean micro basicity ([A-Z][a-z]?) \(BV\)", name)
+        if match and isinstance(container, Scalar) and \
+                math.isfinite(container.mean):
+            lines.append(Headline(f"Mean microscopic basicity λ of {match[1]}: "
+                                  f"{_pm(container)} (bond-valence cut)"))
+    return lines
+
+
 _BUILDERS = {
     "glass": _glass_headlines,
     "rings": _rings_headlines,
@@ -361,6 +376,7 @@ _BUILDERS = {
     "msd": _msd_headlines,
     "scattering": _scattering_headlines,
     "scattering-comparison": _comparison_headlines,
+    "basicity": _basicity_headlines,
 }
 
 
@@ -682,6 +698,20 @@ def _comparison_measures(tables) -> list[Measure]:
     return out
 
 
+def _basicity_measures(tables) -> list[Measure]:
+    out = []
+    bulk = _scalar(tables, "optical basicity, composition")
+    if bulk is not None:
+        out.append(_number("optical basicity, composition",
+                           "Optical basicity Λ, composition", bulk))
+    for name, container in tables.items():
+        match = re.fullmatch(r"mean micro basicity ([A-Z][a-z]?) \(BV\)", name)
+        if match and isinstance(container, Scalar):
+            out.append(_number(name, f"Mean λ of {match[1]} (bond valence)",
+                               container))
+    return out
+
+
 _MEASURES = {
     "glass": _glass_measures,
     "rings": _rings_measures,
@@ -692,6 +722,7 @@ _MEASURES = {
     "msd": _msd_measures,
     "scattering": _scattering_measures,
     "scattering-comparison": _comparison_measures,
+    "basicity": _basicity_measures,
 }
 
 

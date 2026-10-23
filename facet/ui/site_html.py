@@ -10,10 +10,88 @@ from __future__ import annotations
 from ..core.coordination import SiteResult
 
 
+def _num(value: float, decimals: int = 3) -> str:
+    return "&mdash;" if value != value else f"{value:.{decimals}f}"
+
+
+def basicity_html(info, muted: str) -> tuple[str, str]:
+    """The optical-basicity row of the summary table and, for an anion, the
+    block that lists each cation's share -- from a ``MicroBasicity`` or an
+    ``EnvironmentBasicity`` of :mod:`facet.core.basicity`. Nothing is
+    computed here; both strings are empty when ``info`` is None."""
+    if info is None:
+        return "", ""
+    shares = getattr(info, "shares", None)
+    notes = "".join(
+        f"<p style='color:{muted};font-size:11px;margin:3px 0'>{n}</p>"
+        for n in getattr(info, "notes", ()))
+    if shares is None:
+        # a cation: the anions about it
+        detail = ""
+        if info.n_anions:
+            detail = (f" <span style='color:{muted}'>({_num(info.value_host)} "
+                      "with this site's own bonds left out; "
+                      f"{info.n_anions} anions; {info.scale} scale)</span>")
+        row = ("<tr><td>Optical basicity about this site</td>"
+               f"<td align='right'>&lambda;&#772; {_num(info.value)}{detail}"
+               "</td></tr>")
+        return row, notes
+    if not info.defined:
+        row = ("<tr><td>Microscopic optical basicity &lambda;</td>"
+               "<td align='right'>&mdash;</td></tr>")
+        return row, notes
+    listed = ("" if info.value_listed != info.value_listed
+              else f" <span style='color:{muted}'>"
+                   f"({_num(info.value_listed)} to the listing cut)</span>")
+    row = ("<tr><td>Microscopic optical basicity &lambda;</td>"
+           f"<td align='right'>{_num(info.value)}{listed}</td></tr>")
+    rows = ""
+    for s in info.shares:
+        m = s.moderator
+        rows += (
+            f"<tr><td>{s.label}</td>"
+            f"<td align='right'>{s.valence:.4f}</td>"
+            f"<td align='right'>{s.share:.4f}</td>"
+            f"<td align='right'>{_num(s.gamma, 3)}</td>"
+            f"<td align='right'>{'&mdash;' if m is None else _num(1.0 / (info.factor * m.gamma), 3)}</td>"
+            f"<td align='right'>{_num(s.lowering, 4)}</td>"
+            f"<td align='center'>{'&#9679;' if s.bonded else '&#9675;'}</td>"
+            f"<td style='color:{muted}'>"
+            f"{'' if m is None else ('' if m.measured else 'chi')}</td></tr>")
+    measured = info.measured_species
+    derived = info.derived_species
+    origin = []
+    if measured:
+        origin.append("&gamma; measured for " + ", ".join(measured))
+    if derived:
+        origin.append("&gamma; from the Pauling electronegativity for "
+                      + ", ".join(derived) + " (marked <i>chi</i>)")
+    factor = ("" if info.factor == 1.0
+              else f"; &gamma; &times; {info.factor:g} for a {info.element} "
+                   "environment (Duffy 1989)")
+    block = (
+        "<h4 style='margin-bottom:2px'>Optical basicity of this anion</h4>"
+        "<table width='100%' cellspacing='0' cellpadding='2' "
+        "style='font-size:11px'>"
+        f"<tr style='color:{muted}'><th align='left'>cation</th>"
+        "<th align='right'>s / v.u.</th><th align='right'>s / |z|</th>"
+        "<th align='right'>&gamma;</th><th align='right'>&Lambda; oxide</th>"
+        "<th align='right'>lowering</th><th></th><th></th></tr>"
+        f"{rows}</table>"
+        f"<p style='color:{muted};font-size:11px;margin-top:4px'>"
+        "&lambda; = 1 &minus; &Sigma; (s / |z|)(1 &minus; 1/&gamma;) over the "
+        "bonded contacts (Duffy &amp; Ingram 1976, eq. 4 for one anion); the "
+        f"share the bonded contacts do not carry, {_num(info.unmoderated)}, "
+        f"counts at &gamma; = 1. Scale: {info.scale}{factor}. "
+        + "; ".join(origin) + ".</p>")
+    return row, block + notes
+
+
 def site_html(r: SiteResult, v_bond: float, muted: str, *,
               headline: str | None = None,
               split=None, apriori_of: dict | None = None,
-              apriori_reason: str = "", show_running: bool = True) -> str:
+              apriori_reason: str = "", show_running: bool = True,
+              basicity=None) -> str:
     """The Site tab for ``r`` at ``v_bond``.
 
     ``headline`` replaces the crystallographic line under the label (Wyckoff,
@@ -21,7 +99,11 @@ def site_html(r: SiteResult, v_bond: float, muted: str, *,
     network's a priori split for this site (``delta_topol``, ``delta_cryst``,
     ``a_priori`` per bonded contact), ``apriori_of`` maps ``id(contact)`` to
     its a priori valence, and ``apriori_reason`` says why there is none.
+    ``basicity`` is the site's optical basicity (:mod:`facet.core.basicity`:
+    a ``MicroBasicity`` for an anion, an ``EnvironmentBasicity`` for a
+    cation), or None to leave it out.
     """
+    basicity_row, basicity_block = basicity_html(basicity, muted)
     phi_listed = ("" if r.phi_listed != r.phi_listed
                   else f" <span style='color:{muted}'>"
                        f"({r.phi_listed:.3f} to the listing cut)</span>")
@@ -189,9 +271,11 @@ def site_html(r: SiteResult, v_bond: float, muted: str, *,
           <td align='right'>{r.shape.get('spread') or float('nan'):.4f} Å</td></tr>
       {plateau_row}
       {angle_row}
+      {basicity_row}
       {apriori_block}
     </table>
     {notes}
+    {basicity_block}
     <h4 style='margin-bottom:2px'>Contacts</h4>
     <table width='100%' cellspacing='0' cellpadding='2' style='font-size:11px'>
       <tr style='color:{muted}'>

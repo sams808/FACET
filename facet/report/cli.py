@@ -54,6 +54,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="the bond-valence parameters: 'built-in' (Brese "
                              "& O'Keeffe 1991, default), 'bvparm2020' (the "
                              "bundled IUCr table) or a parameter file")
+    from facet.core.basicity import DEFAULT_SCALE, SCALE_KEYS
+    parser.add_argument("--basicity-scale", default=DEFAULT_SCALE,
+                        choices=SCALE_KEYS + ("none",), metavar="SCALE",
+                        help="the scale of basicity moderating parameters "
+                             "for the optical-basicity table: "
+                             + ", ".join(SCALE_KEYS)
+                             + f" (default {DEFAULT_SCALE}), or 'none' to "
+                             "leave that table out")
     parser.add_argument("--quiet", action="store_true",
                         help="no progress on stderr")
     return parser
@@ -79,6 +87,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.anions = bool(found.get("anions", args.anions))
         if "--v-bond-2" not in given and found.get("v_bond_other") is not None:
             args.v_bond_2 = float(found["v_bond_other"])
+        if "--basicity-scale" not in given and "basicity_scale" in found:
+            args.basicity_scale = found["basicity_scale"] or "none"
         tables = found.get("tables")
     if args.tables:
         tables = [t.strip() for t in args.tables.split(",") if t.strip()]
@@ -104,7 +114,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     report = analyse_files(args.paths, params=params, v_bond=args.v_bond,
                            v_list=args.v_list, anions=args.anions,
-                           progress=progress, v_bond_other=args.v_bond_2)
+                           progress=progress, v_bond_other=args.v_bond_2,
+                           basicity_scale=(None if args.basicity_scale == "none"
+                                           else args.basicity_scale))
     if not report.structures:
         print("no CIF files among the paths given", file=sys.stderr)
         return 2

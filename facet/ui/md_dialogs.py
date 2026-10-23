@@ -119,7 +119,7 @@ MODULE_GROUPS = (
 # The option groups of AnalysisRequest each module box holds, and the
 # top-level request fields shown with them.
 OPTION_GROUPS = {
-    "glass": ("glass",),
+    "glass": ("glass", "basicity"),
     "md_scattering": ("scattering",),
     "md_network": ("network",),
     "md_order": ("order", "voids"),
@@ -148,6 +148,7 @@ GROUP_READERS = {
     "feff": ("feff",),
     "dynamics": ("msd", "self-correlations", "distinct-van-hove", "vacf",
                  "kinetic-temperature", "conductivity", "bond-lifetimes"),
+    "basicity": ("basicity",),
 }
 DYNAMICS_TOP_FIELDS = ("timestep_fs", "frame_interval_ps", "temperature_k",
                        "charges_e")
@@ -212,7 +213,8 @@ def group_class(group: str):
             "network": ma.NetworkOptions, "order": ma.OrderOptions,
             "voids": ma.VoidOptions, "nmr": ma.NmrOptions,
             "exafs": ma.ExafsOptions, "feff": ma.FeffOptions,
-            "dynamics": ma.DynamicsOptions}[group]
+            "dynamics": ma.DynamicsOptions,
+            "basicity": ma.BasicityOptions}[group]
 
 
 _UNIT_SUFFIXES = (("_inv_ang", "Å⁻¹"), ("_ang3", "Å³"), ("_ang2", "Å²"),
@@ -222,6 +224,7 @@ _UNIT_SUFFIXES = (("_inv_ang", "Å⁻¹"), ("_ang3", "Å³"), ("_ang2", "Å²"),
                   ("_e", "e"))
 
 _LABELS = {
+    "scale": "basicity scale", "bin": "λ histogram bin",
     "rdf_r_max_ang": "g(r) r max", "rdf_dr_ang": "g(r) step",
     "minimum_rule": "first-minimum rule",
     "minimum_smooth_sigma_ang": "first-minimum smoothing sigma",
@@ -359,10 +362,11 @@ OPTIONAL_OUTPUTS = {
 # Fields whose values form a fixed list; read at run time from the module
 # that defines them.
 def _choices(group, name):
-    from ..core import (glass, md_analysis as ma, md_dynamics, md_network,
-                        md_order, md_scattering, md_spectroscopy)
+    from ..core import (basicity, glass, md_analysis as ma, md_dynamics,
+                        md_network, md_order, md_scattering, md_spectroscopy)
 
     table = {
+        ("basicity", "scale"): basicity.SCALE_KEYS,
         ("glass", "minimum_rule"): glass.MINIMUM_RULES,
         ("glass", "minimum_flat_rule"): glass.FLAT_RULES,
         ("scattering", "r_window"): md_scattering.R_WINDOWS,
