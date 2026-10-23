@@ -2,6 +2,12 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 1.1.0 — 2026-10-22
+
+- Version 1.1.0: optical basicity, bulk and per anion, drawn as a gradient  `3547e88`  2026-10-22
+- Build: log paths outside the repository without failing  `293cf30`  2026-10-16
+- Changelog for 1.0.5  `ef00f39`  2026-10-16
+
 ## 1.0.5 — 2026-10-16
 
 - Version 1.0.5: a large cell opens in a second, not twenty  `bda27a7`  2026-10-16
