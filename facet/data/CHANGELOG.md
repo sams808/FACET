@@ -2,6 +2,11 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 1.2.1 — 2026-10-23
+
+- Version 1.2.1: the gradient is coarsened to a counted triangle budget  `7ed3933`  2026-10-23
+- Changelog for 1.2.0  `de0d301`  2026-10-23
+
 ## 1.2.0 — 2026-10-23
 
 - Version 1.2.0: the basicity as a field, drawn as a gradient and a slice  `42d7bc8`  2026-10-23
