@@ -2,6 +2,11 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 1.2.0 — 2026-10-23
+
+- Version 1.2.0: the basicity as a field, drawn as a gradient and a slice  `42d7bc8`  2026-10-23
+- Changelog for 1.1.0  `a66c4f1`  2026-10-22
+
 ## 1.1.0 — 2026-10-22
 
 - Version 1.1.0: optical basicity, bulk and per anion, drawn as a gradient  `3547e88`  2026-10-22
