@@ -255,6 +255,11 @@ class PreviewWindow(QMainWindow):
         self.volume_panel = VolumePanel()
         self.volume_panel.apply_theme(self.theme)
         self.volume_panel.isosurfaceChanged.connect(self._on_isosurface)
+        self.volume_panel.fieldOverlaysChanged.connect(self._on_field_overlays)
+        # what the Volume tab asks to draw of its field in the 3D view, kept
+        # so a rebuilt scene carries it again
+        self._field_spec = None
+        self._scene_atom_legend = None
         self.volume_panel.statusMessage.connect(
             lambda text: self.statusBar().showMessage(text, 9000))
 
@@ -1922,6 +1927,9 @@ class PreviewWindow(QMainWindow):
                               neighbour_shells_of(self.scene, atom, shells))
             else:
                 self._isolated = None
+        # the Volume tab's gradient and slice, over the rebuilt scene
+        self._scene_atom_legend = self.scene.value_legend
+        self._apply_field_overlays()
         self.view.set_scene(self.scene, reframe=reframe)
         self.view.set_theme(self.theme)
         self.view.set_label_context(
@@ -1959,7 +1967,10 @@ class PreviewWindow(QMainWindow):
             active.overrides if active else None)
         self.disorder_panel.set_entry(active)
         self.volume_panel.set_context(
-            active.structure if active else None, self.project.params)
+            active.structure if active else None, self.project.params,
+            basicity_source=((lambda e=active: (
+                self.project.full_results_for(e),
+                self.utilities.basicity_scale())) if active else None))
 
     def _refresh_lazy_panels(self) -> None:
         """Give the diffraction and PDF panels the structure if their tab is
@@ -2809,6 +2820,115 @@ class PreviewWindow(QMainWindow):
             entry.overrides if entry else None)
         self._rebuild()
         self._refresh_history_actions()
+
+    def _on_field_overlays(self, spec) -> None:
+        """The Volume tab's field in the 3D view (a gradient of level
+        surfaces, a slice, isolated to a window or a region): rebuild the
+        overlays on the current scene and show it."""
+        self._field_spec = spec
+        if self.scene is None:
+            return
+        self._apply_field_overlays()
+        self.view.set_scene(self.scene, reframe=False)
+
+    def _apply_field_overlays(self) -> None:
+        """Put the field overlays the Volume tab asks for onto ``self.scene``
+        (:mod:`facet.core.basicity_field`), replacing the previous ones, and
+        set the view's colour bar to the field's range while any is drawn."""
+        scene = self.scene
+        if scene is None:
+            return
+        scene.overlay_meshes = [m for m in scene.overlay_meshes
+                                if getattr(m, "label", "")
+                                not in ("field gradient", "field slice")]
+        spec = self._field_spec
+        if spec is None or not spec.wanted:
+            scene.value_legend = self._scene_atom_legend
+            return
+        from ..core import basicity_field as field_mod
+        from ..core import planes as planes_mod
+        from .section_view import sample_colormap
+
+        entry = self._crystal()
+        structure = entry.structure if entry is not None else None
+        grid = spec.grid
+        values = np.asarray(grid.values, float)
+        finite = values[np.isfinite(values)]
+        if not finite.size:
+            self.statusBar().showMessage(
+                "the field has no defined point to draw", 8000)
+            scene.value_legend = self._scene_atom_legend
+            return
+        lo, hi = (spec.window if spec.window is not None
+                  else (float(finite.min()), float(finite.max())))
+        if hi < lo:
+            lo, hi = hi, lo
+        keep = np.ones(grid.shape, bool)
+        notes = []
+        if spec.window is not None:
+            keep &= field_mod.window_mask(grid, lo, hi)
+            notes.append(f"between {lo:.4g} and {hi:.4g}")
+        if spec.region == "site" and structure is not None:
+            site = entry.selected_site
+            atoms = [a for a in structure.atoms
+                     if site is not None and a.site_index == site
+                     and a.in_home_cell]
+            if atoms:
+                keep &= field_mod.sphere_mask(grid, atoms[0].cart,
+                                              spec.region_radius)
+                notes.append(f"within {spec.region_radius:g} Å of "
+                             f"{atoms[0].label}")
+            else:
+                notes.append("no site selected for the region, so the "
+                             "whole cell is drawn")
+        elif spec.region == "slab" and structure is not None:
+            slab = self.planes_panel.current_slab()
+            if slab is not None and slab.enabled and slab.is_valid:
+                cart = (np.asarray(structure.cell.orth, float)
+                        @ field_mod._grid_fractional(grid).T).T
+                keep &= planes_mod.slab_mask(structure, cart, slab).reshape(
+                    grid.shape)
+                notes.append(f"inside the slab ({slab.h} {slab.k} {slab.l}), "
+                             f"{slab.thickness:g} Å")
+            else:
+                notes.append("the slab on the Planes tab is off, so the "
+                             "whole cell is drawn")
+        drawn = field_mod.restricted(grid, keep) if not keep.all() else grid
+
+        def colour_of(t):
+            return tuple(float(c) / 255.0
+                         for c in sample_colormap(spec.colormap, float(t)))
+
+        n_triangles = 0
+        if spec.show_gradient:
+            levels = field_mod.gradient_levels(lo, hi, spec.levels)
+            meshes = field_mod.gradient_meshes(
+                drawn, levels, lo, hi, alpha=spec.gradient_alpha,
+                colour_of=colour_of, label="field gradient")
+            scene.overlay_meshes.extend(meshes)
+            n_triangles += sum(m.n_triangles for m in meshes)
+        if spec.show_slice and structure is not None:
+            h, k, l = spec.plane
+            if (h, k, l) != (0, 0, 0):
+                try:
+                    u, v, normal = planes_mod.in_plane_axes(structure, h, k, l)
+                    _, d = planes_mod.normal_and_spacing(structure, h, k, l)
+                except ValueError as error:
+                    self.statusBar().showMessage(str(error), 8000)
+                else:
+                    origin = normal * spec.offset * d
+                    meshes = field_mod.slice_meshes(
+                        drawn, origin, u, v, spec.size, spec.samples, lo, hi,
+                        alpha=spec.slice_alpha, colour_of=colour_of,
+                        label="field slice")
+                    scene.overlay_meshes.extend(meshes)
+                    n_triangles += sum(m.n_triangles for m in meshes)
+        title = f"{grid.name or 'field'}{(' / ' + grid.units) if grid.units else ''}"
+        scene.value_legend = (title, float(lo), float(hi), False)
+        words = " · ".join(notes)
+        self.statusBar().showMessage(
+            f"{grid.name or 'field'} in the view: {n_triangles} triangles"
+            + (f" ({words})" if words else ""), 8000)
 
     def _on_isosurface(self, grid, level: float) -> None:
         """Put a level set of a volumetric field into the 3D scene, or take it out.

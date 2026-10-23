@@ -155,6 +155,8 @@ verified against an analytic sphere, planar sections, and bond-valence maps.
 | 2D sections and contour maps | – | ✓ | **done** | marching squares with the saddle case resolved; colour map plus contours, on any Miller plane |
 | Fourier / difference maps | – | ✓ | **done** | any loaded field, and the difference between two grids |
 | Bond-valence energy landscapes | – | ✓ | **done** | the V=3 surface passes within 0.07 Å of the real Bi sites |
+| **Gradient of level surfaces and a slice inside the 3D view** | – | ✓ | **done** | any field: translucent level surfaces at several values in the colours of their values, the section plane as a colour-mapped slice in the view, isolated to a window of values, a sphere about the selected site or the slab; the colour bar on the view gives the range; same on an MD frame through a Highlight rule |
+| **The basicity a probe would sense** | – | – | **done** | a field: the mean microscopic basicity of the anions a probe cation at each point would bond to, weighted by the bond valences it would form, undefined below a valence floor; `facet/core/basicity_field.py`, Volume tab kind, MD Highlight rule |
 | Hirshfeld surfaces | – | – | out of scope | CrystalExplorer does this well |
 
 ## 9. Diffraction, PDF and EXAFS

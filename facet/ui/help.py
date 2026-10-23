@@ -778,6 +778,45 @@ over the whole box at the threshold in force; both follow the scale chosen
 under <i>Tools &rsaquo; Basicity</i>. Terminal oxygens, bridging oxygens and
 the oxygens about a modifier-rich pocket then read as a gradient rather than
 as rows of a table.</p>
+<h2>The field: a basicity map through the cell</h2>
+<p>Optical basicity was measured with probe cations sensing the oxygens
+about them, so the natural field is <b>the basicity a probe cation would
+sense at each point</b>: the mean of the microscopic &lambda; of the anions
+it would bond to there, weighted by the bond valence it would form with
+each &mdash; the same terms a bond-valence map of the probe sums, each now
+carrying its anion's &lambda;. Where the probe's valence sum falls below a
+stated floor it is bonded to nothing, and the field is undefined there
+rather than extrapolated. On a crystal with one oxygen site the field is
+flat, because it interpolates the anions' values and is not a density;
+between sites of different &lambda;, and across a glass model, it is the
+gradient.</p>
+<p>On a crystal: <i>Volume &rsaquo; kind &rsaquo; basicity a probe would
+sense</i>, with the probe (Pb<sup>2+</sup>, Bi<sup>3+</sup> or Tl<sup>+</sup>
+are Duffy's own; a cation of the structure is the other natural choice),
+the grid spacing, the search radius and the valence floor. <b>Compute</b>
+then gives the field to everything the tab does with a field: a single
+isosurface, the 2D section with its contours, and, under <i>In the 3D
+view</i>, a <b>gradient of level surfaces</b> &mdash; translucent surfaces
+at several values, each in the colour of its value, drawn around the atoms
+with the colour bar giving the range &mdash; and the section plane as a
+<b>colour-mapped slice</b> inside the 3D view. Either can be <b>isolated</b>
+to a window of values (only what lies between two levels), to a sphere
+about the site chosen in the Sites dock, or to the slab set on the Planes
+tab; the rest is left out, not dimmed. The opacity of the surfaces and of
+the slice is yours to set, so the atoms stay visible through them, and the
+meshes go into the SVG and PDF exports with everything else.</p>
+<p>On an MD frame: <i>Highlight &rsaquo; Add rule &rsaquo; Basicity map</i>
+does the same over the box, with a slice normal to a box axis at a chosen
+fraction, and isolates to the window, to a sphere about the atom read in
+the Atom tab, or to the toolbar's slab. Both follow the scale chosen under
+<i>Tools &rsaquo; Basicity</i>, and the count line under the rules states
+the probe, the scale, the range drawn and the share of the box that carries
+a value.</p>
+<p {note}>A smaller probe (a shorter <i>R</i><sub>0</sub>) weights the
+nearest anion more, so the field changes with the probe chosen; the legend
+names it. The field is a construction of the probe picture, stated as such
+&mdash; what a cation placed at that point would sense &mdash; and not a
+measured quantity at every point.</p>
 <p {note}>The MD workspace has the same analysis as <i>basicity</i>: the
 composition's &Lambda;, the &lambda; of every anion atom as a histogram per
 anion element, its mean, and the means by speciation (free, non-bridging,
@@ -958,6 +997,12 @@ choice would have on a grid through the cell, and draws either a section through
 it — with contours and a colour map — or an isosurface in the 3D view. The
 section is where a migration path or an interstitial site shows itself as a
 region of near-correct valence for the probe.</p>
+<p>A fourth kind of field, the <b>basicity a probe would sense</b>, and the
+<i>In the 3D view</i> group &mdash; a gradient of level surfaces, the
+section as a slice inside the view, and the window or region either is
+isolated to &mdash; are described under <i>Optical basicity</i>. The
+gradient and the slice work for every kind of field, a charge density read
+from a file included.</p>
 <p {note}>Grid work is bounded: a request large enough to take minutes is
 refused with the number it would have needed, rather than freezing the
 window.</p>

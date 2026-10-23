@@ -1055,6 +1055,22 @@ against itself (`tests/test_basicity.py`, 51 tests):
   exercised on the bundled structures, with the scale switch checked to
   reach the Site tab.
 
+**The field (1.2.0).** `facet/core/basicity_field.py` draws the basicity a
+probe would sense as a gradient, a slice and an isolated part
+(`tests/test_basicity_field.py`, 11 tests): at an anion's own position the
+field reads that anion's λ to the grid's blur, and with one anion site it is
+flat; the probe's valence grid equals the existing bond-valence map term for
+term (the two sums share one pass now, and the refactor changed nothing);
+an MD frame that tiles BiPO₄ 2×2×2 gives the same field at random points
+through the other code path (a KD-tree over periodic images) to 2e-3; the
+valence floor leaves undefined exactly the points whose valence sum is below
+it; the window, sphere and slab masks keep exactly the points they say; each
+level surface's vertices lie on their level to the difference between the
+edge interpolation that placed them and the trilinear one that reads them
+back; the slice is one mesh per colour bin with every defined cell; and the
+Volume tab, the window and the MD rule put the overlays on the scene with
+the field's colour bar, keep them across a rebuild, and isolate them.
+
 What is **not** verified: no measured Λ of a crystal in the group's own work
 has been compared with the bond-valence mean, and the measured scales
 (Duffy 1996, Lebouteiller and Courtine 1998, Dimitrov and Sakka 1996) are

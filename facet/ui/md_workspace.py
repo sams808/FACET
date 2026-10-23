@@ -2534,6 +2534,8 @@ class ModelController(QObject):
         v_bond = self._strip_v_bond()
         v_bond = fv.v_bond_vu if v_bond is None else v_bond
         fd = self._frame_data_at(v_bond)
+        # a basicity map isolated to the slab reads the toolbar's
+        fd.slab = self.toolbar.slab()
         if self.highlight is not None:
             self.highlight.set_frame_data(fd)
             rules = self.highlight.rules()

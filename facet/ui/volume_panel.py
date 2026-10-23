@@ -42,9 +42,44 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import bv, elements, planes as planes_mod, volume as volume_mod
+from ..core import (basicity_field as field_mod, bv, elements,
+                    planes as planes_mod, volume as volume_mod)
 from . import chrome
 from .section_view import COLORMAPS, SectionView
+
+
+class FieldDisplay:
+    """What the panel asks the window to draw of its field inside the 3D
+    view: the grid, a gradient of level surfaces, the section plane as a
+    colour-mapped slice, and the window of values or the region either is
+    isolated to. Plain data; the window builds the meshes
+    (:mod:`facet.core.basicity_field`)."""
+
+    def __init__(self, grid, *, show_gradient: bool, levels: int,
+                 gradient_alpha: float, show_slice: bool, slice_alpha: float,
+                 plane: tuple, offset: float, size: float, samples: int,
+                 window: tuple | None, region: str, region_radius: float,
+                 colormap: str, field=None):
+        self.grid = grid
+        self.show_gradient = bool(show_gradient)
+        self.levels = int(levels)
+        self.gradient_alpha = float(gradient_alpha)
+        self.show_slice = bool(show_slice)
+        self.slice_alpha = float(slice_alpha)
+        self.plane = tuple(int(i) for i in plane)
+        self.offset = float(offset)
+        self.size = float(size)
+        self.samples = int(samples)
+        self.window = None if window is None else (float(window[0]),
+                                                   float(window[1]))
+        self.region = str(region)
+        self.region_radius = float(region_radius)
+        self.colormap = str(colormap)
+        self.field = field                 # a BasicityField when it is one
+
+    @property
+    def wanted(self) -> bool:
+        return self.grid is not None and (self.show_gradient or self.show_slice)
 
 
 def _spin(low, high, value, step, decimals=3, suffix=""):
@@ -63,6 +98,8 @@ class VolumePanel(QWidget):
     """Build or load a field, show its isosurface, and cut sections through it."""
 
     isosurfaceChanged = Signal(object, float)   # grid (or None), level
+    # a FieldDisplay (or None): the gradient and the slice in the 3D view
+    fieldOverlaysChanged = Signal(object)
     statusMessage = Signal(str)
 
     def __init__(self, parent=None):
@@ -70,6 +107,10 @@ class VolumePanel(QWidget):
         self.structure = None
         self.params: bv.ParameterSet = bv.DEFAULT
         self.grid: volume_mod.Grid | None = None
+        # the BasicityField behind the grid, when the field is one
+        self.field = None
+        # () -> (results covering the anions, scale key), from the window
+        self._basicity_source = None
         self._loading = False
 
         self.section = SectionView()
@@ -107,6 +148,7 @@ class VolumePanel(QWidget):
 
         outer.addWidget(self._source_group())
         outer.addWidget(self._display_group())
+        outer.addWidget(self._field_group())
 
         split = QSplitter(Qt.Vertical)
         holder = QWidget()
@@ -131,6 +173,7 @@ class VolumePanel(QWidget):
         self.kind = QComboBox()
         self.kind.addItem("bond-valence sum of a probe", "bvs")
         self.kind.addItem("bond-valence energy landscape", "bvel")
+        self.kind.addItem("basicity a probe would sense", "basicity")
         self.kind.addItem("loaded from a file", "file")
         self.kind.currentIndexChanged.connect(self._on_kind)
         chrome.fit_combo(self.kind)
@@ -170,6 +213,15 @@ class VolumePanel(QWidget):
             "Only used by the energy landscape, which converts a valence "
             "mismatch into an energy at this temperature.")
         second.addRow("temperature", self.temperature)
+        self.floor = _spin(0.0, 5.0, field_mod.VALENCE_FLOOR_DEFAULT, 0.05,
+                           2, " v.u.")
+        self.floor.setToolTip(
+            "Only used by the basicity field: where the probe's bond-valence "
+            "sum is below this it is bonded to nothing, and no basicity is "
+            "drawn there. The field is the mean of the anions' microscopic "
+            "basicity weighted by the valence the probe would form with "
+            "each (Tools > Basicity chooses the scale).")
+        second.addRow("valence floor", self.floor)
         row.addLayout(second)
 
         buttons = QVBoxLayout()
@@ -295,35 +347,147 @@ class VolumePanel(QWidget):
         row.addStretch(1)
         return group
 
+    def _field_group(self) -> QWidget:
+        """The field inside the 3D view: a gradient of level surfaces, the
+        section as a slice, and what either is isolated to."""
+        group = QGroupBox("In the 3D view")
+        row = QVBoxLayout(group)
+        row.setSpacing(12)
+
+        gradient = QFormLayout()
+        gradient.setSpacing(3)
+        self.show_gradient = QCheckBox("gradient of level surfaces")
+        self.show_gradient.setToolTip(
+            "Level surfaces of the field at several values, each a "
+            "translucent surface in the colour of its level: the field as "
+            "a gradient around the atoms. Stays translucent so the atoms "
+            "show through; the colour bar on the view gives the range.")
+        self.show_gradient.toggled.connect(self._emit_field_overlays)
+        gradient.addRow(self.show_gradient)
+        self.gradient_levels = QSpinBox()
+        self.gradient_levels.setRange(2, 24)
+        self.gradient_levels.setValue(field_mod.GRADIENT_LEVELS_DEFAULT)
+        self.gradient_levels.setToolTip("How many level surfaces, evenly "
+                                        "spaced over the range (or the window).")
+        self.gradient_levels.valueChanged.connect(self._emit_field_overlays)
+        gradient.addRow("levels", self.gradient_levels)
+        self.gradient_alpha = _spin(0.03, 0.9, field_mod.GRADIENT_ALPHA_DEFAULT,
+                                    0.02, 2)
+        self.gradient_alpha.setToolTip("Opacity of each surface; lower lets "
+                                       "the atoms and the inner surfaces "
+                                       "show through.")
+        self.gradient_alpha.valueChanged.connect(self._emit_field_overlays)
+        gradient.addRow("opacity", self.gradient_alpha)
+        self.show_slice = QCheckBox("the section plane as a colour-mapped slice")
+        self.show_slice.setToolTip(
+            "The plane of the section below, drawn inside the 3D view with "
+            "the same colour map; follows the plane, offset, extent and "
+            "samples set above.")
+        self.show_slice.toggled.connect(self._emit_field_overlays)
+        gradient.addRow(self.show_slice)
+        self.slice_alpha = _spin(0.1, 1.0, field_mod.SLICE_ALPHA_DEFAULT,
+                                 0.05, 2)
+        self.slice_alpha.valueChanged.connect(self._emit_field_overlays)
+        gradient.addRow("slice opacity", self.slice_alpha)
+        row.addLayout(gradient)
+
+        isolate = QFormLayout()
+        isolate.setSpacing(3)
+        self.use_window = QCheckBox("only between two values")
+        self.use_window.setToolTip(
+            "Draw the field only where it lies between the two values: the "
+            "shells and the slice cells outside are left out.")
+        self.use_window.toggled.connect(self._emit_field_overlays)
+        isolate.addRow(self.use_window)
+        bounds = QHBoxLayout()
+        self.window_lo = _spin(-1e6, 1e6, 0.0, 0.01, 4)
+        self.window_hi = _spin(-1e6, 1e6, 1.0, 0.01, 4)
+        for box in (self.window_lo, self.window_hi):
+            box.valueChanged.connect(self._emit_field_overlays)
+            bounds.addWidget(box)
+        holder = QWidget()
+        holder.setLayout(bounds)
+        isolate.addRow("from / to", holder)
+        self.region = QComboBox()
+        self.region.addItem("the whole cell", "cell")
+        self.region.addItem("within a radius of the selected site", "site")
+        self.region.addItem("inside the slab (Planes tab)", "slab")
+        self.region.setToolTip(
+            "Isolate a part of the field: a sphere about the site chosen in "
+            "the Sites dock, or the slab set on the Planes tab (its on/off "
+            "switch applies). The rest is left out, not dimmed.")
+        self.region.currentIndexChanged.connect(self._emit_field_overlays)
+        chrome.fit_combo(self.region)
+        isolate.addRow("region", self.region)
+        self.region_radius = _spin(0.5, 20.0, 3.0, 0.25, 2, " Å")
+        self.region_radius.valueChanged.connect(self._emit_field_overlays)
+        isolate.addRow("radius", self.region_radius)
+        row.addLayout(isolate)
+        row.addStretch(1)
+        return group
+
     # -- content -----------------------------------------------------------
     def apply_theme(self, theme) -> None:
         self.section.apply_theme(theme)
 
-    def set_context(self, structure, params=None) -> None:
+    def set_context(self, structure, params=None, basicity_source=None) -> None:
+        """``basicity_source`` is a callable giving ``(results covering the
+        anions, scale key)`` for the basicity field, or None."""
         if structure is not self.structure:
             self.clear()
         self.structure = structure
         self.params = params or bv.DEFAULT
+        self._basicity_source = basicity_source
         enabled = structure is not None
         self.compute_button.setEnabled(enabled)
         self._on_kind()
 
     def _on_kind(self) -> None:
         kind = self.kind.currentData()
+        computed = ("bvs", "bvel", "basicity")
         for widget in (self.probe_element, self.probe_ox, self.resolution,
                        self.rmax):
-            widget.setEnabled(kind in ("bvs", "bvel"))
+            widget.setEnabled(kind in computed)
         self.temperature.setEnabled(kind == "bvel")
+        self.floor.setEnabled(kind == "basicity")
         self.compute_button.setEnabled(self.structure is not None
-                                       and kind in ("bvs", "bvel"))
+                                       and kind in computed)
 
     def clear(self) -> None:
         self.grid = None
+        self.field = None
         self.section.set_section(None, (-5, 5, -5, 5))
         self.stats.setText("")
         self.readout.setText("")
         self.show_iso.setChecked(False)
         self.isosurfaceChanged.emit(None, 0.0)
+        self.fieldOverlaysChanged.emit(None)
+
+    # -- the field in the 3D view -------------------------------------------------
+    def field_display(self):
+        """The :class:`FieldDisplay` the panel asks for now, or None when
+        there is no field or nothing of it is to be drawn in the view."""
+        if self.grid is None:
+            return None
+        window = ((float(self.window_lo.value()), float(self.window_hi.value()))
+                  if self.use_window.isChecked() else None)
+        return FieldDisplay(
+            self.grid, show_gradient=self.show_gradient.isChecked(),
+            levels=self.gradient_levels.value(),
+            gradient_alpha=self.gradient_alpha.value(),
+            show_slice=self.show_slice.isChecked(),
+            slice_alpha=self.slice_alpha.value(),
+            plane=(self.h.value(), self.k.value(), self.l.value()),
+            offset=self.offset.value(), size=self.size.value(),
+            samples=min(int(self.samples.value()), 160),
+            window=window, region=str(self.region.currentData()),
+            region_radius=self.region_radius.value(),
+            colormap=self.colormap.currentText(), field=self.field)
+
+    def _emit_field_overlays(self, *_args) -> None:
+        if self._loading:
+            return
+        self.fieldOverlaysChanged.emit(self.field_display())
 
     # -- building the field ------------------------------------------------
     def compute(self) -> None:
@@ -359,13 +523,27 @@ class VolumePanel(QWidget):
         from PySide6.QtWidgets import QApplication
 
         QApplication.processEvents()
+        field = None
         try:
-            grid = volume_mod.bond_valence_grid(
-                self.structure, element, ox, resolution=spacing,
-                params=self.params, rmax=float(self.rmax.value()))
-            if kind == "bvel":
-                grid = volume_mod.bond_valence_energy(
-                    grid, ox, temperature=float(self.temperature.value()))
+            if kind == "basicity":
+                if self._basicity_source is None:
+                    raise ValueError("the basicity field needs the window's "
+                                     "analysis of the anions, which this "
+                                     "panel was not given")
+                results, scale = self._basicity_source()
+                field = field_mod.basicity_grid(
+                    self.structure, results, scale, probe=element,
+                    probe_ox=ox, resolution=spacing, params=self.params,
+                    rmax=float(self.rmax.value()),
+                    floor_vu=float(self.floor.value()))
+                grid = field.grid
+            else:
+                grid = volume_mod.bond_valence_grid(
+                    self.structure, element, ox, resolution=spacing,
+                    params=self.params, rmax=float(self.rmax.value()))
+                if kind == "bvel":
+                    grid = volume_mod.bond_valence_energy(
+                        grid, ox, temperature=float(self.temperature.value()))
         except (ValueError, MemoryError) as error:
             progress.close()
             QMessageBox.warning(self, "Could not build the field", str(error))
@@ -374,7 +552,18 @@ class VolumePanel(QWidget):
             progress.close()
 
         self.grid = grid
-        self._after_grid(default_level=(abs(ox) if kind == "bvs" else 1.0))
+        self.field = field
+        if kind == "basicity":
+            lo, hi = field.range
+            middle = 0.5 * (lo + hi) if lo == lo else 0.5
+            self._after_grid(default_level=middle)
+            if field.n_defined == 0:
+                self.statusMessage.emit(
+                    "no point of the cell carries a basicity: " + "; ".join(
+                        field.notes[1:]) if len(field.notes) > 1 else
+                    "no point of the cell carries a basicity")
+        else:
+            self._after_grid(default_level=(abs(ox) if kind == "bvs" else 1.0))
 
     def _load(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -388,6 +577,7 @@ class VolumePanel(QWidget):
             QMessageBox.warning(self, "Could not read the file", str(error))
             return
         self.grid = grid
+        self.field = None
         self.kind.setCurrentIndex(self.kind.findData("file"))
         statistics = grid.statistics()
         middle = 0.5 * (statistics["min"] + statistics["max"])
@@ -405,8 +595,19 @@ class VolumePanel(QWidget):
         try:
             statistics = self.grid.statistics()
             low, high = statistics["min"], statistics["max"]
+            if not (np.isfinite(low) and np.isfinite(high)):
+                # a field with undefined points: its range is the finite one
+                finite = self.grid.values[np.isfinite(self.grid.values)]
+                low, high = ((float(finite.min()), float(finite.max()))
+                             if finite.size else (0.0, 1.0))
             self.level.setRange(min(low, -1e6), max(high, 1e6))
             self.level.setValue(float(np.clip(default_level, low, high)))
+            # the window of values opens on the whole range
+            self.window_lo.setValue(float(low))
+            self.window_hi.setValue(float(high))
+            step = max((high - low) / 50.0, 1e-4)
+            for box in (self.window_lo, self.window_hi):
+                box.setSingleStep(step)
             # A valence sum or a charge density spans decades -- it diverges at
             # the nuclei -- so linear contour levels all land in the empty region
             # close in and none near the value that matters. Switched on rather
@@ -420,6 +621,7 @@ class VolumePanel(QWidget):
             self._loading = False
         self.refresh_section()
         self._emit_isosurface()
+        self._emit_field_overlays()
         self._describe()
         statistics = self.grid.statistics()
         if self.log_scale.isChecked() and statistics["min"] > 0:
@@ -478,6 +680,8 @@ class VolumePanel(QWidget):
         self.section.markers = (self._atom_markers(origin, u_axis, v_axis, size)
                                 if self.show_atoms.isChecked() else [])
         self._apply_look()
+        if self.show_slice.isChecked():
+            self._emit_field_overlays()
 
     def _atom_markers(self, origin, u_axis, v_axis, size: float):
         """Atoms lying within half a grid spacing of the plane, in plane coordinates."""
@@ -507,11 +711,15 @@ class VolumePanel(QWidget):
         return markers
 
     def _apply_look(self) -> None:
+        changed = self.section.colormap != self.colormap.currentText()
         self.section.colormap = self.colormap.currentText()
         self.section.log_scale = self.log_scale.isChecked()
         self.section.show_map = self.show_map.isChecked()
         self.section.show_contours = self.n_levels.value() > 0
         self.section.update()
+        if changed and (self.show_gradient.isChecked()
+                        or self.show_slice.isChecked()):
+            self._emit_field_overlays()
 
     def _emit_isosurface(self) -> None:
         if self._loading:

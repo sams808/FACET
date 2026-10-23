@@ -394,46 +394,68 @@ def bond_valence_grid(structure: Structure, element: str, ox: int,
     """
     params = params or bv.DEFAULT
     cell = structure.cell
-    if resolution <= 0:
-        raise ValueError("the grid spacing must be positive")
-    steps = [max(4, int(round(length / resolution)))
-             for length in cell.lengths]
 
     # A grid costs the cube of the resolution, and the work per point scales with
     # the number of anion images -- so an innocent-looking spacing can ask for
     # something that will not finish. Refused with the numbers rather than
-    # attempted: a caller that means it can raise the ceiling, but nothing should
-    # be able to hang the program by typing a smaller number.
-    points = steps[0] * steps[1] * steps[2]
+    # attempted (probe_grid_plan): a caller that means it can raise the
+    # ceiling, but nothing should be able to hang the program by typing a
+    # smaller number.
+    #
+    # Two ways to sum this, with very different costs, so the guard has to
+    # estimate the one that will actually run. The dense way evaluates every
+    # grid point against every anion image: points x anions x images. The tree
+    # way evaluates only the pairs that are within rmax, and how many that is
+    # depends on the cell's density rather than on the number of images -- a
+    # sphere of radius rmax holds (4/3) pi rmax^3 / V_cell of the cell's
+    # contents, so the count is points x anions x that. For a medium cell at
+    # the panel's default spacing the two differ by a factor of forty, which
+    # is the difference between refusing a request and answering it in under
+    # a second.
+    steps, anions, use_tree = probe_grid_plan(structure, resolution, rmax)
 
+    total, _weighted, _covered, missing = _probe_sums(
+        structure, anions, element, ox, steps, params, rmax, use_tree)
+
+    grid = Grid(total.reshape(steps), cell,
+                name=f"bond valence of {element}{ox:+d}", units="v.u.",
+                source=structure.source_path)
+    if missing:
+        grid.notes.append(
+            "no bond-valence parameter for " + ", ".join(sorted(set(missing)))
+            + "; those anions contribute nothing to the map")
+    grid.notes.append(
+        f"probe {element}{ox:+d}; the surface at {abs(ox)} v.u. is where the "
+        f"probe would be correctly bonded")
+    return grid
+
+
+def probe_grid_plan(structure: Structure, resolution: float, rmax: float
+                    ) -> tuple[list[int], list, bool]:
+    """The grid steps, the anion atoms and the summation path a probe map
+    over ``structure`` takes at ``resolution``: what :func:`bond_valence_grid`
+    decides before it sums, for a caller that accumulates a second field
+    over the same points (the basicity a probe senses). Refuses, with the
+    numbers, a grid beyond the module's budget."""
+    cell = structure.cell
+    if resolution <= 0:
+        raise ValueError("the grid spacing must be positive")
+    steps = [max(4, int(round(length / resolution)))
+             for length in cell.lengths]
+    points = steps[0] * steps[1] * steps[2]
     anions = [a for a in structure.atoms
               if structure.sites[a.site_index].is_anion]
     if not anions:
         raise ValueError("the structure has no anions to bond to")
-
     n_images = len(_images_within(cell.orth, rmax))
-
-    # Two ways to sum this, with very different costs, so the guard has to
-    # estimate the one that will actually run.
-    #
-    # The dense way evaluates every grid point against every anion image:
-    # points x anions x images. The tree way evaluates only the pairs that are
-    # within rmax, and how many that is depends on the cell's density rather
-    # than on the number of images -- a sphere of radius rmax holds
-    # (4/3) pi rmax^3 / V_cell of the cell's contents, so the count is
-    # points x anions x that. For a medium cell at the panel's default spacing
-    # the two differ by a factor of forty, which is the difference between
-    # refusing a request and answering it in under a second.
     dense_work = points * len(anions) * n_images
     sphere = 4.0 / 3.0 * math.pi * rmax ** 3
     tree_work = points * len(anions) * max(sphere / cell.volume, 1.0)
     use_tree = dense_work > 15_000_000
     work = tree_work if use_tree else dense_work
-
     if points > MAX_GRID_POINTS or work > MAX_GRID_WORK:
         per_point = work / max(points, 1)
-        affordable = max(int(MAX_GRID_WORK / max(per_point, 1e-9)),
-                         1)
+        affordable = max(int(MAX_GRID_WORK / max(per_point, 1e-9)), 1)
         affordable = min(affordable, MAX_GRID_POINTS)
         suggestion = ((cell.lengths[0] * cell.lengths[1] * cell.lengths[2])
                       / affordable) ** (1.0 / 3.0)
@@ -443,15 +465,35 @@ def bond_valence_grid(structure: Structure, element: str, ox: int,
             f"{per_point:.0f} anion contacts each -- {int(work):,} terms, more "
             f"than this will attempt. About {suggestion:.2g} A would fit. "
             "Halving a spacing is eight times the work.")
+    return steps, anions, use_tree
+
+
+def _probe_sums(structure: Structure, anions, element: str, ox: int,
+                steps, params, rmax: float, use_tree: bool,
+                atom_weight=None):
+    """The probe's bond-valence sum at every grid point and, when
+    ``atom_weight`` gives one number per anion atom (NaN for an atom without
+    one), the same sum with each term times that number and the sum of the
+    terms that had one: ``(total, weighted, covered, missing)``, flat over
+    the grid in the order of :func:`_grid_cartesian`, with the anion elements
+    no parameter covers."""
+    cell = structure.cell
+    weights = None
+    if atom_weight is not None:
+        weights = np.asarray(atom_weight, float).reshape(-1)
+        if weights.shape[0] != len(anions):
+            raise ValueError("one weight per anion atom is needed")
 
     # group the anions by element, since each element has its own parameter
     by_element: dict[str, list] = {}
-    for atom in anions:
-        by_element.setdefault(atom.element, []).append(atom)
+    for index, atom in enumerate(anions):
+        by_element.setdefault(atom.element, []).append(index)
 
     images = _images_within(cell.orth, rmax)
     grid_points = _grid_cartesian(cell, steps)
     total = np.zeros(len(grid_points))
+    weighted = np.zeros(len(grid_points)) if weights is not None else None
+    covered = np.zeros(len(grid_points)) if weights is not None else None
     missing: list[str] = []
 
     # Only the anion images actually within rmax of a grid point contribute, and
@@ -474,13 +516,18 @@ def bond_valence_grid(structure: Structure, element: str, ox: int,
     # wins, at 48 million the tree wins by ten.
     tree = cKDTree(grid_points) if use_tree else None
 
-    for anion_element, atoms in by_element.items():
+    for anion_element, indices in by_element.items():
         param = params.get(element, ox, anion_element)
         if param is None:
             missing.append(f"{element}-{anion_element}")
             continue
+        atoms = [anions[i] for i in indices]
         positions = np.array([a.cart for a in atoms], float)
         occupancies = np.array([a.occupancy for a in atoms], float)
+        if weights is not None:
+            w = weights[indices]
+            has = np.isfinite(w)
+            w = np.where(has, w, 0.0)
 
         if not use_tree:
             for shift in shifts:
@@ -493,13 +540,20 @@ def bond_valence_grid(structure: Structure, element: str, ox: int,
                     if not within.any():
                         continue
                     v = np.where(within, np.exp((param.r0 - d) / param.b), 0.0)
-                    total[start:start + 4096] += (v * occupancies).sum(axis=1)
+                    v *= occupancies
+                    total[start:start + 4096] += v.sum(axis=1)
+                    if weights is not None:
+                        weighted[start:start + 4096] += (v * w).sum(axis=1)
+                        covered[start:start + 4096] += (v * has).sum(axis=1)
             continue
 
         # every image of every anion of this element, once
         all_positions = (positions[None, :, :]
                          + shifts[:, None, :]).reshape(-1, 3)
         all_occupancies = np.tile(occupancies, len(shifts))
+        if weights is not None:
+            all_w = np.tile(w, len(shifts))
+            all_has = np.tile(has.astype(float), len(shifts))
 
         for index, centre in enumerate(all_positions):
             hits = tree.query_ball_point(centre, rmax)
@@ -507,20 +561,13 @@ def bond_valence_grid(structure: Structure, element: str, ox: int,
                 continue
             hits = np.asarray(hits, int)
             d = np.linalg.norm(grid_points[hits] - centre, axis=1)
-            np.add.at(total, hits,
-                      np.exp((param.r0 - d) / param.b) * all_occupancies[index])
+            v = np.exp((param.r0 - d) / param.b) * all_occupancies[index]
+            np.add.at(total, hits, v)
+            if weights is not None:
+                np.add.at(weighted, hits, v * all_w[index])
+                np.add.at(covered, hits, v * all_has[index])
 
-    grid = Grid(total.reshape(steps), cell,
-                name=f"bond valence of {element}{ox:+d}", units="v.u.",
-                source=structure.source_path)
-    if missing:
-        grid.notes.append(
-            "no bond-valence parameter for " + ", ".join(sorted(set(missing)))
-            + "; those anions contribute nothing to the map")
-    grid.notes.append(
-        f"probe {element}{ox:+d}; the surface at {abs(ox)} v.u. is where the "
-        f"probe would be correctly bonded")
-    return grid
+    return total, weighted, covered, missing
 
 
 def bond_valence_energy(grid: Grid, ox: int, temperature: float = 300.0) -> Grid:
