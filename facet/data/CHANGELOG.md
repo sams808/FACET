@@ -2,6 +2,11 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 1.3.0 — 2026-11-11
+
+- Version 1.3.0: an audit of the shared build, and the basicity made legible  `df56539`  2026-11-11
+- Changelog for 1.2.1  `82f7a3c`  2026-10-23
+
 ## 1.2.1 — 2026-10-23
 
 - Version 1.2.1: the gradient is coarsened to a counted triangle budget  `7ed3933`  2026-10-23
