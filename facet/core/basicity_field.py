@@ -661,3 +661,131 @@ def slice_meshes(grid: volume.Grid, origin, axis_u, axis_v, size: float,
         out.append(OverlayMesh(tris.astype(np.float32), normals, colour,
                                float(alpha), label=label))
     return out
+
+
+# --- how far a basicity reaches: the correlation of lambda with distance ---------
+
+@dataclass
+class SpatialCorrelation:
+    """C(r) = <d_i d_j>(r) / <d^2>, d the departure of an anion's lambda
+    from the mean, over the pairs of anions a distance r apart: 1 would be
+    neighbours that always share their departure, 0 none, a negative value
+    neighbours that alternate. ``pairs`` counts the ordered pairs per bin."""
+
+    r_ang: np.ndarray
+    value: np.ndarray
+    pairs: np.ndarray
+    mean: float
+    variance: float
+    n_atoms: int
+    r_max_ang: float
+    bin_ang: float
+    notes: tuple[str, ...] = ()
+
+
+def spatial_correlation(frame, values, *, r_max_ang: float = 10.0,
+                        bin_ang: float = 0.25) -> SpatialCorrelation:
+    """The correlation of ``values`` (one per atom of the frame, NaN where
+    there is none: :func:`facet.core.basicity.frame_basicity`'s lambda)
+    with the distance between the atoms that carry one, over the periodic
+    images. ``r_max_ang`` is cut to half the narrowest width of the box,
+    beyond which an atom would be paired with its own image."""
+    from scipy.spatial import cKDTree
+
+    from . import bulk
+
+    values = np.asarray(values, np.float64).reshape(-1)
+    if values.shape[0] != int(frame.n_atoms):
+        raise ValueError("values needs one number per atom of the frame")
+    has = np.isfinite(values)
+    if int(has.sum()) < 2:
+        raise ValueError("fewer than two atoms carry a value")
+    step = float(bin_ang)
+    r_max = float(r_max_ang)
+    if not (math.isfinite(step) and step > 0 and math.isfinite(r_max)
+            and r_max > step):
+        raise ValueError("r_max_ang and bin_ang: positive lengths, the bin "
+                         "below the range")
+    notes = []
+    limit = 0.5 * float(np.min(np.asarray(frame.perpendicular_widths_ang)))
+    if r_max > limit:
+        notes.append(f"range cut from {r_max:g} to {limit:.2f} Å, half the "
+                     "narrowest width of the box")
+        r_max = limit
+    mean = float(values[has].mean())
+    variance = float(values[has].var())
+    delta = np.where(has, values - mean, 0.0)
+    atom, _, position = bulk._image_points(frame, r_max)
+    keep = has[atom]
+    atom, position = atom[keep], position[keep]
+    centres = np.flatnonzero(has)
+    home = bulk._lattice(np.asarray(frame.frac)[centres],
+                         np.asarray(frame.box_ang, np.float64))
+    found = cKDTree(home).sparse_distance_matrix(
+        cKDTree(position), r_max, output_type="ndarray")
+    d = found["v"]
+    apart = d > 1e-6                              # an atom is not its own pair
+    i = centres[found["i"][apart]]
+    j = atom[found["j"][apart]]
+    d = d[apart]
+    edges = np.arange(0.0, r_max + 0.5 * step, step)
+    n_bins = len(edges) - 1
+    which = np.minimum((d / step).astype(np.int64), n_bins - 1)
+    pairs = np.bincount(which, minlength=n_bins)
+    summed = np.bincount(which, weights=delta[i] * delta[j], minlength=n_bins)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        value = np.where(pairs > 0, summed / (pairs * variance), np.nan) \
+            if variance > 0 else np.full(n_bins, np.nan)
+    if not variance > 0:
+        notes.append("every value is the same; no correlation to take")
+    return SpatialCorrelation(0.5 * (edges[:-1] + edges[1:]), value, pairs,
+                              mean, variance, int(has.sum()), r_max, step,
+                              tuple(notes))
+
+
+# --- the field as a file another program opens ------------------------------------
+
+BOHR_ANG = 0.529177210903
+
+
+def write_cube(path, grid, symbols=(), cart_ang=(), *, fill: float = 0.0,
+               title: str = "") -> int:
+    """Write a field as a Gaussian cube file, which VESTA, VMD and OVITO
+    open: the cell's three vectors divided by the grid's counts, lengths in
+    bohr as the format has them, the atoms (``symbols`` with ``cart_ang``,
+    angstrom, on the grid's own origin) for the picture. A cube has no way
+    to say "undefined", so those points are written as ``fill`` and counted
+    in the second comment line; the count is returned."""
+    import gemmi
+
+    values = np.asarray(grid.values, np.float64)
+    undefined = ~np.isfinite(values)
+    data = np.where(undefined, float(fill), values)
+    na, nb, nc = values.shape
+    vectors = np.asarray(grid.cell.to_cartesian(np.eye(3)), np.float64) / BOHR_ANG
+    symbols = [str(s) for s in symbols]
+    cart = np.asarray(cart_ang, np.float64).reshape(-1, 3) / BOHR_ANG
+    if cart.shape[0] != len(symbols):
+        raise ValueError("symbols and cart_ang need one row per atom")
+    name = " ".join(str(title or grid.name).split()) or "field"
+    lines = [f"{name} (FACET)",
+             f"{int(undefined.sum())} of {values.size} points undefined, "
+             f"written as {float(fill):g}",
+             f"{len(symbols):5d} {0.0:12.6f} {0.0:12.6f} {0.0:12.6f}"]
+    for n, vector in zip((na, nb, nc), vectors):
+        lines.append(f"{n:5d} " + " ".join(f"{x / n:12.6f}" for x in vector))
+    for symbol, xyz in zip(symbols, cart):
+        z = int(gemmi.Element(symbol).atomic_number)
+        lines.append(f"{z:5d} {float(z):12.6f} "
+                     + " ".join(f"{x:12.6f}" for x in xyz))
+    with open(path, "w", encoding="ascii", newline="\n") as handle:
+        handle.write("\n".join(lines) + "\n")
+        for i in range(na):
+            block = []
+            for j in range(nb):
+                row = data[i, j]
+                for start in range(0, nc, 6):
+                    block.append(" ".join(f"{x:13.5E}"
+                                          for x in row[start:start + 6]))
+            handle.write("\n".join(block) + "\n")
+    return int(undefined.sum())

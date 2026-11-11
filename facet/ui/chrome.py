@@ -175,6 +175,9 @@ class UiColors:
     hover: str         # menu and row hover
     is_light: bool
     link: str = "#0a54c7"   # links in labels and the manual
+    # the accent thinned onto the base: the row the side navigation is on,
+    # which carries body text (the accent itself carries accent_text)
+    accent_soft: str = "#fde9df"
 
     def as_dict(self) -> dict[str, str]:
         return {k: v for k, v in self.__dict__.items() if isinstance(v, str)}
@@ -216,12 +219,13 @@ def ui_colors(theme=None) -> UiColors:
     muted = _muted_on(window, text, grounds=grounds)
     accent_text = _ink_on(accent)
     link = _link_on(light, (window,) + grounds, text)
+    accent_soft = _mix(window, accent, 0.16 if light else 0.26)
 
     return UiColors(
         window=_hex(window), base=_hex(base), alternate=_hex(alternate),
         text=_hex(text), muted=_hex(muted), border=_hex(border),
         accent=_hex(accent), accent_text=_hex(accent_text), hover=_hex(hover),
-        is_light=light, link=_hex(link),
+        is_light=light, link=_hex(link), accent_soft=_hex(accent_soft),
     )
 
 
@@ -260,21 +264,50 @@ QMenu::separator {{ height: 1px; background: {c.border}; margin: 4px 8px; }}
 QMenu::indicator {{ width: 14px; }}
 QToolTip {{ background: {c.base}; color: {c.text};
             border: 1px solid {c.border}; padding: 3px; }}
-QStatusBar {{ background: {c.window}; color: {c.muted}; }}
+QStatusBar {{ background: {c.window}; color: {c.muted};
+              border-top: 1px solid {c.border}; }}
 QStatusBar::item {{ border: 0; }}
+QStatusBar QLabel {{ padding: 0 8px; }}
 QDockWidget {{ color: {c.text}; }}
-QDockWidget::title {{ background: {c.window}; color: {c.muted};
-                      padding: 5px 8px; border-bottom: 1px solid {c.border}; }}
+QDockWidget::title {{ background: {c.window}; color: {c.text};
+                      padding: 7px 10px; border-bottom: 1px solid {c.border}; }}
+/* the frame of 2.0: the toolbar strip, its group captions, the list the
+   right column's pages are chosen from, the card on the empty window */
+QWidget#toolbar {{ background: {c.base};
+                   border-bottom: 1px solid {c.border}; }}
+QLabel#caption {{ color: {c.muted}; font-size: 10px; font-weight: 600; }}
+QFrame#toolrule {{ background: {c.border}; border: 0; margin: 3px 0; }}
+QToolButton#menubutton {{ background: {c.window}; color: {c.text};
+    border: 1px solid {c.border}; border-radius: 3px; padding: 3px 8px; }}
+QToolButton#menubutton:hover {{ background: {c.hover}; }}
+QToolButton#menubutton::menu-indicator {{ image: none; width: 0; }}
+QWidget#pagebar {{ background: {c.window};
+                   border-bottom: 1px solid {c.border}; }}
+QToolButton#pagebutton {{ background: transparent; color: {c.muted};
+    border: 0; border-bottom: 2px solid transparent; padding: 7px 5px 5px 5px; }}
+QToolButton#pagebutton:hover {{ color: {c.text}; background: {c.hover}; }}
+QToolButton#pagebutton:checked {{ background: transparent; color: {c.text};
+    border-bottom: 2px solid {c.accent}; }}
+QToolButton#pagebutton::menu-indicator {{ image: none; width: 0; }}
+QFrame#welcome {{ background: {c.base}; border: 1px solid {c.border};
+                  border-radius: 10px; }}
+QLabel#welcomeTitle {{ font-size: 28px; font-weight: 600; }}
+QPushButton#primary {{ background: {c.accent}; color: {c.accent_text};
+    border: 1px solid {c.accent}; font-weight: 600; padding: 5px 14px; }}
+QPushButton#primary:hover {{ border: 1px solid {c.text}; }}
 QGroupBox {{ background: transparent; border: 1px solid {c.border};
              border-radius: 4px; margin-top: 10px; padding-top: 6px; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px;
                     color: {c.muted}; }}
-QTabWidget::pane {{ background: {c.window}; border: 1px solid {c.border}; }}
+QTabWidget::pane {{ background: {c.window}; border: 0;
+                    border-top: 1px solid {c.border}; }}
 QTabBar {{ background: transparent; }}
-QTabBar::tab {{ background: {c.window}; color: {c.muted};
-                padding: 5px 5px; border: 1px solid {c.border};
-                border-bottom: 0; margin-right: 1px; }}
-QTabBar::tab:selected {{ background: {c.base}; color: {c.text}; }}
+/* tabs are names with a rule under the chosen one, not boxes */
+QTabBar::tab {{ background: transparent; color: {c.muted};
+                padding: 6px 9px; border: 0;
+                border-bottom: 2px solid transparent; margin-right: 2px; }}
+QTabBar::tab:selected {{ color: {c.text};
+                         border-bottom: 2px solid {c.accent}; }}
 /* body text on hover: the secondary colour is held to 4.5:1 on the panels,
    not on the darker hover fill */
 QTabBar::tab:hover {{ background: {c.hover}; color: {c.text}; }}
@@ -306,12 +339,13 @@ QTextEdit, QPlainTextEdit {{ placeholder-text-color: {c.muted}; }}
 QComboBox QAbstractItemView {{ background: {c.base}; color: {c.text};
     border: 1px solid {c.border}; selection-background-color: {c.accent};
     selection-color: {c.accent_text}; }}
-QPushButton {{ background: {c.window}; color: {c.text};
-    border: 1px solid {c.border}; border-radius: 3px; padding: 4px 10px; }}
+QPushButton {{ background: {c.base}; color: {c.text};
+    border: 1px solid {c.border}; border-radius: 4px; padding: 4px 10px; }}
 QPushButton:hover {{ background: {c.hover}; }}
 QPushButton:pressed, QPushButton:checked {{ background: {c.accent};
     color: {c.accent_text}; }}
 QPushButton:disabled {{ color: {c.muted}; }}
+QPushButton::menu-indicator {{ image: none; width: 0; }}
 /* A ticked tool button (the results' Provenance) is filled with the accent;
    its text has to be the accent's ink, not the body text: dark text on the
    accent measured 2.87. */
@@ -341,8 +375,8 @@ QScrollBar::handle:hover {{ background: {c.muted}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 QSplitter::handle {{ background: {c.border}; }}
-QSplitter::handle:horizontal {{ width: 2px; }}
-QSplitter::handle:vertical {{ height: 2px; }}
+QSplitter::handle:horizontal {{ width: 1px; }}
+QSplitter::handle:vertical {{ height: 1px; }}
 """.strip()
 
 

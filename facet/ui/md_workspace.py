@@ -444,6 +444,9 @@ class ModelToolbar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # the strip the crystal's toolbar wears (chrome's QWidget#toolbar)
+        self.setObjectName("toolbar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         stack = QVBoxLayout(self)
         stack.setContentsMargins(0, 0, 0, 0)
         stack.setSpacing(0)

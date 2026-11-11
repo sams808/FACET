@@ -35,8 +35,12 @@ is reported with it, as phi is.
 
 Fluorides are on the same scale through Duffy's common oxide/fluoride
 scale (J. Non-Cryst. Solids 109 (1989) 35): gamma for a fluoride
-environment is 2.3 times the oxide value, so Lambda(NaF) = 0.50. Other
-anions have no published scale here and are left out, with a note.
+environment is 2.3 times the oxide value -- "the optical basicities for
+fluorides are obtained by dividing those for oxide systems by 2.3" -- so
+Lambda(NaF) = 0.50, and lambda of one fluoride ion is the expression above
+divided by 2.3, the share its contacts do not carry included (a fluoride
+ion with no contact reads 1 / 2.3, as one bonded to calcium alone does).
+Other anions have no published scale here and are left out, with a note.
 
 Four scales of gamma are offered. The default derives every cation's
 gamma from Pauling's electronegativity as he tabulated it in 1960, which is
@@ -324,7 +328,8 @@ class Share:
     share: float                    # valence / |z| of the anion
     moderator: Moderator | None
     bonded: bool                    # above the bond threshold
-    lowering: float                 # share x (1 - 1 / (f gamma)); NaN without gamma
+    lowering: float                 # share x (1 - 1 / gamma) / f; NaN without gamma
+    distance: float = float("nan")  # of the contact, angstrom
 
     @property
     def gamma(self) -> float:
@@ -433,10 +438,10 @@ def micro_basicity(result, scale=DEFAULT_SCALE, *,
         valence = float(c.valence) * float(c.occupancy)
         share = valence / charge
         lowering = (float("nan") if m is None
-                    else share * (1.0 - 1.0 / (factor * m.gamma)))
+                    else share * (1.0 - 1.0 / m.gamma) / factor)
         out.shares.append(Share(c.label, c.element, cation_ox, int(c.site_index),
                                 valence, share, m, bool(c.valence > v),
-                                lowering))
+                                lowering, float(c.distance)))
         if m is None:
             species = (c.element if cation_ox is None
                        else f"{c.element}{abs(cation_ox)}+")
@@ -453,8 +458,10 @@ def micro_basicity(result, scale=DEFAULT_SCALE, *,
                          + "; the electronegativity relation has none "
                          "either")
         return out
-    out.value = 1.0 - sum(s.lowering for s in out.shares if s.bonded)
-    out.value_listed = 1.0 - sum(s.lowering for s in out.shares)
+    # the whole expression on the anion's scale: an unbonded share counts as
+    # gamma = 1, which is 1 for an oxide ion and 1 / 2.3 for a fluoride ion
+    out.value = 1.0 / factor - sum(s.lowering for s in out.shares if s.bonded)
+    out.value_listed = 1.0 / factor - sum(s.lowering for s in out.shares)
     if out.sum_bonded > OVERBONDED_FACTOR * charge:
         # a fact about the input, stated because lambda scales with the sum:
         # an anion drawn with twice its charge in bonds reads far below any
@@ -478,9 +485,11 @@ class EnvironmentBasicity:
     """The basicity of the anions a cation site is bonded to.
 
     ``value`` is the bond-valence-weighted mean of their lambda (each anion
-    at the same bond threshold); ``value_host`` the same with the bonds
-    from this site left out of each anion's sum, so the anions are seen as
-    the rest of the structure leaves them. ``n_anions`` counts the bonded
+    at the same bond threshold); ``value_host`` the same with this atom's
+    own bond left out of each anion's sum, so the anions are seen as the
+    rest of the structure leaves them. The bond is one contact: an anion
+    that bridges two atoms of this same site (the oxygen of quartz) keeps
+    the other one's. ``n_anions`` counts the bonded
     contacts whose anion has a lambda; ``n_undefined`` those whose anion has
     none (another anion, or a cation the scale lacks).
     """
@@ -515,9 +524,17 @@ def environment_basicity(result, anion_basicity: Mapping[int, MicroBasicity],
             out.n_undefined += 1
             continue
         w = float(c.valence) * float(c.occupancy)
-        own = sum(s.lowering for s in micro.shares
-                  if s.bonded and s.site_index == result.site_index
-                  and not math.isnan(s.lowering))
+        # this atom's bond among the anion's shares: of this site, and at
+        # this contact's distance (the anion may hold several atoms of the
+        # site, at other distances or, by symmetry, at the same one)
+        mine = [s for s in micro.shares
+                if s.bonded and s.site_index == result.site_index
+                and not math.isnan(s.lowering)]
+        own = 0.0
+        if mine:
+            d = float(c.distance)
+            own = min(mine, key=lambda s: abs(s.distance - d)
+                      if math.isfinite(s.distance) else 0.0).lowering
         host = micro.value + own
         weights.append(w)
         values.append(micro.value)
@@ -844,12 +861,13 @@ def frame_basicity(table, scale=DEFAULT_SCALE, *, v_bond: float,
     with np.errstate(invalid="ignore", divide="ignore"):
         share = np.where(valid, v / np.where(charge > 0, charge, np.nan)[:, None],
                          0.0)
-        lowering = share * (1.0 - 1.0 / (factor_atom[:, None] * g))
+        lowering = share * (1.0 - 1.0 / g) / factor_atom[:, None]
+        base = 1.0 / factor_atom
     lowering = np.where(valid, lowering, 0.0)
     unknown = valid & ~np.isfinite(lowering)
-    value_listed = 1.0 - lowering.sum(axis=1)
+    value_listed = base - lowering.sum(axis=1)
     bonded = valid & (v > v_bond)
-    value = 1.0 - np.where(bonded, lowering, 0.0).sum(axis=1)
+    value = base - np.where(bonded, lowering, 0.0).sum(axis=1)
     undefined = ~is_anion | ~np.isfinite(factor_atom) | unknown.any(axis=1) | \
         ~(charge > 0)
     value[undefined] = np.nan
@@ -900,3 +918,194 @@ CLASS_NAMES = {0: "free", 1: "NBO", 2: "BO", 3: "tricluster"}
 def class_name(count: int) -> str:
     """The glass speciation name of an anion bonded to ``count`` formers."""
     return CLASS_NAMES[min(int(count), 3)]
+
+
+# --- what the basicity is related to ----------------------------------------------
+
+# Lambda = 1.67 (1 - 1 / alpha): the electronic polarisability of the oxide
+# ion, in cubic angstrom (J. A. Duffy, Phys. Chem. Glasses 30 (1989) 1; the
+# relation V. Dimitrov and S. Sakka, J. Appl. Phys. 79 (1996) 1736 build
+# their table on).
+POLARISABILITY_FACTOR = 1.67
+POLARISABILITY_SOURCE = ("J. A. Duffy, Phys. Chem. Glasses 30 (1989) 1: "
+                         "Lambda = 1.67 (1 - 1 / alpha(O2-))")
+
+# The probe ions the scale was measured with: the 1S0 -> 3P1 band of the
+# free ion and its shift to an oxide of Lambda = 1 (CaO), in cm-1, so that
+# Lambda = (free - nu) / shift. Duffy and Ingram, J. Non-Cryst. Solids 21
+# (1976) 373, eqs. (1)-(3).
+PROBE_IONS: dict[str, tuple[float, float]] = {
+    "Tl+": (55300.0, 18300.0),
+    "Pb2+": (60700.0, 31000.0),
+    "Bi3+": (56000.0, 28800.0),
+}
+PROBE_SOURCE = ("J. A. Duffy and M. D. Ingram, J. Non-Cryst. Solids 21 (1976) "
+                "373, eqs. (1)-(3): Lambda = (nu_free - nu) / shift")
+
+
+def oxide_polarisability(value: float) -> float:
+    """alpha(O2-) in cubic angstrom for an optical basicity, from Duffy's
+    Lambda = 1.67 (1 - 1 / alpha). NaN at or above 1.67, where the relation
+    has no finite answer."""
+    value = float(value)
+    if not math.isfinite(value) or value >= POLARISABILITY_FACTOR:
+        return float("nan")
+    return POLARISABILITY_FACTOR / (POLARISABILITY_FACTOR - value)
+
+
+def basicity_from_polarisability(alpha: float) -> float:
+    """The inverse: Lambda = 1.67 (1 - 1 / alpha)."""
+    alpha = float(alpha)
+    if not (math.isfinite(alpha) and alpha > 0):
+        return float("nan")
+    return POLARISABILITY_FACTOR * (1.0 - 1.0 / alpha)
+
+
+def _probe(ion: str) -> tuple[float, float]:
+    try:
+        return PROBE_IONS[str(ion)]
+    except KeyError:
+        raise ValueError(f"no probe ion {ion!r}; the probe ions are "
+                         + ", ".join(PROBE_IONS)) from None
+
+
+def probe_band(value: float, ion: str = "Pb2+") -> float:
+    """The frequency (cm-1) of a probe ion's 1S0 -> 3P1 band in a medium of
+    this optical basicity: nu = nu_free - shift x Lambda."""
+    free, shift = _probe(ion)
+    return free - shift * float(value)
+
+
+def probe_wavelength(value: float, ion: str = "Pb2+") -> float:
+    """The same band as a wavelength in nm (NaN when the frequency is not
+    positive)."""
+    nu = probe_band(value, ion)
+    return 1.0e7 / nu if nu > 0 else float("nan")
+
+
+def basicity_from_band(frequency_per_cm: float, ion: str = "Pb2+") -> float:
+    """The optical basicity a measured probe-ion band states:
+    Lambda = (nu_free - nu) / shift."""
+    free, shift = _probe(ion)
+    return (free - float(frequency_per_cm)) / shift
+
+
+# --- lambda by what the anion is bonded to ----------------------------------------
+
+@dataclass
+class Linkage:
+    """The anions that share one set of bonded cations, and their lambda.
+
+    ``pattern`` names the set with the anion in the middle, the counts as
+    bonded contacts above the threshold: ``Si-O-Si``, ``Si-O-Na3``,
+    ``O-Na4`` hold nothing on the left for an anion bonded to one element
+    only when that element is not a former. ``atoms`` is the weight (atoms
+    per cell for a crystal, a count for a frame).
+    """
+
+    anion: str
+    pattern: str
+    cations: tuple[tuple[str, int], ...]
+    atoms: float
+    mean: float
+    sd: float
+    low: float
+    high: float
+
+
+def linkage_pattern(anion: str, counts: Mapping[str, int],
+                    formers: Sequence[str] = ()) -> str:
+    """``Si-O-Si``, ``Si-O-Al``, ``Si-O-Na2``, ``O-Na4``: the formers (or,
+    with none named, nothing) on the left of the anion, the others on the
+    right, each with its count when above one. Two of one former and
+    nothing else is written symmetrically."""
+    formers = [str(f) for f in formers]
+    left = [(e, n) for e, n in counts.items() if e in formers and n > 0]
+    right = [(e, n) for e, n in counts.items() if e not in formers and n > 0]
+    left.sort(key=lambda item: item[0])
+    right.sort(key=lambda item: item[0])
+
+    def piece(items):
+        return " ".join(e if n == 1 else f"{e}{n}" for e, n in items)
+
+    if not left and not right:
+        return f"{anion} alone"
+    if not right:
+        expanded = [e for e, n in left for _ in range(n)]
+        if len(expanded) == 1:
+            return f"{expanded[0]}-{anion}"
+        if len(expanded) == 2:
+            return f"{expanded[0]}-{anion}-{expanded[1]}"
+        return f"{anion}({piece(left)})"
+    if not left:
+        return f"{anion}-{piece(right)}"
+    return f"{piece(left)}-{anion}-{piece(right)}"
+
+
+def _linkage_rows(groups: dict, formers) -> list[Linkage]:
+    out = []
+    for (anion, cations), rows in groups.items():
+        w = np.array([r[0] for r in rows], float)
+        x = np.array([r[1] for r in rows], float)
+        total = float(w.sum())
+        mean = float((w * x).sum() / total)
+        sd = float(math.sqrt(max(0.0, (w * (x - mean) ** 2).sum() / total)))
+        out.append(Linkage(anion, linkage_pattern(anion, dict(cations), formers),
+                           cations, total, mean, sd, float(x.min()),
+                           float(x.max())))
+    out.sort(key=lambda link: (link.anion, -link.atoms, link.pattern))
+    return out
+
+
+def structure_linkages(structure, sb: StructureBasicity,
+                       formers: Sequence[str] = ()) -> list[Linkage]:
+    """The anion sites of a crystal grouped by the cations bonded to them
+    (contacts above the bond threshold), with the atoms-per-cell weighted
+    mean, spread and range of lambda in each group."""
+    groups: dict = {}
+    for index, micro in sb.anions.items():
+        if not micro.defined or math.isnan(micro.value):
+            continue
+        counts: dict[str, int] = {}
+        for s in micro.shares:
+            if s.bonded:
+                counts[s.element] = counts.get(s.element, 0) + 1
+        site = structure.sites[index]
+        atoms = float(site.occupancy) * (site.multiplicity or 1)
+        key = (micro.element, tuple(sorted(counts.items())))
+        groups.setdefault(key, []).append((atoms, micro.value))
+    return _linkage_rows(groups, formers)
+
+
+def frame_linkages(table, fb: FrameBasicity,
+                   formers: Sequence[str] = ()) -> list[Linkage]:
+    """The anions of a frame grouped by the cations bonded to them, as
+    :func:`structure_linkages` does for sites; one row of the valence table
+    per anion, the groups found with one sort."""
+    elements = np.asarray(table.elements).astype(str)
+    v = np.asarray(table.v_vu, dtype=np.float64)
+    nbr = np.asarray(table.nbr, dtype=np.int64)
+    n = elements.shape[0]
+    width = v.shape[1] if v.ndim == 2 else 0
+    chosen = np.flatnonzero(np.isfinite(fb.value))
+    if not chosen.size or not width:
+        return []
+    n_listed = np.asarray(table.n_listed, dtype=np.int64)
+    valid = np.arange(width)[None, :] < n_listed[:, None]
+    bonded = valid & (v > fb.v_bond)
+    symbols = sorted(set(elements.tolist()))
+    code = np.searchsorted(np.array(symbols), elements)
+    counts = np.zeros((n, len(symbols)), dtype=np.int64)
+    rows, cols = np.nonzero(bonded)
+    np.add.at(counts, (rows, code[nbr[rows, cols]]), 1)
+    key = np.column_stack([code[chosen], counts[chosen]])
+    unique, inverse = np.unique(key, axis=0, return_inverse=True)
+    inverse = np.asarray(inverse).reshape(-1)
+    groups: dict = {}
+    for g, row in enumerate(unique):
+        members = chosen[inverse == g]
+        cations = tuple((symbols[k], int(c)) for k, c in enumerate(row[1:])
+                        if c > 0)
+        groups[(symbols[int(row[0])], cations)] = [
+            (1.0, float(x)) for x in fb.value[members]]
+    return _linkage_rows(groups, formers)

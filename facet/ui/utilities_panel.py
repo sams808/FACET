@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QTabWidget,
     QTableWidget,
@@ -27,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import adp, bv_report, cn_methods, network, quality, utilities
-from . import chrome
+from . import chrome, shell
 
 
 def _escape(text: str) -> str:
@@ -86,7 +87,17 @@ class UtilitiesPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
+        # twelve pages across a 400 px column scrolled behind arrows; they
+        # are chosen from six names (facet.ui.shell.PagedColumn), the tab
+        # widget whole behind them
+        self.pages = shell.PagedColumn(self.tabs, (
+            "Cell", "File",
+            ("Geometry", ("Angles", "Shells", "Reflections")),
+            ("Bonding", ("CN methods", "Cutoffs", "Stability",
+                         "Connectivity")),
+            ("Valence", ("A priori", "Anions")),
+            "Basicity"))
+        layout.addWidget(self.pages)
         # Which tabs hold figures from a structure that has since changed. A
         # tab is computed when it is shown and not before; see update_for.
         self._stale: set[str] = set()
@@ -251,9 +262,28 @@ class UtilitiesPanel(QWidget):
             self._on_basicity_scale)
         scale_row.addWidget(self.basicity_scale_box)
         scale_row.addStretch(1)
+        # a composition typed as on a batch sheet, with no structure needed
+        self.basicity_composition = QLineEdit()
+        self.basicity_composition.setPlaceholderText(
+            "a composition: 30Na2O-70SiO2, or Na2O 25, CaO 10, SiO2 65")
+        self.basicity_composition.setClearButtonEnabled(True)
+        self.basicity_composition.setToolTip(
+            "Λ of a written composition, no structure needed: moles of "
+            "oxide and fluoride components (end with 'wt' for weights), "
+            "summed as Duffy and Ingram do, each component weighted by the "
+            "share of the anion charge it carries. The answer is on the "
+            "scale chosen beside it.")
+        self.basicity_composition.textChanged.connect(
+            lambda _t: self._refresh_composition())
+        self.basicity_composition_text = QLabel("")
+        self.basicity_composition_text.setWordWrap(True)
+        self.basicity_composition_text.setTextInteractionFlags(
+            Qt.TextSelectableByMouse)
         basicity_holder = QWidget()
         basicity_box = QVBoxLayout(basicity_holder)
         basicity_box.setContentsMargins(0, 0, 0, 0)
+        basicity_box.addWidget(self.basicity_composition)
+        basicity_box.addWidget(self.basicity_composition_text)
         basicity_box.addWidget(self.basicity_text, 3)
         basicity_box.addWidget(self.basicity_anions, 3)
         basicity_box.addWidget(self.basicity_cations, 2)
@@ -266,6 +296,7 @@ class UtilitiesPanel(QWidget):
             "cation's bonds carry its formal charge; their difference is "
             "the departure of the sums from the charges.", scale_row),
             "Basicity")
+        self.pages.rebuild()
 
     def _refresh_cutoffs(self) -> None:
         """The cutoff table: this program's central claim, as numbers."""
@@ -430,7 +461,59 @@ class UtilitiesPanel(QWidget):
         if at >= 0:
             self.basicity_scale_box.setCurrentIndex(at)
 
+    def composition_basicity(self):
+        """The typed composition's result on the chosen scale: a
+        ``CompositionBasicity``, None for an empty line, or the
+        ``CompositionError`` that says why it could not be read."""
+        from ..core import basicity_composition as composition_mod
+
+        text = self.basicity_composition.text().strip()
+        if not text:
+            return None
+        unit = "mol"
+        for ending in ("wt%", "wt"):
+            if text.lower().endswith(ending):
+                text, unit = text[:-len(ending)].strip(), "wt"
+                break
+        try:
+            return composition_mod.composition_basicity(
+                text, self.basicity_scale(), unit=unit)
+        except composition_mod.CompositionError as error:
+            return error
+
+    def _refresh_composition(self) -> None:
+        from ..core import basicity as basicity_mod
+
+        found = self.composition_basicity()
+        if found is None:
+            self.basicity_composition_text.setText("")
+            return
+        if isinstance(found, Exception):
+            self.basicity_composition_text.setText(_escape(found))
+            return
+        if found.value != found.value:
+            self.basicity_composition_text.setText(
+                _escape("; ".join(found.notes)))
+            return
+        parts = [f"<b>Λ = {found.value:.4f}</b> ({found.scale} scale, "
+                 f"{'weights' if found.unit == 'wt' else 'moles'})"]
+        if all(ox > 0 or element == "O" for c in found.components
+               for (element, ox) in c.species):
+            parts.append("α(O²⁻) "
+                         f"{basicity_mod.oxide_polarisability(found.value):.3f} Å³")
+        parts.append("probe band " + ", ".join(
+            f"{ion} {basicity_mod.probe_band(found.value, ion):.0f} cm⁻¹"
+            for ion in basicity_mod.PROBE_IONS))
+        parts.append("components " + ", ".join(
+            f"{c.formula} X {c.share:.3f} Λ {c.basicity:.3f}"
+            for c in found.components))
+        text = " · ".join(parts)
+        if found.notes:
+            text += "<br>" + _escape("; ".join(found.notes))
+        self.basicity_composition_text.setText(text)
+
     def _on_basicity_scale(self, _index: int) -> None:
+        self._refresh_composition()
         self._stale.add("Basicity")
         self._refresh_current()
         self.basicityScaleChanged.emit(self.basicity_scale())
@@ -484,6 +567,33 @@ class UtilitiesPanel(QWidget):
         notes = "".join(
             f"<p style='color:{muted};font-size:11px;margin:3px 0'>{_escape(n)}</p>"
             for n in list(sb.bulk.notes) + list(sb.notes))
+        # what the composition's Lambda is related to, by the published
+        # relations; the polarisability is the oxide ion's, so it is given
+        # for an all-oxide structure only
+        related_rows = ""
+        if sb.bulk.value == sb.bulk.value:
+            if all(a[0] == "O" for a in sb.bulk.anions):
+                related_rows += (
+                    "<tr><td>Oxide-ion polarisability at this &Lambda; "
+                    "(Duffy 1989, &Lambda; = 1.67 (1 &minus; 1/&alpha;))</td>"
+                    f"<td align='right'>"
+                    f"{num(basicity_mod.oxide_polarisability(sb.bulk.value))} "
+                    "&Aring;&sup3;</td></tr>")
+            bands = ", ".join(
+                f"{ion} {basicity_mod.probe_band(sb.bulk.value, ion):.0f}"
+                for ion in basicity_mod.PROBE_IONS)
+            related_rows += (
+                "<tr><td>Probe-ion <sup>1</sup>S<sub>0</sub>&rarr;"
+                "<sup>3</sup>P<sub>1</sub> band at this &Lambda; (Duffy "
+                "&amp; Ingram 1976)</td>"
+                f"<td align='right'>{bands} cm<sup>&minus;1</sup></td></tr>")
+        linkage_rows = "".join(
+            f"<tr><td>{_escape(k.pattern)}</td>"
+            f"<td align='right'>{k.atoms:g}</td>"
+            f"<td align='right'>{num(k.mean)}</td>"
+            f"<td align='right'>{num(k.sd)}</td>"
+            f"<td align='right'>{num(k.low)} to {num(k.high)}</td></tr>"
+            for k in basicity_mod.structure_linkages(s, sb))
         self.basicity_text.setHtml(f"""
         <h3 style='margin-bottom:2px'>Optical basicity</h3>
         <table width='100%' cellpadding='3'>
@@ -495,6 +605,14 @@ class UtilitiesPanel(QWidget):
           <tr><td>Difference, bonds &minus; composition</td>
               <td align='right'>{'&mdash;' if sb.difference != sb.difference else f'{sb.difference:+.3f}'}</td></tr>
           {element_rows}
+          {related_rows}
+        </table>
+        <h4 style='margin-bottom:2px'>&lambda; by what the anion is bonded to</h4>
+        <table width='100%' cellspacing='0' cellpadding='2' style='font-size:11px'>
+          <tr style='color:{muted}'><th align='left'>bonded contacts</th>
+              <th align='right'>atoms</th><th align='right'>mean &lambda;</th>
+              <th align='right'>spread</th><th align='right'>range</th></tr>
+          {linkage_rows}
         </table>
         <h4 style='margin-bottom:2px'>Moderating parameters, {_escape(scale.name)}</h4>
         <table width='100%' cellspacing='0' cellpadding='2' style='font-size:11px'>

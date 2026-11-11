@@ -442,35 +442,27 @@ def test_the_window_fits_on_a_laptop_screen(window):
         f"the window cannot be made narrower than {minimum.width()} px")
 
 
-def test_all_ten_tabs_are_readable_without_scrolling(window, qapp):
+def test_all_ten_pages_are_named_at_every_window_size(window, qapp):
     """The complaint that started this: a tab bar cut off after "Ov...".
 
-    Two separate failures were in play. The names were long enough to need
-    636 px of tab bar, and the column holding them was pinned at 400 px with no
-    stretch, so it never grew however large the window. Eliding was worse than
-    either -- it made every tab unreadable at once rather than hiding two.
+    Ten names across the column needed 476 to 636 px of tab bar; below a
+    window of about 1700 px the bar scrolled, and eliding was worse -- it
+    made every tab unreadable at once. Since 2.0 the ten pages are chosen
+    from five names (Site, Tools and three groups, facet.ui.shell), which
+    fit the column at its minimum width; the tab widget's own bar is hidden.
     """
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QTabWidget
-
-    # The application's own style sheet sets the tab padding, and without it
-    # the native one is far looser: the same ten tabs measure 586 px instead of
-    # 476. Applying it is what makes this a measurement of FACET.
     chrome.apply(qapp, T.Theme())
     qapp.processEvents()
 
-    tabs = window.findChild(QTabWidget)
-    bar = tabs.tabBar()
-    assert bar.elideMode() == Qt.ElideNone, (
-        "an elided tab bar mangles every name at once")
-    # 1739 is this machine's screen; below roughly 1700 the column is narrower
-    # than the ten labels need and the bar scrolls, which is a deliberate
-    # trade against raising the window's minimum width.
-    for width in (1739, 1920):
+    column = window.crystal_nav
+    tabs = window.crystal_tabs
+    assert tabs.tabBar().isHidden()
+    assert len(column.titles()) == tabs.count() == 10
+    for width in (1100, 1366, 1739, 1920):
         window.resize(width, 930)
         qapp.processEvents()
-        wanted = sum(bar.tabSizeHint(i).width() for i in range(bar.count()))
-        assert wanted <= bar.width(), (
-            f"at a {width} px window the ten tabs want {wanted} px of tab bar "
-            f"and have {bar.width()}, so the last ones sit behind scroll "
-            f"arrows")
+        wanted = column.bar.sizeHint().width()
+        assert wanted <= column.width(), (
+            f"at a {width} px window the five names want {wanted} px and "
+            f"the column has {column.width()}")
+    assert column.bar.sizeHint().width() <= tabs.minimumWidth()

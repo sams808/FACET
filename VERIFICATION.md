@@ -1109,6 +1109,59 @@ their model files lived in a session folder that no longer exists; an SVG of
 a view with 63 000 field triangles is 19 MB; the repository has no continuous
 integration.
 
+**A recheck, the library and the window (2.0.0).** The microscopic basicity was gone
+through again against the papers, and recomputed outside the code: for every
+ordered structure of the bundled examples and of the first 80 files of a
+local collection (71 files, 219 anion sites) λ was summed from the CIF with
+gemmi's symmetry expansion, a bare five-by-five-by-five image loop and
+exp((R₀ − d)/b), sharing only the parameter table with FACET; the worst
+difference is 2 × 10⁻⁵, the rounding of the coordinates. Two errors were
+found by reading, not by that sum, and both are corrected and pinned:
+
+* **A fluoride ion off its valence sum.** Duffy's 1989 scale divides the
+  oxide basicity by 2.3 ("the optical basicities for fluorides are obtained
+  by dividing those for oxide systems by 2.3"). The code divided only the
+  bonded part, so the share an under-bonded fluoride ion's contacts do not
+  carry counted as a free oxide ion: a fluoride ion at three quarters of its
+  valence read 0.62 where the scale gives 0.49. λ(F) is now the whole oxide
+  expression over 2.3; an exactly bonded ion, and every oxide ion, is
+  unchanged (`tests/test_basicity_library.py`, and a cryolite frame against
+  the crystal path atom for atom to 1e-12).
+* **"Host only" took out a site, not a bond.** The basicity of a cation's
+  anions "as the rest of the structure leaves them" removed every bond the
+  anion receives from the cation's *site*, so the oxygen of quartz, which
+  bridges two atoms of the one silicon site, read 1.00. It now removes the
+  one bond of this atom (matched by distance among the anion's shares):
+  0.727 on quartz, the terminal Si–O of Duffy and Ingram's Table 3 (0.74)
+  with the bond-valence sums of the structure.
+
+Added with their own outside checks: the probe-ion equations are Duffy and
+Ingram's eqs. (1)–(3) as printed (CaO at Λ = 1 gives the Pb²⁺ band at
+29 700 cm⁻¹; Duffy's 44 600 cm⁻¹ in molten LiF–NaF–KF gives 0.52); a typed
+composition gives six compounds of Duffy's 1996 Table 2 to ±0.016, the
+species route's value for an all-oxide composition exactly, and the same
+value from moles and from the weights they make; the spatial correlation
+equals a direct double loop over minimum images, pair counts included; the
+cube file reads back to the grid, the cell and the count of undefined
+points. `facet.basicity` is exercised through every command and every
+figure, and a subprocess confirms that it imports neither Qt nor matplotlib
+until a figure is asked for. On the 12 811-atom glass: λ of every anion with
+linkages and C(r) in 3.5 s, the Ca field and its cube file in 6 s.
+
+The window's frame was rebuilt for 2.0 (`facet/ui/shell.py`,
+`tests/test_shell.py`), each part against the complaint it answers. The
+toolbar is groups that move to another row when the width runs out: at
+1100, 1420, 1920 and 2560 px no control is narrower than its own minimum
+and no group reaches past the bar (a row given less than its minimum used
+to shrink the label boxes to "bon...nce"). The right column's ten pages are
+chosen from five names whose bar fits the column at its minimum width, at
+every window size tried (a bar of ten names scrolled below about 1700 px);
+the tab widget is kept whole behind it, so every index, title and signal
+the rest of the program uses is unchanged. The empty window carries a card
+that is up exactly while nothing is listed. The window's minimum size,
+measured on this machine, went from 1434 to 1079 px wide; opening it costs
+1.37 s against 1.20 s for 1.3.0.
+
 What is **not** verified: no measured Λ of a crystal in the group's own work
 has been compared with the bond-valence mean, and the measured scales
 (Duffy 1996, Lebouteiller and Courtine 1998, Dimitrov and Sakka 1996) are

@@ -73,10 +73,43 @@ def main(argv: list[str] | None = None) -> int:
     window = PreviewWindow(path)
     window.setWindowIcon(app_icon())
     window.show()
+    if "--color-by-basicity" in argv[1:]:
+        _colour_by_basicity(window)
 
     splash._elapsed = int((time.perf_counter() - started) * 1000)
     splash.finish_after(window, minimum_ms=1200)
     return app.exec()
+
+
+def _colour_by_basicity(window, tries: int = 240) -> None:
+    """Open with the atoms coloured by microscopic optical basicity: what
+    ``python -m facet.basicity view FILE`` asks for. A crystal's colour mode
+    is set at once (with the anion sites, which carry the lambda, shown); an
+    MD model's when its Highlight page exists, which is after the read, so
+    this looks again every half second for two minutes."""
+    from PySide6.QtCore import QTimer
+
+    from ..core import theme as theme_mod
+    from .md_highlight import COLOUR_MODES
+
+    if window.project.current is not None and not window.models:
+        window.anion_check.setChecked(True)
+        box = window.theme_panel.mode_box
+        at = box.findData(theme_mod.ColorMode.BASICITY)
+        if at >= 0:
+            box.setCurrentIndex(at)
+            window.theme_panel._apply_mode()    # setCurrentIndex is silent
+        return
+    waiting = False
+    for controller in window.models:
+        page = controller.highlight
+        if page is None:
+            waiting = True
+        else:
+            page.colour.setCurrentIndex(
+                COLOUR_MODES.index("microscopic basicity"))
+    if (waiting or not window.models) and tries > 0:
+        QTimer.singleShot(500, lambda: _colour_by_basicity(window, tries - 1))
 
 
 if __name__ == "__main__":

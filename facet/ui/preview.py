@@ -55,8 +55,8 @@ from ..core import (bv, cif, coordination, exporters, history as history_mod,
 from ..gl.labels import AtomLabel, BondLabel, LabelScope, LabelSettings
 from ..gl.scene import Style, build_scene, merge_scenes
 from ..gl.view import StructureView
-from ..version import NAME, __version__
-from . import chrome
+from ..version import NAME, TAGLINE, __version__
+from . import chrome, shell
 from .cutoff_explorer import CutoffExplorer
 from .structure_list import StructureList
 from .theme_panel import ThemePanel
@@ -118,7 +118,18 @@ class _WorkspaceView(StructureView):
                "XYZ, XDATCAR, DL_POLY, DCD, XTC, ...) are listed in the "
                "Structures dock and open the Model workspace")
 
+    # True while the window's welcome card is over the empty view: the card
+    # says what these two lines say, with the buttons that act on it
+    quiet_placeholder = False
+
     def _paint_placeholder(self, painter) -> None:
+        if self.quiet_placeholder:
+            from PySide6.QtGui import QColor
+
+            ground = (self.theme.background if self.theme
+                      else theme_mod.FALLBACK_BACKGROUND)
+            painter.fillRect(self.rect(), QColor.fromRgbF(*ground[:3]))
+            return
         super()._paint_placeholder(painter)
         # one line under the view's own, in the pen and font it left set
         below = self.rect().adjusted(24, 0, -24, 0)
@@ -222,6 +233,16 @@ class PreviewWindow(QMainWindow):
             lambda: self._rebuild(reframe=True))
         self.structure_panel.overlayChanged.connect(self._on_overlay)
         self.structure_panel.removeRequested.connect(self._on_remove)
+        # the welcome card is up exactly while the list is empty, and every
+        # change to the list goes through its refresh
+        _refresh_list = self.structure_panel.refresh
+
+        def _refresh_and_sync(*args, **kwargs):
+            done = _refresh_list(*args, **kwargs)
+            self._sync_welcome()
+            return done
+
+        self.structure_panel.refresh = _refresh_and_sync
 
         self.utilities = UtilitiesPanel()
         # the scale of basicity moderating parameters chosen on the Tools
@@ -278,6 +299,12 @@ class PreviewWindow(QMainWindow):
         # from here would restyle every other window that happens to be open.
         self._theme_the_panels(self.theme)
         self.setStatusBar(QStatusBar())
+        # what draws the picture, kept at the right end of the status bar
+        # (the message that announces it is gone after fifteen seconds)
+        self.renderer_label = QLabel("")
+        chrome.mark_hint(self.renderer_label)
+        self.statusBar().addPermanentWidget(self.renderer_label)
+        self._sync_welcome()
         self._set_enabled(False)
         self.setAcceptDrops(True)
         # every status message, kept with its time in the Messages dock
@@ -388,6 +415,8 @@ class PreviewWindow(QMainWindow):
         self.addDockWidget(Qt.LeftDockWidgetArea, sites)
         sites.setMinimumWidth(210)
         self.sites_dock = sites
+        # the two docks open narrow: the picture is what the width is for
+        self.resizeDocks([structures, sites], [246, 246], Qt.Horizontal)
 
         tabs = QTabWidget()
         # Every page scrolls. A page that cannot scroll sets a floor under the
@@ -413,18 +442,23 @@ class PreviewWindow(QMainWindow):
         # 1700 px window the splitter gives the column more than 476 anyway;
         # below it the bar scrolls, with the names intact rather than elided.
         tabs.setMinimumWidth(400)
-        # Ten tabs need more than 400 px of tab bar, so the bar may still
-        # scroll on a small screen; let it elide rather than hide a tab
-        # entirely, and keep the arrows for when it does.
-        tabs.setUsesScrollButtons(True)
-        # Never elide a tab name. Eliding makes every tab unreadable at once,
-        # which is worse than scrolling: with the arrows the names that are on
-        # screen are at least the real names.
         tabs.tabBar().setElideMode(Qt.ElideNone)
         self.crystal_tabs = tabs
         tabs.currentChanged.connect(lambda _i: self._refresh_lazy_panels())
+        # 2.0: the ten pages are chosen from five names across the top of
+        # the column -- Site and Tools, used all the time, and three groups
+        # that open the list of their pages. Ten tab names across a 500 px
+        # column scrolled, or were cut off, on any window narrower than
+        # about 1700 px; five fit at every size. The tab widget is kept
+        # whole behind the bar (its own hidden), so its indices, titles and
+        # signals are what they were.
+        self.crystal_nav = shell.PagedColumn(tabs, (
+            "Site", "Tools",
+            ("Simulation", ("Diffraction", "PDF", "EXAFS")),
+            ("Geometry", ("Planes", "Volume", "Disorder")),
+            ("Appearance", ("Styles", "Theme"))))
         self.column_stack = _PageStack()
-        self.column_stack.addWidget(tabs)
+        self.column_stack.addWidget(self.crystal_nav)
 
         centre = QWidget()
         col = QVBoxLayout(centre)
@@ -436,6 +470,15 @@ class PreviewWindow(QMainWindow):
                                          QSizePolicy.Maximum)
         self.centre_stack = _PageStack()
         self.centre_stack.addWidget(self.view)
+        self.welcome = shell.WelcomeCard(
+            self.view, NAME, TAGLINE, f"version {__version__}",
+            (("Open a file…", self._choose_file),
+             ("Examples  ▾", self._welcome_examples_menu()),
+             ("Recent  ▾", self._welcome_recent_menu())),
+            note="Or drop a file on the window: a crystal structure (CIF, "
+                 "VESTA, POSCAR, SHELX, PDB, CrystalMaker) or an MD model or "
+                 "trajectory (LAMMPS, extended XYZ, XDATCAR, DL_POLY, DCD, "
+                 "XTC), which opens the Model workspace.")
         col.addWidget(self.toolbar_stack)
         col.addWidget(self.centre_stack, 1)
 
@@ -495,25 +538,14 @@ class PreviewWindow(QMainWindow):
         # laptop screen the centre column gets roughly 900; a QHBoxLayout given
         # less than its minimum shrinks its children *below* their minimum size
         # hint, which is what truncated the label combo boxes.
-        bar = QWidget()
-        stack = QVBoxLayout(bar)
-        stack.setContentsMargins(0, 0, 0, 0)
-        stack.setSpacing(0)
-
-        upper = QWidget()
-        row = QHBoxLayout(upper)
-        row.setContentsMargins(10, 6, 10, 3)
-        row.setSpacing(10)
-        stack.addWidget(upper)
-
+        # 2.0: the controls are in captioned groups, and the groups reflow --
+        # one row on a wide window, two or three on a narrow one -- so no
+        # control is ever squeezed and the bar's minimum width is one group's.
         self.style_box = QComboBox()
         for s in (Style.BALL_AND_STICK, Style.SPACE_FILLING,
                   Style.STICK, Style.WIREFRAME, Style.ELLIPSOIDS):
             self.style_box.addItem(s.value, s)
         self.style_box.activated.connect(lambda _=0: self._on_style())
-        row.addWidget(QLabel("Style"))
-        row.addWidget(self.style_box)
-
         # Only shown in the ellipsoid style, because it means nothing in the
         # others -- and it is not a display preference: it names the surface
         # being drawn, which is something a figure has to state.
@@ -527,8 +559,6 @@ class PreviewWindow(QMainWindow):
             "The fraction of the displacement distribution the drawn surface "
             "encloses")
         self.probability_box.setToolTip(self.probability_label.toolTip())
-        row.addWidget(self.probability_label)
-        row.addWidget(self.probability_box)
         self.probability_label.hide()
         self.probability_box.hide()
 
@@ -536,53 +566,42 @@ class PreviewWindow(QMainWindow):
         for m in (PolyhedraMode.SELECTED, PolyhedraMode.ALL, PolyhedraMode.NONE):
             self.poly_box.addItem(m, m)
         self.poly_box.activated.connect(self._on_poly_mode)
-        row.addWidget(QLabel("Polyhedra"))
-        row.addWidget(self.poly_box)
 
-        row.addWidget(QLabel("Cell range"))
         self.range_boxes = []
         for _ in range(3):
             box = QSpinBox()
             box.setRange(1, 6)
             box.setFixedWidth(46)
+            box.setToolTip("How many cells are drawn along "
+                           + "abc"[len(self.range_boxes)])
             box.valueChanged.connect(lambda _=0: self._rebuild())
             self.range_boxes.append(box)
-            row.addWidget(box)
 
         self.cell_check = QCheckBox("Unit cell")
         self.cell_check.setChecked(True)
         self.cell_check.toggled.connect(lambda _=False: self._rebuild())
-        row.addWidget(self.cell_check)
 
+        # the projection is chosen in the View menu since 2.0; the box is
+        # kept as the one holder of the state (sessions and the menu's tick
+        # read it), without a place in the bar
         self.ortho_check = QCheckBox("Orthographic")
         self.ortho_check.toggled.connect(self.view.set_projection)
-        row.addWidget(self.ortho_check)
-        row.addStretch(1)
 
-        lower = QWidget()
-        row = QHBoxLayout(lower)
-        row.setContentsMargins(10, 3, 10, 6)
-        row.setSpacing(10)
-        stack.addWidget(lower)
-
-        row.addWidget(QLabel("Label atoms"))
         self.atom_label_box = QComboBox()
         for kind in AtomLabel:
             self.atom_label_box.addItem(kind.value, kind)
         self.atom_label_box.activated.connect(self._on_labels)
-        row.addWidget(self.atom_label_box)
 
-        row.addWidget(QLabel("bonds"))
         self.bond_label_box = QComboBox()
         for kind in BondLabel:
             self.bond_label_box.addItem(kind.value, kind)
         self.bond_label_box.activated.connect(self._on_labels)
-        row.addWidget(self.bond_label_box)
         # which atoms carry the labels: every atom, or chosen sites and
         # elements (several at once); the bonds follow the same choice
         from PySide6.QtWidgets import QToolButton
         self.label_scope_button = QToolButton()
-        self.label_scope_button.setText("on…")
+        self.label_scope_button.setText("on… ▾")
+        self.label_scope_button.setObjectName("menubutton")
         self.label_scope_button.setToolTip(
             "Which atoms are labelled: every atom, or the sites and "
             "elements ticked here (as many as you like); a bond is "
@@ -591,7 +610,6 @@ class PreviewWindow(QMainWindow):
         self.label_scope_menu = QMenu(self.label_scope_button)
         self.label_scope_menu.aboutToShow.connect(self._fill_label_scope_menu)
         self.label_scope_button.setMenu(self.label_scope_menu)
-        row.addWidget(self.label_scope_button)
 
         for box in (self.style_box, self.poly_box,
                     self.atom_label_box, self.bond_label_box):
@@ -603,13 +621,9 @@ class PreviewWindow(QMainWindow):
         # and the centre does not.
         self.pivot_label = QLabel("")
         chrome.mark_hint(self.pivot_label)
-        row.addWidget(self.pivot_label)
-
-        row.addStretch(1)
         # The search radius, expressed as the valence below which a contact is
         # not tabulated at all. Unlike the bond threshold this re-runs the
         # neighbour search, so it is a spin box rather than something to drag.
-        row.addWidget(QLabel("Tabulate above"))
         self.list_threshold = QDoubleSpinBox()
         self.list_threshold.setDecimals(4)
         self.list_threshold.setRange(0.0005, 0.2)
@@ -621,8 +635,67 @@ class PreviewWindow(QMainWindow):
             "Widening it re-runs the neighbour search; the bond threshold "
             "below only classifies what was found.")
         self.list_threshold.valueChanged.connect(self._on_list_threshold)
-        row.addWidget(self.list_threshold)
+
+        bar = shell.ReflowBar(
+            [shell.group("Style", self.style_box,
+                         self.probability_label, self.probability_box),
+             shell.group("Polyhedra", self.poly_box),
+             shell.group("Cells", *self.range_boxes, self.cell_check),
+             shell.group("Labels", self.atom_label_box),
+             shell.group("bonds", self.bond_label_box,
+                         self.label_scope_button),
+             shell.group(self.pivot_label)],
+            trailing=[shell.group("Tabulate above", self.list_threshold)],
+            max_rows=4)
+        self.toolbar = bar
         return bar
+
+    def _welcome_recent_menu(self) -> QMenu:
+        """The files opened lately, for the welcome card's own button (the
+        File menu's Recent submenu is filled the same way)."""
+        menu = QMenu(self)
+
+        def fill():
+            menu.clear()
+            files = prefs.recent_files()
+            for file in files:
+                action = menu.addAction(Path(file).name)
+                action.setToolTip(file)
+                action.triggered.connect(
+                    lambda _=False, f=file: self.load_many([f]))
+            if not files:
+                menu.addAction("Nothing opened yet").setEnabled(False)
+
+        menu.aboutToShow.connect(fill)
+        return menu
+
+    def _welcome_examples_menu(self) -> QMenu:
+        """The bundled structures, for the welcome card's button: the
+        Examples submenu of the File menu, built a second time."""
+        from ..core import examples
+
+        menu = QMenu(self)
+        for example in examples.available():
+            action = menu.addAction(f"{example.title}  ({example.formula})")
+            action.setToolTip(example.shows)
+            action.triggered.connect(
+                lambda _checked=False, e=example: self._open_example(e))
+        if menu.isEmpty():
+            menu.addAction("No example is bundled").setEnabled(False)
+        return menu
+
+    def _sync_welcome(self) -> None:
+        """The welcome card is up exactly while nothing is listed."""
+        card = getattr(self, "welcome", None)
+        if card is None:
+            return
+        empty = not self.project.entries
+        card.setVisible(empty)
+        if self.view.quiet_placeholder != empty:
+            self.view.quiet_placeholder = empty
+            self.view.update()
+        if empty:
+            card.raise_()
 
     def _build_menu(self) -> None:
         openf = QAction("&Open…", self)
@@ -778,6 +851,13 @@ class PreviewWindow(QMainWindow):
         reset.setShortcut("R")
         reset.triggered.connect(self.view.reset_view)
         v.addAction(reset)
+        ortho = QAction("Orthographic projection", self)
+        ortho.setCheckable(True)
+        ortho.setToolTip("Parallel lines stay parallel: the projection for "
+                         "a figure looked at along an axis.")
+        ortho.toggled.connect(self.ortho_check.setChecked)
+        self.ortho_check.toggled.connect(ortho.setChecked)
+        self.ortho_action = ortho
         v.addSeparator()
 
         # One row for the three axes rather than three: the View menu is
@@ -790,6 +870,10 @@ class PreviewWindow(QMainWindow):
             act.triggered.connect(lambda _=False, ax=axis: self._view_along(ax))
             axes.addAction(act)
             along.addAction(act)
+        # the projection sits with the views it is wanted for (and the View
+        # menu stays within its twelve rows)
+        along.addSeparator()
+        along.addAction(ortho)
         v.addMenu(along)
 
         v.addSeparator()
@@ -1257,11 +1341,13 @@ class PreviewWindow(QMainWindow):
             return
         if caption:
             self.pivot_label.setText(f"turning about {caption}")
+            self.toolbar.reflow()
             self.pivot_label.setToolTip(
                 "The view rotates about this atom. Press C or Escape to put "
                 "the centre back in the middle of the cell.")
         else:
             self.pivot_label.setText("")
+            self.toolbar.reflow()
             self.pivot_label.setToolTip("")
 
     def _show_appearance_tab(self) -> None:
@@ -2003,6 +2089,8 @@ class PreviewWindow(QMainWindow):
     # -- events ------------------------------------------------------------
     def _on_ready(self, caps) -> None:
         self.statusBar().showMessage(f"Renderer: {caps.describe()}", 15000)
+        self.renderer_label.setText(caps.describe().split(",")[0])
+        self.renderer_label.setToolTip(caps.describe())
 
     def _on_bond_picked(self, bond: int) -> None:
         """A click on a bond, on any tier: its two atoms, distance and
@@ -2612,6 +2700,7 @@ class PreviewWindow(QMainWindow):
         ellipsoids = self.style_box.currentData() is Style.ELLIPSOIDS
         self.probability_label.setVisible(ellipsoids)
         self.probability_box.setVisible(ellipsoids)
+        self.toolbar.reflow()
         self._rebuild()
 
     def _on_poly_mode(self) -> None:

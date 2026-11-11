@@ -1108,7 +1108,12 @@ def test_a_model_shown_widens_the_column_and_each_region_sizes_to_its_page(
     window.structure_panel.list.setCurrentRow(0)
     qapp.processEvents()
     assert window.project.current.kind == "crystal"
-    assert window.minimumSizeHint() == crystal_min
+    # the width is the crystal's own again; the height may be one toolbar
+    # row more (2.0: the column keeps the model's width, so the crystal's
+    # toolbar folds onto another row), and still fits a 768 px screen
+    back = window.minimumSizeHint()
+    assert back.width() == crystal_min.width()
+    assert crystal_min.height() <= back.height() <= 730
 
 
 def test_removing_the_last_structure_empties_the_viewport(qapp, window,

@@ -128,6 +128,23 @@ Courtine 1998, Dimitrov and Sakka 1996), each value naming its source, and
 fluorides on Duffy's common oxide/fluoride scale. The composition value and the
 bond-valence mean agree when every cation delivers its formal charge; their
 difference is the departure of the sums from the charges, stated as such.
+Beside them: Λ of a composition typed as on a batch sheet (`30Na2O-70SiO2`,
+moles or weights, no structure needed), λ grouped by what the anion is bonded
+to (Si–O–Si, Si–O–Na₃, …), the oxide-ion polarisability and the Tl⁺, Pb²⁺ and
+Bi³⁺ probe-ion bands the published relations give for a basicity, and in a
+glass model the correlation of λ with distance.
+
+**The window (2.0).** A toolbar that folds onto more rows on a narrow
+window instead of squeezing its controls, the ten pages of the right column
+behind five names that fit at every size, and a card on the empty window with
+the ways in. The window's minimum width fell from about 1430 px to under
+1100.
+
+**Optical basicity as a library.** `facet.basicity` gives all of the above
+from Python or a terminal, with no window: `fb.composition("30Na2O-70SiO2")`,
+`fb.structure("albite.cif")`, `fb.frame("glass.data")`, the field as a cube
+file VESTA opens, and quick figures (`python -m facet.basicity plot slice
+glass.data --probe Ca`). See [docs/basicity_library.md](docs/basicity_library.md).
 
 **Diffraction.** Powder patterns with real scattering factors — X-ray, neutron and
 electron — and a measured pattern overlaid, scaled by one least-squares factor

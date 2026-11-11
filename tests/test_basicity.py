@@ -250,10 +250,17 @@ def test_quartz_oxygens_are_bridging_and_the_mean_follows_the_sums(quartz):
               if x.element == "O")
     predicted = -(si.bvs - 4) * (1 - 1 / gamma) * n_si / (2 * n_o)
     assert sb.difference == pytest.approx(predicted, abs=2e-3)
-    # the cation's environment: its oxygens, and nothing else bonds them
+    # the cation's environment: its oxygens. Each bridges to ANOTHER atom of
+    # the same Si site, whose bond stays when this atom's own is left out:
+    # with the two bond valences s1 and s2 of the oxygen, the valence-weighted
+    # mean over the four bonds is 1 - (1 - 1/gamma) s1 s2 / (s1 + s2). (Until
+    # 2.0.0 every bond of the site was left out, and this read 1.)
     env = sb.environments[si.site_index]
     assert env.n_anions == 4 and env.value == pytest.approx(o.value)
-    assert env.value_host == pytest.approx(1.0)
+    s1, s2 = (x.valence for x in o.shares if x.bonded)
+    assert env.value_host == pytest.approx(
+        1 - (1 - 1 / gamma) * s1 * s2 / (s1 + s2), abs=1e-4)
+    assert 0.70 < env.value_host < 0.76             # a terminal Si-O reads 0.74
 
 
 def test_the_mean_equals_the_composition_value_when_the_sums_are_the_charges():

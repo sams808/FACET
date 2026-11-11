@@ -878,6 +878,16 @@ def test_the_empty_view_names_md_models(window):
     from PySide6.QtGui import QImage, QPainter
 
     assert "Model workspace" in window.view.MD_HINT
+    # since 2.0 the empty window carries a card that says it, with the
+    # buttons that act on it, and the view under the card is left plain
+    from PySide6.QtWidgets import QLabel
+
+    assert window.welcome.isVisibleTo(window)
+    assert any("Model workspace" in label.text()
+               for label in window.welcome.findChildren(QLabel))
+    assert window.view.quiet_placeholder
+    # the view's own two lines are still what it paints without the card
+    window.view.quiet_placeholder = False
     window.view.resize(640, 400)
     image = QImage(640, 400, QImage.Format_ARGB32)
     image.fill(0)

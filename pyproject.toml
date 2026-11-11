@@ -31,7 +31,12 @@ dependencies = [
 [project.optional-dependencies]
 extra = ["pymatgen>=2024.1"]        # estimated parameters, comparison CN methods
 report = ["pandas>=2.0", "matplotlib>=3.8"]
+plot = ["matplotlib>=3.8"]          # the quick figures of facet.basicity
 dev = ["pytest>=8.0", "pytest-qt>=4.4"]
+
+[project.scripts]
+# optical basicity without the window: facet-basicity composition "30Na2O-70SiO2"
+facet-basicity = "facet.basicity.cli:main"
 
 [project.gui-scripts]
 facet = "facet.__main__:main"
@@ -43,7 +48,8 @@ version = { attr = "facet.version.__version__" }
 include = ["facet*"]
 
 [tool.setuptools.package-data]
-facet = ["data/*.csv", "data/*.json"]
+facet = ["data/*.csv", "data/*.json", "data/*.cif", "data/*.md",
+         "data/examples/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -493,11 +493,26 @@ overlay toggle to draw several in one view, and the cross to remove one.<br>
 <b>Sites</b> — the crystallographic sites of the active structure. Selecting one
 drives the Site tab, the polyhedron and the cutoff explorer.</p>
 <h2>Centre</h2>
-<p>The 3D view, with two rows of controls above it: drawing style, polyhedra,
-how many cells to tile, the unit cell, the projection, what to label atoms and
-bonds with, and the tabulation threshold.</p>
+<p>The 3D view, with a toolbar above it: drawing style, polyhedra, how many
+cells to tile and the unit cell, what to label atoms and bonds with, and the
+tabulation threshold. The toolbar is one row on a wide window and folds onto
+two or more on a narrow one; a control is moved, never squeezed. The
+projection (perspective or orthographic) is under <i>View &rsaquo; Along
+an axis</i>. An empty
+window shows a card with the ways in: <i>Open a file</i>, the bundled
+<i>Examples</i> and the files opened lately.</p>
 <h2>Right</h2>
-<p>Ten tabs. <b>Site</b> is the analysis of the selected site.
+<p>Ten pages, chosen from five names across the top of the column:
+<b>Site</b> and <b>Tools</b>, and three groups that open the list of their
+pages &mdash; <b>Simulation</b> (Diffraction, PDF, EXAFS), <b>Geometry</b>
+(Planes, Volume, Disorder) and <b>Appearance</b> (Styles, Theme). A group
+carries the name of its page while that page is on screen. The twelve
+tables of <b>Tools</b> are chosen the same way, from six names: <i>Cell</i>,
+<i>File</i>, <i>Geometry</i> (Angles, Shells, Reflections), <i>Bonding</i>
+(CN methods, Cutoffs, Stability, Connectivity), <i>Valence</i> (A priori,
+Anions) and <i>Basicity</i>. This manual calls each page a tab, as the
+earlier versions did. <b>Site</b> is the analysis of
+the selected site.
 <b>Tools</b> holds the whole-structure tables. <b>Diffraction</b> computes a
 powder pattern, <b>PDF</b> a pair distribution function, and <b>EXAFS</b> the
 shell list and resolution report. <b>Planes</b> cuts lattice planes and slabs.
@@ -812,6 +827,42 @@ the Atom tab, or to the toolbar's slab. Both follow the scale chosen under
 <i>Tools &rsaquo; Basicity</i>, and the count line under the rules states
 the probe, the scale, the range drawn and the share of the box that carries
 a value.</p>
+<h2>A composition, typed</h2>
+<p>The line at the top of <i>Tools &rsaquo; Basicity</i> takes a composition
+as it is written on a batch sheet &mdash; <code>30Na2O-70SiO2</code>,
+<code>Na2O 25, CaO 10, SiO2 65</code>, <code>20CaF2-80SiO2</code>; end it
+with <code>wt</code> for weights &mdash; and gives its &Lambda; on the chosen
+scale with no structure loaded: each component's &Lambda; weighted by the
+share of the anion charge it carries (Duffy and Ingram's eq. 4; for fluoride
+components Duffy's eq. 4 of 1989, each cation counted with the anion it is
+batched with). A composition that cannot be read says why.</p>
+<h2>What a basicity implies</h2>
+<p>Two published relations are applied to the composition's &Lambda; and
+shown beside it, as relations rather than as measurements: the electronic
+polarisability of the oxide ion, &alpha; = 1.67 / (1.67 &minus; &Lambda;)
+&Aring;&sup3; (Duffy 1989), given for an all-oxide composition; and the
+frequency of the <sup>1</sup>S<sub>0</sub>&rarr;<sup>3</sup>P<sub>1</sub>
+band a probe ion would show, &nu; = &nu;<sub>free</sub> &minus; shift
+&times; &Lambda;, for Tl<sup>+</sup> (55&nbsp;300, 18&nbsp;300),
+Pb<sup>2+</sup> (60&nbsp;700, 31&nbsp;000) and Bi<sup>3+</sup> (56&nbsp;000,
+28&nbsp;800 cm<sup>&minus;1</sup>), the equations the scale was defined by
+(Duffy and Ingram 1976).</p>
+<h2>&lambda; by what the anion is bonded to</h2>
+<p>The Basicity tab groups the anion sites by the cations bonded to them
+above the threshold and gives the atoms, mean, spread and range of &lambda;
+in each group. The name puts the anion in the middle: <i>Si-O-Si</i>,
+<i>Si-O-Na3</i>, <i>O-Ca4 Na2</i>.</p>
+<h2>From Python and the command line</h2>
+<p>Everything on this page is also a library, <code>facet.basicity</code>,
+with no window: <code>fb.composition("30Na2O-70SiO2")</code>,
+<code>fb.structure("file.cif")</code>, <code>fb.frame("glass.data")</code>,
+and the same as commands (<code>python -m facet.basicity structure
+file.cif</code>). It adds, for a glass model, the linkages of every anion,
+the correlation of &lambda; with distance and the band each atom of a probe
+element would show; writes the field as a cube file VESTA opens; and draws
+quick figures (<code>python -m facet.basicity plot slice glass.data --probe
+Ca</code>). <code>docs/basicity_library.md</code> in the repository lists
+every call and command.</p>
 <h2>Which view shows what</h2>
 <p>A glass box is tens of &aring;ngstr&ouml;ms deep, and anything drawn
 through all of it overlaps. Four views, from the plainest:</p>
@@ -1194,7 +1245,7 @@ front bonds only</i> for every pair; <i>Show the lone-pair lobe at …</i>
 draws this site's bond-valence vector on its own, with its &phi; stated
 (the site has to have one: &phi; above 0)</td></tr>
 <tr><td><b>on…</b> (toolbar)</td><td>Which atoms carry the labels chosen
-under <i>Label atoms</i> and <i>bonds</i>: every atom, or the sites and
+under <i>Labels</i> and <i>bonds</i>: every atom, or the sites and
 elements ticked, as many as you like; a bond is labelled when either end is
 ticked</td></tr>
 <tr><td><b>Click two atoms</b></td><td>Distance</td></tr>
