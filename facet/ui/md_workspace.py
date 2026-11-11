@@ -2536,6 +2536,11 @@ class ModelController(QObject):
         fd = self._frame_data_at(v_bond)
         # a basicity map isolated to the slab reads the toolbar's
         fd.slab = self.toolbar.slab()
+        # without a graphics card every translucent triangle is drawn by
+        # QPainter on every frame: the map is held to what that can turn
+        from ..core import basicity_field as field_mod
+        fd.triangle_budget = (field_mod.TRIANGLE_BUDGET_PAINTER
+                              if self.painter_tier() else None)
         if self.highlight is not None:
             self.highlight.set_frame_data(fd)
             rules = self.highlight.rules()

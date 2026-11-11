@@ -209,28 +209,18 @@ def isosurface(grid: Grid, level: float, step: int = 1,
 
     scale = np.array([na, nb, nc], float)
 
-    def vertex_for(origin, ca: int, cb: int, fa: float, fb: float) -> int:
-        """Index of the vertex where the level crosses one grid edge.
-
-        Cached by edge rather than by tetrahedron, so adjacent tetrahedra
-        share it and the surface comes out watertight instead of as loose
-        triangles.
-        """
-        key = _edge_key(origin, ca, cb, corner_offsets)
-        hit = cache.get(key)
-        if hit is not None:
-            return hit
-        denominator = fb - fa
-        t = 0.5 if abs(denominator) < 1e-12 else (level - fa) / denominator
-        t = float(np.clip(t, 0.0, 1.0))
-        pa = origin + corner_offsets[ca]
-        pb = origin + corner_offsets[cb]
-        hit = len(vertices)
-        vertices.append((pa + t * (pb - pa)) / scale)
-        cache[key] = hit
-        return hit
-
+    # Every tetrahedron of every straddling cube at once. A vertex is where
+    # the level crosses one grid edge, identified by the two grid points the
+    # edge joins -- so adjacent tetrahedra share it and the surface comes out
+    # watertight instead of as loose triangles. The loop below runs over the
+    # six tetrahedra and the sixteen cases only; the cubes are arrays. The
+    # row-by-row version of this took 13 s for 130 000 triangles of a glass
+    # field (about 10 000 triangles a second); this one is two orders faster.
+    stride = np.array([(nb + 1) * (nc + 1), nc + 1, 1], np.int64)
+    n_ids = np.int64((na + 1) * (nb + 1) * (nc + 1))
     above = cube > level
+    tri_keys: list[np.ndarray] = []
+    tri_points: list[np.ndarray] = []
     for tet in _TETRAHEDRA:
         corners = [int(c) for c in tet]
         pattern = (above[:, corners[0]].astype(int)
@@ -242,22 +232,44 @@ def isosurface(grid: Grid, level: float, step: int = 1,
             if not triangles:
                 continue
             rows = np.flatnonzero(pattern == case)
-            for row in rows:
-                origin = base[row]
-                for triangle in triangles:
-                    face = []
-                    for edge in triangle:
-                        va, vb = _TET_EDGES[edge]
-                        ca, cb = corners[va], corners[vb]
-                        face.append(vertex_for(origin, ca, cb,
-                                               cube[row, ca], cube[row, cb]))
-                    if len(set(face)) == 3:      # skip degenerate triangles
-                        faces.append(tuple(face))
+            if not rows.size:
+                continue
+            origin = base[rows]
+            for triangle in triangles:
+                keys, points = [], []
+                for edge in triangle:
+                    va, vb = _TET_EDGES[edge]
+                    ca, cb = corners[va], corners[vb]
+                    pa = origin + corner_offsets[ca]
+                    pb = origin + corner_offsets[cb]
+                    fa, fb = cube[rows, ca], cube[rows, cb]
+                    denominator = fb - fa
+                    flat = np.abs(denominator) < 1e-12
+                    t = np.where(flat, 0.5, (level - fa)
+                                 / np.where(flat, 1.0, denominator))
+                    t = np.clip(t, 0.0, 1.0)
+                    ia = pa.astype(np.int64) @ stride
+                    ib = pb.astype(np.int64) @ stride
+                    keys.append(np.minimum(ia, ib) * n_ids + np.maximum(ia, ib))
+                    points.append(pa + t[:, None] * (pb - pa))
+                tri_keys.append(np.stack(keys, axis=1))
+                tri_points.append(np.stack(points, axis=1))
 
-    if not vertices:
+    if not tri_keys:
         return (np.zeros((0, 3)), np.zeros((0, 3), int), np.zeros((0, 3)))
 
-    frac = np.array(vertices, float)
+    all_keys = np.concatenate(tri_keys).reshape(-1)
+    all_points = np.concatenate(tri_points).reshape(-1, 3)
+    _unique, first, inverse = np.unique(all_keys, return_index=True,
+                                        return_inverse=True)
+    frac = all_points[first] / scale
+    faces = inverse.reshape(-1, 3)
+    # a triangle two of whose corners fell on one vertex has no area
+    proper = ((faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2])
+              & (faces[:, 0] != faces[:, 2]))
+    faces = [tuple(int(i) for i in f) for f in faces[proper]]
+    if not faces:
+        return (np.zeros((0, 3)), np.zeros((0, 3), int), np.zeros((0, 3)))
     normals = _gradient_normals(grid, frac)
 
     nx, ny, nz = (max(1, int(n)) for n in cell_range)

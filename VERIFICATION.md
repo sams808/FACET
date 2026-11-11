@@ -1082,6 +1082,33 @@ surfaces' does, and coarsens to a 200 000-triangle budget (step 4 there,
 hook. A test meshes a field of uniform noise on a 64³ grid under the budget in
 seconds, and another checks the hooks stop both.
 
+**1.3.0, an audit of the shared build.** Three sweeps that print only
+failures, so they cost seconds to read: `ruff` on the bug classes (no
+undefined name; the loop closures it flags all run inside their own
+iteration); every CIF of the local collection (256 analysed, 247 fields)
+through the analysis, the four scales, the Site text, the field, the gradient
+and the scene; and the window through the cases a first user meets (nothing
+loaded, a larger cell range, two structures at once, a session round trip, a
+fluoride, an MD model, a vector export). No path raised. What they found, each
+now pinned in `tests/test_basicity_views.py`: the field and the single
+isosurface were drawn in the home cell only under a larger cell range; a
+session did not keep the basicity scale, and a field stayed drawn under a new
+scale's name; an MD field was reused after the bond threshold moved (the
+landscapes are handed on between thresholds, and λ is not theirs); two 1930s
+structures read λ = −3.3 and −1.9 with no word that their oxygens carry twice
+their charge in bonds; the marching was a Python loop at 10 000 triangles a
+second (vectorised: the analytic-sphere tests of area, volume, normals and
+watertightness pass unchanged, 13 s became under one); and on the tier without
+a graphics card a translucent triangle costs 0.27 ms a frame, so 83 000 of
+them added 22 s to every frame (budget 8 000 there). Timed on the 12 811-atom
+glass at a 1 Å grid: field 2 s, cross-section or regional surfaces about 1 s,
+a change of opacity nothing.
+
+Still open, stated rather than hidden: eight highlight tests skip because
+their model files lived in a session folder that no longer exists; an SVG of
+a view with 63 000 field triangles is 19 MB; the repository has no continuous
+integration.
+
 What is **not** verified: no measured Λ of a crystal in the group's own work
 has been compared with the bond-valence mean, and the measured scales
 (Duffy 1996, Lebouteiller and Courtine 1998, Dimitrov and Sakka 1996) are

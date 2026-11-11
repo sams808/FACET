@@ -59,7 +59,8 @@ class FieldDisplay:
                  gradient_alpha: float, show_slice: bool, slice_alpha: float,
                  plane: tuple, offset: float, size: float, samples: int,
                  window: tuple | None, region: str, region_radius: float,
-                 colormap: str, field=None):
+                 colormap: str, field=None,
+                 regions_percent: float | None = None):
         self.grid = grid
         self.show_gradient = bool(show_gradient)
         self.levels = int(levels)
@@ -76,6 +77,10 @@ class FieldDisplay:
         self.region_radius = float(region_radius)
         self.colormap = str(colormap)
         self.field = field                 # a BasicityField when it is one
+        # instead of evenly spaced levels: the two surfaces that bound the
+        # lowest and the highest share of the field (None: even levels)
+        self.regions_percent = (None if not regions_percent
+                                else float(regions_percent))
 
     @property
     def wanted(self) -> bool:
@@ -222,6 +227,13 @@ class VolumePanel(QWidget):
             "basicity weighted by the valence the probe would form with "
             "each (Tools > Basicity chooses the scale).")
         second.addRow("valence floor", self.floor)
+        self.smooth = _spin(0.0, 8.0, 0.0, 0.25, 2, " Å")
+        self.smooth.setToolTip(
+            "Only used by the basicity field: average it over a Gaussian of "
+            "this width (0: the raw field). A couple of ångströms turns a "
+            "field that changes from one oxygen to the next into the "
+            "regional map, with smooth surfaces.")
+        second.addRow("smooth over", self.smooth)
         row.addLayout(second)
 
         buttons = QVBoxLayout()
@@ -378,6 +390,17 @@ class VolumePanel(QWidget):
                                        "show through.")
         self.gradient_alpha.valueChanged.connect(self._emit_field_overlays)
         gradient.addRow("opacity", self.gradient_alpha)
+        self.use_regions = QCheckBox("only the lowest and the highest")
+        self.use_regions.setToolTip(
+            "Instead of a surface at every level, two surfaces: one bounds "
+            "the lowest part of the field, the other the highest, each "
+            "this share of the points that carry a value. For the basicity "
+            "field: the most acidic and the most basic regions.")
+        self.use_regions.toggled.connect(self._emit_field_overlays)
+        gradient.addRow(self.use_regions)
+        self.regions_percent = _spin(1.0, 49.0, 15.0, 1.0, 0, " %")
+        self.regions_percent.valueChanged.connect(self._emit_field_overlays)
+        gradient.addRow("share", self.regions_percent)
         self.show_slice = QCheckBox("the section plane as a colour-mapped slice")
         self.show_slice.setToolTip(
             "The plane of the section below, drawn inside the 3D view with "
@@ -450,6 +473,7 @@ class VolumePanel(QWidget):
             widget.setEnabled(kind in computed)
         self.temperature.setEnabled(kind == "bvel")
         self.floor.setEnabled(kind == "basicity")
+        self.smooth.setEnabled(kind == "basicity")
         self.compute_button.setEnabled(self.structure is not None
                                        and kind in computed)
 
@@ -482,7 +506,9 @@ class VolumePanel(QWidget):
             samples=min(int(self.samples.value()), 160),
             window=window, region=str(self.region.currentData()),
             region_radius=self.region_radius.value(),
-            colormap=self.colormap.currentText(), field=self.field)
+            colormap=self.colormap.currentText(), field=self.field,
+            regions_percent=(self.regions_percent.value()
+                             if self.use_regions.isChecked() else None))
 
     def _emit_field_overlays(self, *_args) -> None:
         if self._loading:
@@ -536,6 +562,7 @@ class VolumePanel(QWidget):
                     probe_ox=ox, resolution=spacing, params=self.params,
                     rmax=float(self.rmax.value()),
                     floor_vu=float(self.floor.value()))
+                field = field_mod.smoothed(field, float(self.smooth.value()))
                 grid = field.grid
             else:
                 grid = volume_mod.bond_valence_grid(

@@ -70,8 +70,13 @@ SLICE_BINS_DEFAULT = 24
 # gives about 6.2 triangles per cube the level crosses (the channel
 # surfaces' measure).
 TRIANGLE_BUDGET = 200_000
+# The budget on the tier that draws with QPainter (a machine with no
+# graphics card): measured there, a translucent triangle costs about
+# 0.27 ms a frame, so 83 000 of them added 22 s to every frame of a
+# 12 811-atom box. 8 000 is about two seconds.
+TRIANGLE_BUDGET_PAINTER = 8_000
 TRIANGLES_PER_CUBE = 6.2
-MAX_MESH_STEP = 6
+MAX_MESH_STEP = 16
 # the seconds one (grid point, anion image) pair of the field costs, from
 # the channel landscapes' measure on this class of machine, for the
 # estimate a panel states before the field runs
@@ -331,6 +336,88 @@ def basicity_landscape(frame, ox_atom, lambda_atom, *, probe: str,
                          tuple(without), tuple(missing), notes)
 
 
+# --- smoothing: the regional map ---------------------------------------------------
+
+def smoothed(field: BasicityField, sigma_ang: float) -> BasicityField:
+    """The field averaged over a Gaussian of ``sigma_ang`` (periodic; over
+    the points that carry a value, so an undefined region neither enters
+    the average nor is filled by it).
+
+    Over a glass the raw field varies from one oxygen to the next; averaged
+    over a couple of ångströms it is the regional map -- where the model is
+    basic and where it is acidic -- and its level surfaces are few and
+    smooth. The width is along the cell axes, in each axis's own grid
+    steps, so it is exact for an orthogonal cell and approximate for an
+    oblique one; the notes state it.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    sigma = float(sigma_ang)
+    if not math.isfinite(sigma) or sigma < 0:
+        raise ValueError(f"sigma_ang {sigma_ang!r}: a length of 0 or more")
+    if sigma == 0:
+        return field
+    lam = np.asarray(field.grid.values, float)
+    defined = np.isfinite(lam)
+    steps = [sigma / max(s, 1e-12) for s in field.grid.spacing]
+    num = gaussian_filter(np.where(defined, lam, 0.0), steps, mode="wrap")
+    den = gaussian_filter(defined.astype(float), steps, mode="wrap")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = np.where(den > 1e-9, num / den, np.nan)
+    out[~defined] = np.nan
+    note = (f"averaged over a Gaussian of sigma {sigma:g} Å along the cell "
+            "axes (periodic, over the points that carry a value)")
+    grid = volume.Grid(out, field.grid.cell,
+                       name=f"{field.grid.name}, sigma {sigma:g} Å",
+                       units=field.grid.units, source=field.grid.source)
+    grid.notes = list(field.grid.notes) + [note]
+    return BasicityField(grid, field.valence, field.probe, field.probe_ox,
+                         field.scale, field.floor_vu,
+                         int(np.isfinite(out).sum()), int(out.size),
+                         field.anions_without_lambda, field.missing_parameters,
+                         list(field.notes) + [note])
+
+
+def region_levels(values, percent: float) -> list[float]:
+    """The two levels that bound the most acidic and the most basic
+    ``percent`` of the defined points: the ``percent``-th and the
+    (100 - ``percent``)-th percentile of the field. Drawn as two surfaces
+    they enclose the regions at each end of the scale instead of nesting
+    a shell at every value."""
+    p = float(percent)
+    if not (0.0 < p < 50.0):
+        raise ValueError(f"percent {percent!r}: between 0 and 50")
+    v = np.asarray(values, float)
+    v = v[np.isfinite(v)]
+    if not v.size:
+        return []
+    low, high = (float(x) for x in np.percentile(v, [p, 100.0 - p]))
+    return [low] if high - low < 1e-12 else [low, high]
+
+
+def tiled(meshes: Sequence, cell, cell_range) -> list:
+    """The meshes repeated over a block of cells, as the atoms of a scene
+    built with that cell range are: one copy per lattice translation."""
+    from ..gl.vectors import OverlayMesh
+
+    nx, ny, nz = (max(1, int(n)) for n in cell_range)
+    if (nx, ny, nz) == (1, 1, 1):
+        return list(meshes)
+    orth = np.asarray(cell.orth, float)
+    shifts = [orth @ np.array([i, j, k], float)
+              for i in range(nx) for j in range(ny) for k in range(nz)]
+    out = []
+    for mesh in meshes:
+        vertices = np.asarray(mesh.vertices, np.float32)
+        normals = np.asarray(mesh.normals, np.float32)
+        out.append(OverlayMesh(
+            np.concatenate([vertices + np.asarray(s, np.float32)
+                            for s in shifts]),
+            np.concatenate([normals] * len(shifts)),
+            mesh.color, mesh.alpha, label=mesh.label))
+    return out
+
+
 # --- isolating ------------------------------------------------------------------
 
 def window_mask(grid: volume.Grid, lo: float, hi: float) -> np.ndarray:
@@ -471,10 +558,14 @@ def gradient_meshes(grid: volume.Grid, levels: Sequence[float], lo: float,
                     hi: float, *, alpha: float = GRADIENT_ALPHA_DEFAULT,
                     step: int | None = None, colour_of: Callable | None = None,
                     label: str = "basicity",
-                    cancelled: Callable[[], bool] | None = None) -> list:
+                    cancelled: Callable[[], bool] | None = None,
+                    ramp_positions: Sequence[float] | None = None) -> list:
     """One translucent :class:`~facet.gl.vectors.OverlayMesh` per level, in
     the ramp colour of that level over [lo, hi]. ``step`` None takes
-    :func:`gradient_plan`'s; ``cancelled`` is asked before each level."""
+    :func:`gradient_plan`'s; ``cancelled`` is asked before each level.
+    ``ramp_positions`` gives each level's place on the ramp (0..1) instead
+    of its own value's -- the two surfaces of :func:`region_levels` take
+    the ramp's ends, so the acidic and the basic regions read apart."""
     from ..gl.vectors import OverlayMesh
 
     ramp = _ramp(colour_of)
@@ -483,7 +574,7 @@ def gradient_meshes(grid: volume.Grid, levels: Sequence[float], lo: float,
         step, _ = gradient_plan(values, levels)
     out = []
     span = max(float(hi) - float(lo), 1e-12)
-    for level in levels:
+    for number, level in enumerate(levels):
         if cancelled is not None and cancelled():
             from .md_channels import AnalysisCancelled
 
@@ -499,10 +590,17 @@ def gradient_meshes(grid: volume.Grid, levels: Sequence[float], lo: float,
         tri_normals = (_finite_normals(np.asarray(normals)[flat])
                        if len(normals) == len(vertices)
                        else np.zeros((len(flat), 3), np.float32))
-        colour = tuple(float(c) for c in ramp((float(level) - lo) / span))
+        place = ((float(level) - lo) / span if ramp_positions is None
+                 else float(ramp_positions[number]))
+        colour = tuple(float(c) for c in ramp(place))
         out.append(OverlayMesh(vertices[flat], tri_normals, colour,
                                float(alpha), label=label))
     return out
+
+
+# where the two region surfaces sit on the ramp: near its ends, short of
+# the extremes so neither is the darkest nor the palest colour of a map
+REGION_RAMP_POSITIONS = (0.08, 0.92)
 
 
 def slice_meshes(grid: volume.Grid, origin, axis_u, axis_v, size: float,

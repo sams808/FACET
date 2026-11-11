@@ -151,7 +151,8 @@ def _value_colours(table: bulk.ValenceTable, mode, theme, v_bond: float,
         from ..core import basicity as basicity_mod
 
         values = basicity_mod.frame_basicity(
-            table, basicity_mod.DEFAULT_SCALE, v_bond=v_bond).value
+            table, getattr(theme, "basicity_scale", None)
+            or basicity_mod.DEFAULT_SCALE, v_bond=v_bond).value
         rows = np.nonzero(np.isfinite(values))[0]
     else:
         results = bulk.at_threshold(table, v_bond)

@@ -69,13 +69,13 @@ __all__ = [
 
 DESCRIPTORS = ("CN", "former CN", "BVS", "phi", "Qn", "mean bond angle",
                "tetrahedral deviation", "smallest ring",
-               "distance to channel")
+               "distance to channel", "microscopic basicity")
 SENSES = ("≤", "≥", "=")
 COLOUR_MODES = ("element", "shell from the atom",
                 "bond-valence sum", "coordination number",
                 "stereoactivity (phi)", "Qn", "modifier-rich O",
                 "modifier density", "channel membership",
-                "microscopic basicity")
+                "microscopic basicity", "basicity about every atom")
 # the hot map's surface: a warm colour the element palettes keep clear of
 HOTMAP_COLOUR = (0.95, 0.35, 0.15)
 HOTMAP_ALPHA = 0.30
@@ -258,6 +258,12 @@ class FrameData:
     # the toolbar's slab (axis, centre fraction, thickness) when on, for a
     # basicity map isolated to it; set by the workspace before a redraw
     slab: tuple | None = None
+    # the meshes of a basicity map, by everything that shapes them, so a
+    # change of opacity re-uses the triangles instead of marching again
+    _basicity_meshes: dict = field(default_factory=dict, repr=False)
+    # the most triangles a basicity map may draw (None: the field module's
+    # budget); the workspace lowers it on the tier without a graphics card
+    triangle_budget: int | None = None
     _angles: tuple | None = field(default=None, repr=False)
     _spheres: object = field(default=None, repr=False)
     _landscapes: dict = field(default_factory=dict, repr=False)
@@ -315,6 +321,11 @@ class FrameData:
         once per scale."""
         from ..core import basicity as basicity_mod
 
+        return self._frame_basicity(scale).value
+
+    def _frame_basicity(self, scale: str | None = None):
+        from ..core import basicity as basicity_mod
+
         key = str(scale or self.basicity_scale)
         found = self._basicity.get(key)
         if found is None:
@@ -322,11 +333,19 @@ class FrameData:
                 self.table, key, v_bond=self.v_bond,
                 formers=sorted(self.formers) or None)
             self._basicity[key] = found
-        return found.value
+        return found
+
+    def basicity_everywhere(self, scale: str | None = None) -> np.ndarray:
+        """lambda for the anions and, for each cation, the bond-valence
+        weighted mean lambda of the anions it is bonded to: one value per
+        atom on the one scale, NaN where neither is defined."""
+        found = self._frame_basicity(scale)
+        return np.where(np.isfinite(found.value), found.value,
+                        found.environment)
 
     def basicity_field(self, probe: str, grid_spacing_ang: float,
                        r_cut_ang: float, floor_vu: float,
-                       scale: str | None = None):
+                       scale: str | None = None, smooth_ang: float = 0.0):
         """The basicity a probe would sense on this frame's box
         (:func:`facet.core.basicity_field.basicity_landscape`), kept per
         (probe, spacing, r_cut, floor, scale); the probe's oxidation state
@@ -335,8 +354,20 @@ class FrameData:
         from ..core import basicity_field as field_mod
 
         scale = str(scale or self.basicity_scale)
+        # lambda is summed over the contacts above v_bond, so the field is
+        # this threshold's: the key carries it (the landscapes are handed
+        # on to the frame data of another threshold)
         key = ("basicity", str(probe), float(grid_spacing_ang),
-               float(r_cut_ang), float(floor_vu), scale)
+               float(r_cut_ang), float(floor_vu), scale,
+               round(float(self.v_bond), 9))
+        sigma = float(smooth_ang or 0.0)
+        if sigma > 0:
+            smooth_key = key + ("sigma", sigma)
+            if smooth_key not in self._landscapes:
+                raw = self.basicity_field(probe, grid_spacing_ang, r_cut_ang,
+                                          floor_vu, scale)
+                self._landscapes[smooth_key] = field_mod.smoothed(raw, sigma)
+            return self._landscapes[smooth_key]
         if key not in self._landscapes:
             rows = self.elements == probe
             if rows.any():
@@ -423,6 +454,8 @@ class FrameData:
         (ValueError when it needs the formers and there are none)."""
         table = {"CN": self.cn, "former CN": self.former_cn,
                  "BVS": self.bvs, "phi": self.phi, "Qn": self.qn}
+        if name == "microscopic basicity":
+            return np.asarray(self.basicity_values(), np.float64)
         if name in ("mean bond angle", "tetrahedral deviation"):
             mean, dev = self.angle_stats()
             return mean if name == "mean bond angle" else dev
@@ -788,6 +821,17 @@ class Rule:
     slice_fraction: float = 0.5
     slice_alpha: float = 0.75
     scale: str = ""
+    # basicity-map: the Gaussian the field is averaged over (0: the raw
+    # field), and, instead of evenly spaced levels, the two surfaces that
+    # bound the most acidic and the most basic ``regions_percent`` of the
+    # box (None: evenly spaced levels)
+    smooth_ang: float = 0.0
+    regions_percent: float | None = None
+    # basicity-map: whether the level surfaces are drawn at all (a slice
+    # alone is the cross-section), and, with a slice, the distance from its
+    # plane within which the atoms are kept (None: every atom)
+    surfaces: bool = True
+    slice_atoms_ang: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1158,11 +1202,14 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
             colours = _ramp_over(by_atom, 0.0, max(n_regions - 1, 1), base,
                                  sites)
             legend = ("channel region", 0.0, float(max(n_regions - 1, 1)))
-    elif colour_by == "microscopic basicity":
+    elif colour_by in ("microscopic basicity", "basicity about every atom"):
         # the anions on the ramp by their lambda (facet.core.basicity, at
-        # v_bond on the frame data's scale), the cations in their element
-        # colour; a pinned theme range holds, else the frame's own span
-        values = fd.basicity_values()
+        # v_bond on the frame data's scale); the cations in their element
+        # colour, or, "about every atom", by the mean lambda of the anions
+        # they are bonded to, so the whole frame reads as one gradient; a
+        # pinned theme range holds, else the frame's own span
+        values = (fd.basicity_values() if colour_by == "microscopic basicity"
+                  else fd.basicity_everywhere())
         rows = np.nonzero(np.isfinite(values))[0]
         if not len(rows):
             note = ("microscopic basicity: no anion of this frame has a "
@@ -1174,7 +1221,10 @@ def colour_atoms(scene, fd: FrameData, colour_by: str, theme=None,
             lo, hi = theme_mod.scale_range(by_atom, theme,
                                            theme_mod.ColorMode.BASICITY)
             colours = _ramp_over(by_atom, lo, hi, base, sites)
-            legend = (f"microscopic basicity λ ({fd.basicity_scale})", lo, hi)
+            legend = ((f"microscopic basicity λ ({fd.basicity_scale})"
+                       if colour_by == "microscopic basicity" else
+                       f"λ of the anions, mean λ about the cations "
+                       f"({fd.basicity_scale})"), lo, hi)
     else:
         raise ValueError(f"colour_by {colour_by!r}: one of {COLOUR_MODES}")
     scene.atom_color = np.asarray(colours, np.float32).reshape(-1, 3)
@@ -1430,8 +1480,12 @@ def _channel_distance(fd: FrameData) -> np.ndarray | None:
 def _apply_basicity_map(scene, fd: FrameData, rule: Rule, theme
                         ) -> tuple[str, bool]:
     """Draw one basicity-map rule: the field a probe would sense over the
-    box as a gradient of level surfaces, a slice normal to a box axis, both
-    isolated to the rule's window and region. Returns (note, drawn)."""
+    box (averaged over ``rule.smooth_ang`` when that is above 0) as level
+    surfaces -- evenly spaced, or the two that bound the most acidic and
+    the most basic regions -- and a slice normal to a box axis, isolated
+    to the rule's window and region. The triangles are kept per everything
+    that shapes them, so a change of opacity marches nothing. Returns
+    (note, drawn)."""
     from ..core import basicity_field as field_mod
 
     probe = str(rule.probe or "").strip()
@@ -1440,7 +1494,8 @@ def _apply_basicity_map(scene, fd: FrameData, rule: Rule, theme
     try:
         fld = fd.basicity_field(probe, rule.grid_spacing_ang or 0.5,
                                 rule.r_cut_ang or 6.0, rule.floor_vu,
-                                rule.scale or None)
+                                rule.scale or None,
+                                smooth_ang=rule.smooth_ang or 0.0)
     except ValueError as error:
         return str(error), False
     grid = fld.grid
@@ -1452,70 +1507,107 @@ def _apply_basicity_map(scene, fd: FrameData, rule: Rule, theme
     lo, hi = (rule.window if rule.window is not None
               else (float(finite.min()), float(finite.max())))
     lo, hi = (float(min(lo, hi)), float(max(lo, hi)))
-    keep = np.ones(grid.shape, bool)
-    words = []
-    if rule.window is not None:
-        keep &= field_mod.window_mask(grid, lo, hi)
-        words.append(f"between {lo:.4g} and {hi:.4g}")
-    if rule.region == "atom":
-        centre = fd.shell_centre
-        if centre is None:
-            words.append("no atom read, so the whole box")
-        else:
-            cart = (np.asarray(fd.frame.cart_ang, float)[int(centre)]
-                    if hasattr(fd.frame, "cart_ang") else None)
-            if cart is not None:
-                keep &= field_mod.sphere_mask(grid, cart, rule.region_radius_ang)
+    centre = fd.shell_centre if rule.region == "atom" else None
+    slab = fd.slab if rule.region == "slab" else None
+    budget = int(fd.triangle_budget or field_mod.TRIANGLE_BUDGET)
+    key = (id(fld), int(rule.levels), rule.regions_percent, lo, hi,
+           bool(rule.surfaces), budget, rule.window is not None, rule.region,
+           float(rule.region_radius_ang), centre, slab, rule.slice_axis,
+           float(rule.slice_fraction))
+    built = fd._basicity_meshes.get(key)
+    if built is None:
+        keep = np.ones(grid.shape, bool)
+        words = []
+        if rule.window is not None:
+            keep &= field_mod.window_mask(grid, lo, hi)
+            words.append(f"between {lo:.4g} and {hi:.4g}")
+        if rule.region == "atom":
+            if centre is None:
+                words.append("no atom read, so the whole box")
+            else:
+                cart = np.asarray(fd.frame.cart_ang, float)[int(centre)]
+                keep &= field_mod.sphere_mask(grid, cart,
+                                              rule.region_radius_ang)
                 words.append(f"within {rule.region_radius_ang:g} Å of row "
                              f"{int(centre)}")
-    elif rule.region == "slab":
-        if fd.slab is None:
-            words.append("the toolbar's slab is off, so the whole box")
+        elif rule.region == "slab":
+            if slab is None:
+                words.append("the toolbar's slab is off, so the whole box")
+            else:
+                axis, centre_fraction, thickness = slab
+                keep &= field_mod.axis_slab_mask(grid, int(axis),
+                                                 float(centre_fraction),
+                                                 float(thickness))
+                words.append(f"inside the slab along {'abc'[int(axis)]}, "
+                             f"{thickness:g} Å")
+        drawn = field_mod.restricted(grid, keep) if not keep.all() else grid
+        places = None
+        if not rule.surfaces:
+            levels = []
+            words.insert(0, "no level surface")
+        elif rule.regions_percent:
+            levels = field_mod.region_levels(np.asarray(drawn.values),
+                                             float(rule.regions_percent))
+            if len(levels) == 2:
+                places = field_mod.REGION_RAMP_POSITIONS
+                words.insert(0, f"the two surfaces bound the most acidic and "
+                                f"the most basic {rule.regions_percent:g} % "
+                                f"(λ ≤ {levels[0]:.3f}, λ ≥ {levels[1]:.3f})")
         else:
-            axis, centre_fraction, thickness = fd.slab
-            keep &= field_mod.axis_slab_mask(grid, int(axis),
-                                             float(centre_fraction),
-                                             float(thickness))
-            words.append(f"inside the slab along {'abc'[int(axis)]}, "
-                         f"{thickness:g} Å")
-    drawn = field_mod.restricted(grid, keep) if not keep.all() else grid
+            levels = field_mod.gradient_levels(lo, hi, rule.levels)
+            words.insert(0, f"{len(levels)} levels")
+        # the coarsening that keeps the whole gradient within the triangle
+        # budget, by counting the cubes each level crosses (a raw glass
+        # field crosses most of them; a smoothed one far fewer)
+        step, _predicted = field_mod.gradient_plan(np.asarray(drawn.values),
+                                                   levels, budget=budget)
+        meshes = field_mod.gradient_meshes(drawn, levels, lo, hi, alpha=1.0,
+                                           step=step, label="basicity",
+                                           cancelled=_cancel_hook(None),
+                                           ramp_positions=places)
+        if step > 1 and levels:
+            words.append(f"meshed at step {step} "
+                         f"({step * (rule.grid_spacing_ang or 0.5):g} Å)")
+        slices = []
+        if rule.slice_axis is not None:
+            axis = int(rule.slice_axis) % 3
+            box = np.asarray(fd.frame.box_ang, float)
+            u = box[(axis + 1) % 3]
+            v = box[(axis + 2) % 3]
+            origin = box[axis] * float(rule.slice_fraction) + 0.5 * (u + v)
+            size = float(max(np.linalg.norm(u), np.linalg.norm(v)))
+            # two triangles a cell: within the budget on its own
+            # cells of about 0.3 Å, read off the grid between its nodes,
+            # so the slice is smooth on a 1 Å grid; two triangles a cell,
+            # within the budget on its own
+            samples = int(min(200, max(24, size / 0.3),
+                              max(24, int((budget / 2) ** 0.5))))
+            slices = field_mod.slice_meshes(drawn, origin, u, v, size,
+                                            samples, lo, hi, alpha=1.0,
+                                            label="basicity slice")
+            words.append(f"slice normal to {'abc'[axis]} at "
+                         f"{rule.slice_fraction:g} of the box")
+        built = {"gradient": [(m.vertices, m.normals, m.color) for m in meshes],
+                 "slice": [(m.vertices, m.normals, m.color) for m in slices],
+                 "words": words}
+        fd._basicity_meshes[key] = built
     n_triangles = 0
-    levels = field_mod.gradient_levels(lo, hi, rule.levels)
-    # the coarsening that keeps the whole gradient within the triangle
-    # budget, by counting the cubes each level crosses (a glass field
-    # crosses most of them); the note states it
-    step, _predicted = field_mod.gradient_plan(np.asarray(drawn.values),
-                                               levels)
-    meshes = field_mod.gradient_meshes(drawn, levels, lo, hi,
-                                       alpha=float(rule.alpha),
-                                       step=step, label="basicity",
-                                       cancelled=_cancel_hook(None))
-    scene.overlay_meshes.extend(meshes)
-    n_triangles += sum(m.n_triangles for m in meshes)
-    if step > 1:
-        words.append(f"meshed at step {step} ({step * (rule.grid_spacing_ang or 0.5):g} Å)")
-    if rule.slice_axis is not None:
-        axis = int(rule.slice_axis) % 3
-        box = np.asarray(fd.frame.box_ang, float)
-        u = box[(axis + 1) % 3]
-        v = box[(axis + 2) % 3]
-        origin = (box[axis] * float(rule.slice_fraction)
-                  + 0.5 * (u + v))
-        size = float(max(np.linalg.norm(u), np.linalg.norm(v)))
-        samples = int(min(160, max(24, size / max(rule.grid_spacing_ang or 0.5,
-                                                   0.1))))
-        slices = field_mod.slice_meshes(drawn, origin, u, v, size, samples,
-                                        lo, hi, alpha=float(rule.slice_alpha),
-                                        label="basicity slice")
-        scene.overlay_meshes.extend(slices)
-        n_triangles += sum(m.n_triangles for m in slices)
-        words.append(f"slice normal to {'abc'[axis]} at "
-                     f"{rule.slice_fraction:g} of the box")
+    for part, label, alpha in (("gradient", "basicity", float(rule.alpha)),
+                               ("slice", "basicity slice",
+                                float(rule.slice_alpha))):
+        for vertices, normals, colour in built[part]:
+            # copies: the renderer sorts a mesh's triangles in place
+            scene.overlay_meshes.append(OverlayMesh(
+                np.array(vertices, np.float32), np.array(normals, np.float32),
+                colour, alpha, label=label))
+            n_triangles += len(vertices) // 3
     scene.value_legend = fld.legend(lo, hi)
-    note = (f"basicity sensed by {fld.label} ({fld.scale}): {lo:.3f} to "
-            f"{hi:.3f} over {100 * fld.fraction_defined:.0f} % of the box "
-            f"({rule.levels} levels, {_thousands(n_triangles)} triangles"
-            + (", " + ", ".join(words) if words else "") + ")")
+    smooth = (f", averaged over {rule.smooth_ang:g} Å"
+              if rule.smooth_ang and rule.smooth_ang > 0 else "")
+    note = (f"basicity sensed by {fld.label} ({fld.scale}{smooth}): {lo:.3f} "
+            f"to {hi:.3f} over {100 * fld.fraction_defined:.0f} % of the box "
+            f"({', '.join(built['words'])}; {_thousands(n_triangles)} "
+            "triangles)")
     return note, True
 
 
@@ -1717,6 +1809,18 @@ def apply_rules(scene, fd: FrameData, rules: Sequence[Rule], *,
             parts.append(note)
         else:
             problems.append(f"basicity map: {note}")
+            continue
+        if rule.slice_axis is not None and rule.slice_atoms_ang:
+            # the cross-section: the atoms within this distance of the
+            # slice's plane, the rest dimmed or left out like any rule's
+            from ..core.md_environment import slab_mask
+            near = slab_mask(fd.frame, int(rule.slice_axis) % 3,
+                             float(rule.slice_fraction),
+                             2.0 * float(rule.slice_atoms_ang))
+            keep = near if keep is None else keep & near
+            n_matching = int(keep.sum())
+            parts.append(f"{_thousands(n_matching)} of {_thousands(n)} atoms "
+                         f"within {rule.slice_atoms_ang:g} Å of the slice")
     if void_keep is not None:
         keep = void_keep if keep is None else keep & void_keep
     if keep is not None:
@@ -1858,7 +1962,7 @@ class ShowOnlyRow(RuleRow):
     def _on_descriptor(self, _index: int) -> None:
         name = self.descriptor.currentText()
         self.value.blockSignals(True)
-        if name in ("BVS", "phi"):
+        if name in ("BVS", "phi", "microscopic basicity"):
             self.value.setDecimals(2)
             self.value.setSingleStep(0.05)
             self.value.setSuffix(" v.u." if name == "BVS" else "")
@@ -2130,7 +2234,11 @@ class BasicityMapRow(RuleRow):
         self.alpha.setToolTip("Opacity of each surface.")
         self._add("Basicity map by", self.probe, "levels", self.levels,
                   "opacity", self.alpha)
-        self.grid_spacing_ang = _spin(0.5, 0.2, 3.0, 0.1, 1, " Å")
+        self.grid_spacing_ang = _spin(1.0, 0.2, 3.0, 0.1, 1, " Å")
+        self.grid_spacing_ang.setToolTip(
+            "The grid the field is computed on. 1 Å takes a couple of "
+            "seconds on a 55 Å box and is enough for the slice and the "
+            "regional map; halving it is eight times the work.")
         self.r_cut_ang = _spin(6.0, 2.0, 12.0, 0.5, 1, " Å")
         self.floor = _spin(field_mod.VALENCE_FLOOR_DEFAULT, 0.0, 5.0, 0.05, 2,
                            " v.u.")
@@ -2140,9 +2248,16 @@ class BasicityMapRow(RuleRow):
         extra = QHBoxLayout()
         extra.setContentsMargins(22, 0, 0, 0)
         extra.setSpacing(6)
+        self.smooth = _spin(2.0, 0.0, 8.0, 0.25, 2, " Å")
+        self.smooth.setToolTip(
+            "Average the field over a Gaussian of this width: 0 draws the "
+            "raw field, which over a glass changes from one oxygen to the "
+            "next; a couple of ångströms gives the regional map, where the "
+            "model is basic and where it is acidic, with smooth surfaces.")
         for label, widget in (("grid", self.grid_spacing_ang),
                               ("r_cut", self.r_cut_ang),
-                              ("floor", self.floor)):
+                              ("floor", self.floor),
+                              ("smooth", self.smooth)):
             extra.addWidget(QLabel(label))
             extra.addWidget(widget)
         extra.addStretch(1)
@@ -2166,7 +2281,21 @@ class BasicityMapRow(RuleRow):
         isolate.addWidget(self.region_radius)
         isolate.addStretch(1)
         self.column.insertLayout(2, isolate)
+        self.use_surfaces = QCheckBox("level surfaces")
+        self.use_surfaces.setToolTip(
+            "Draw the level surfaces. Off, the rule draws the slice alone: "
+            "with the atoms near it, the cross-section of the box, which "
+            "is the view a glass reads most plainly in.")
+        self.use_surfaces.setChecked(False)
         self.use_slice = QCheckBox("slice normal to")
+        self.use_slice.setChecked(True)
+        self.use_slice_atoms = QCheckBox("atoms within")
+        self.use_slice_atoms.setToolTip(
+            "Keep only the atoms within this distance of the slice's plane "
+            "(the rest dimmed or left out, as 'Outside the rules' says), so "
+            "the slice is seen with the atoms it cuts through.")
+        self.use_slice_atoms.setChecked(True)
+        self.slice_atoms = _spin(4.0, 0.5, 30.0, 0.5, 1, " Å")
         self.slice_axis = _combo(["a", "b", "c"], 2)
         self.slice_fraction = _spin(0.5, 0.0, 1.0, 0.05, 2)
         self.slice_fraction.setToolTip("Where the slice sits, as a fraction "
@@ -2184,6 +2313,29 @@ class BasicityMapRow(RuleRow):
         cut.addWidget(self.slice_alpha)
         cut.addStretch(1)
         self.column.insertLayout(3, cut)
+        near = QHBoxLayout()
+        near.setContentsMargins(44, 0, 0, 0)
+        near.setSpacing(6)
+        near.addWidget(self.use_slice_atoms)
+        near.addWidget(self.slice_atoms)
+        near.addWidget(QLabel("of the slice"))
+        near.addStretch(1)
+        self.column.insertLayout(4, near)
+        self.use_regions = QCheckBox("only the most basic and most acidic")
+        self.use_regions.setToolTip(
+            "Instead of a surface at every level, two surfaces: one bounds "
+            "the most acidic part of the box, the other the most basic, "
+            "each this share of the points that carry a value. The count "
+            "line gives the two values.")
+        self.regions_percent = _spin(15.0, 1.0, 49.0, 1.0, 0, " %")
+        ends = QHBoxLayout()
+        ends.setContentsMargins(22, 0, 0, 0)
+        ends.setSpacing(6)
+        ends.addWidget(self.use_surfaces)
+        ends.addWidget(self.use_regions)
+        ends.addWidget(self.regions_percent)
+        ends.addStretch(1)
+        self.column.insertLayout(5, ends)
         self.setToolTip(
             "The basicity a probe cation would sense at every point of the "
             "box: the mean of the anions' microscopic basicity weighted by "
@@ -2195,9 +2347,12 @@ class BasicityMapRow(RuleRow):
             "the one chosen under Tools > Basicity.")
         for box in (self.levels, self.alpha, self.grid_spacing_ang,
                     self.r_cut_ang, self.floor, self.window_lo, self.window_hi,
-                    self.region_radius, self.slice_fraction, self.slice_alpha):
+                    self.region_radius, self.slice_fraction, self.slice_alpha,
+                    self.smooth, self.regions_percent, self.slice_atoms):
             box.valueChanged.connect(lambda _v: self.changed.emit())
-        for box in (self.use_window, self.use_slice):
+        self.use_window.toggled.connect(self._open_window)
+        for box in (self.use_window, self.use_slice, self.use_regions,
+                    self.use_surfaces, self.use_slice_atoms):
             box.toggled.connect(lambda _on: self.changed.emit())
         self.probe.currentTextChanged.connect(lambda _t: self.changed.emit())
         self.region.currentIndexChanged.connect(lambda _i: self.changed.emit())
@@ -2206,7 +2361,28 @@ class BasicityMapRow(RuleRow):
         self._finish()
         self.set_frame_data(None)
 
+    def _open_window(self, on: bool) -> None:
+        """'only between' ticked while its two values are still the blank
+        0 and 1: they open on the range of the frame's own lambda, which
+        bounds the field's."""
+        fd = getattr(self, "_fd", None)
+        if not on or fd is None or (self.window_lo.value(),
+                                    self.window_hi.value()) != (0.0, 1.0):
+            return
+        try:
+            values = fd.basicity_values()
+        except Exception:                     # a frame without a table
+            return
+        finite = values[np.isfinite(values)]
+        if finite.size:
+            for box, value in ((self.window_lo, float(finite.min())),
+                               (self.window_hi, float(finite.max()))):
+                box.blockSignals(True)
+                box.setValue(value)
+                box.blockSignals(False)
+
     def set_frame_data(self, fd: FrameData | None) -> None:
+        self._fd = fd
         current = self.probe.currentText()
         self.probe.blockSignals(True)
         self.probe.clear()
@@ -2263,7 +2439,15 @@ class BasicityMapRow(RuleRow):
                     slice_axis=(int(self.slice_axis.currentIndex())
                                 if self.use_slice.isChecked() else None),
                     slice_fraction=float(self.slice_fraction.value()),
-                    slice_alpha=float(self.slice_alpha.value()))
+                    slice_alpha=float(self.slice_alpha.value()),
+                    smooth_ang=float(self.smooth.value()),
+                    regions_percent=(float(self.regions_percent.value())
+                                     if self.use_regions.isChecked() else None),
+                    surfaces=self.use_surfaces.isChecked(),
+                    slice_atoms_ang=(float(self.slice_atoms.value())
+                                     if self.use_slice.isChecked()
+                                     and self.use_slice_atoms.isChecked()
+                                     else None))
 
     def load_spec(self, spec: dict) -> None:
         """Set the row from a saved rule (``dataclasses.asdict(Rule)``)."""
@@ -2276,7 +2460,8 @@ class BasicityMapRow(RuleRow):
                           ("floor_vu", self.floor),
                           ("region_radius_ang", self.region_radius),
                           ("slice_fraction", self.slice_fraction),
-                          ("slice_alpha", self.slice_alpha)):
+                          ("slice_alpha", self.slice_alpha),
+                          ("smooth_ang", self.smooth)):
             if name in spec and spec[name] is not None:
                 try:
                     box.setValue(type(box.value())(spec[name]))
@@ -2290,6 +2475,15 @@ class BasicityMapRow(RuleRow):
         keys = [k for _, k in self._REGIONS]
         if spec.get("region") in keys:
             self.region.setCurrentIndex(keys.index(spec["region"]))
+        self.use_surfaces.setChecked(bool(spec.get("surfaces", True)))
+        near = spec.get("slice_atoms_ang")
+        self.use_slice_atoms.setChecked(bool(near))
+        if near:
+            self.slice_atoms.setValue(float(near))
+        percent = spec.get("regions_percent")
+        self.use_regions.setChecked(bool(percent))
+        if percent:
+            self.regions_percent.setValue(float(percent))
         axis = spec.get("slice_axis")
         self.use_slice.setChecked(axis is not None)
         if axis is not None:

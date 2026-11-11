@@ -812,6 +812,40 @@ the Atom tab, or to the toolbar's slab. Both follow the scale chosen under
 <i>Tools &rsaquo; Basicity</i>, and the count line under the rules states
 the probe, the scale, the range drawn and the share of the box that carries
 a value.</p>
+<h2>Which view shows what</h2>
+<p>A glass box is tens of &aring;ngstr&ouml;ms deep, and anything drawn
+through all of it overlaps. Four views, from the plainest:</p>
+<ul>
+<li><b>The cross-section.</b> A new <i>Basicity map</i> rule starts as one:
+the slice normal to a box axis, colour-mapped, with only the atoms within a
+few &aring;ngstr&ouml;ms of its plane (<i>atoms within &hellip; of the
+slice</i>; set <i>Outside the rules</i> to <i>left out</i>). Move the slice
+with <i>at</i>. Acidic network and basic, modifier-rich patches read
+directly, with the atoms that make them.</li>
+<li><b>The oxygens themselves.</b> <i>Colour atoms by &rsaquo; microscopic
+basicity</i>, and <i>Show only O where microscopic basicity &ge; &hellip;</i>
+to isolate the most basic (or, with &le;, the most acidic) oxygens.
+<i>Basicity about every atom</i> also colours each cation by the mean
+&lambda; of the anions it is bonded to, so the whole frame is one
+gradient.</li>
+<li><b>The regional map.</b> <i>smooth</i> averages the field over a Gaussian
+of that width: 0 is the raw field, which over a glass changes from one oxygen
+to the next; a couple of &aring;ngstr&ouml;ms shows where the model is basic
+and where it is acidic. With <i>level surfaces</i> and <i>only the most basic
+and most acidic</i>, two surfaces bound the stated share of the box at each
+end of the scale, in the two end colours of the ramp, instead of a shell at
+every level.</li>
+<li><b>The full gradient</b> of evenly spaced level surfaces, which suits a
+crystal cell or a part isolated to a slab or a sphere more than a whole
+box.</li>
+</ul>
+<p>On a crystal the same choices are on the Volume tab: <i>smooth over</i>
+beside the valence floor, and <i>only the lowest and the highest</i> under
+<i>In the 3D view</i>. The field and the single isosurface repeat over the
+cell range the atoms are drawn over. A change of opacity redraws the same
+triangles; the field is computed again only when the probe, the grid, the
+scale or the bond threshold changes, since &lambda; is summed over the
+bonded contacts.</p>
 <p {note}>A smaller probe (a shorter <i>R</i><sub>0</sub>) weights the
 nearest anion more, so the field changes with the probe chosen; the legend
 names it. The field is a construction of the probe picture, stated as such
@@ -820,9 +854,14 @@ measured quantity at every point. Over a glass the field varies at the
 &aring;ngstr&ouml;m scale, so a level surface crosses a large share of the
 grid: the surfaces are meshed at every <i>n</i>th grid point to stay within
 a triangle budget, and the count line says which <i>n</i>; a finer grid
-sharpens the slice and the numbers, not the surfaces. The field itself
-takes seconds on a large box (the rule's note gives an estimate) and is
-kept until the probe or the grid changes.</p>
+sharpens the numbers, not the surfaces. On a machine with no graphics card
+the budget is far lower (every translucent triangle is painted on every
+frame there), so the surfaces are coarser and the cross-section is the view
+to use. The field itself takes seconds on a large box (the rule's note
+gives an estimate) and is kept until the probe, the grid, the scale or the
+threshold changes. An anion whose bonded contacts carry well over its
+formal charge &mdash; an early structure with misplaced atoms &mdash; reads
+a &lambda; below any measured oxide, and its notes state the sum.</p>
 <p {note}>The MD workspace has the same analysis as <i>basicity</i>: the
 composition's &Lambda;, the &lambda; of every anion atom as a histogram per
 anion element, its mean, and the means by speciation (free, non-bridging,

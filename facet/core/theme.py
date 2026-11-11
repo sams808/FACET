@@ -242,6 +242,10 @@ class Theme:
 
     color_mode: ColorMode = ColorMode.ELEMENT
     bond_color_mode: BondColorMode = BondColorMode.HALF_ATOM
+    # the scale of basicity moderating parameters the basicity colour mode
+    # reads (facet.core.basicity.SCALE_KEYS); the window keeps it equal to
+    # the one chosen under Tools > Basicity
+    basicity_scale: str = "pauling"
     uniform_atom_color: RGB = (0.62, 0.64, 0.68)
     uniform_bond_color: RGB = (0.45, 0.47, 0.51)
 

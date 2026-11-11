@@ -72,6 +72,11 @@ GAMMA_OFFSET = 0.26
 ANION_FACTORS: dict[str, float] = {"O": 1.0, "F": 2.3}
 # The formal charge taken for an anion site that states none.
 ANION_CHARGES: dict[str, int] = {"O": 2, "F": 1}
+# Above this multiple of its formal charge in bonded valence, an anion's
+# lambda carries a note stating the sum (a statement of the input, not a
+# threshold on the result): 1.25 is past any bond-valence sum a refined
+# structure gives an oxide ion.
+OVERBONDED_FACTOR = 1.25
 
 # Pauling's electronegativity scale as he tabulated it in 1960 (The Nature of
 # the Chemical Bond, 3rd ed., Table 3-8), to one decimal. This is the table
@@ -450,6 +455,14 @@ def micro_basicity(result, scale=DEFAULT_SCALE, *,
         return out
     out.value = 1.0 - sum(s.lowering for s in out.shares if s.bonded)
     out.value_listed = 1.0 - sum(s.lowering for s in out.shares)
+    if out.sum_bonded > OVERBONDED_FACTOR * charge:
+        # a fact about the input, stated because lambda scales with the sum:
+        # an anion drawn with twice its charge in bonds reads far below any
+        # measured oxide, and the number is the coordinates', not the scale's
+        out.notes.append(
+            f"the bonded contacts carry {out.sum_bonded:.2f} v.u. against a "
+            f"formal charge of {charge:g}; lambda is lowered in proportion "
+            "to that sum")
     derived = out.derived_species
     if derived and scale.key != PAULING.key:
         out.notes.append("gamma from the electronegativity relation, not "
@@ -775,6 +788,10 @@ class FrameBasicity:
     value_listed: np.ndarray
     classes: np.ndarray
     bulk: BulkBasicity
+    # (N,) for a cation, the bond-valence-weighted mean lambda of the anions
+    # it is bonded to (NaN for an anion, and for a cation none of whose
+    # bonded anions has a lambda): EnvironmentBasicity.value, per atom
+    environment: np.ndarray | None = None
     n_missing_gamma: int = 0
     missing: tuple[str, ...] = ()
     excluded: tuple[str, ...] = ()
@@ -840,6 +857,18 @@ def frame_basicity(table, scale=DEFAULT_SCALE, *, v_bond: float,
     n_missing = int((is_anion & np.isfinite(factor_atom)
                      & unknown.any(axis=1)).sum())
 
+    # the anions about each cation: its bonded contacts are anions (the
+    # table lists counter-ions), each with the lambda just computed
+    environment = np.full(n, np.nan)
+    if width:
+        lam_nbr = value[safe]
+        counted = bonded & np.isfinite(lam_nbr) & ~is_anion[:, None]
+        weight = np.where(counted, v, 0.0)
+        total = weight.sum(axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            mean = (weight * np.where(counted, lam_nbr, 0.0)).sum(axis=1) / total
+        environment = np.where(total > 0, mean, np.nan)
+
     classes = np.full(n, -1, dtype=np.int64)
     if formers:
         former = np.isin(elements, [str(f) for f in formers])
@@ -861,8 +890,8 @@ def frame_basicity(table, scale=DEFAULT_SCALE, *, v_bond: float,
     if excluded:
         notes.append("no optical-basicity scale for " + ", ".join(excluded))
     return FrameBasicity(scale.key, v_bond, value, value_listed, classes, bulk,
-                         n_missing, tuple(missing), tuple(excluded),
-                         tuple(notes))
+                         environment, n_missing, tuple(missing),
+                         tuple(excluded), tuple(notes))
 
 
 CLASS_NAMES = {0: "free", 1: "NBO", 2: "BO", 3: "tricluster"}

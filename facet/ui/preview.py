@@ -2676,6 +2676,8 @@ class PreviewWindow(QMainWindow):
         the application left alone.
         """
         self.theme = theme
+        if getattr(self, "utilities", None) is not None:
+            theme.basicity_scale = self.utilities.basicity_scale()
         self.explorer.set_theme(theme)
         self.diffraction.apply_theme(theme)
         self.volume_panel.apply_theme(theme)
@@ -2785,9 +2787,13 @@ class PreviewWindow(QMainWindow):
                      "centre": slab.centre, "thickness": slab.thickness,
                      "enabled": slab.enabled},
             "v_bond": self.project.v_bond,
+            "basicity_scale": self.utilities.basicity_scale(),
         }
 
     def _restore(self, snapshot: dict) -> None:
+        if snapshot.get("basicity_scale"):
+            # before anything is drawn from it; an unknown key is ignored
+            self.utilities.set_basicity_scale(str(snapshot["basicity_scale"]))
         if not snapshot:
             return
         entry = self._crystal()
@@ -2831,6 +2837,20 @@ class PreviewWindow(QMainWindow):
         self._apply_field_overlays()
         self.view.set_scene(self.scene, reframe=False)
 
+    def _field_triangle_budget(self) -> int:
+        """The most triangles the Volume tab's gradient may draw: the field
+        module's budget, lowered on the tier that draws with QPainter (a
+        machine with no graphics card), where every translucent triangle
+        is painted on every frame."""
+        from ..core import basicity_field as field_mod
+        from ..gl import caps as caps_mod
+
+        caps = getattr(self.view, "caps", None)
+        painter = (caps is not None and caps.tier is caps_mod.Tier.BASIC) \
+            or getattr(self.view, "_fallback", None) is not None
+        return (field_mod.TRIANGLE_BUDGET_PAINTER if painter
+                else field_mod.TRIANGLE_BUDGET)
+
     def _apply_field_overlays(self) -> None:
         """Put the field overlays the Volume tab asks for onto ``self.scene``
         (:mod:`facet.core.basicity_field`), replacing the previous ones, and
@@ -2852,6 +2872,10 @@ class PreviewWindow(QMainWindow):
         entry = self._crystal()
         structure = entry.structure if entry is not None else None
         grid = spec.grid
+        # the field repeats with the lattice: drawn over the same block of
+        # cells as the atoms
+        cell_range = tuple(max(1, int(b.value())) for b in self.range_boxes)
+        n_cells = cell_range[0] * cell_range[1] * cell_range[2]
         values = np.asarray(grid.values, float)
         finite = values[np.isfinite(values)]
         if not finite.size:
@@ -2901,12 +2925,26 @@ class PreviewWindow(QMainWindow):
 
         n_triangles = 0
         if spec.show_gradient:
-            levels = field_mod.gradient_levels(lo, hi, spec.levels)
+            if spec.regions_percent:
+                levels = field_mod.region_levels(np.asarray(drawn.values),
+                                                 spec.regions_percent)
+                if len(levels) == 2:
+                    notes.append(
+                        f"the two surfaces bound the lowest and the highest "
+                        f"{spec.regions_percent:g} % ({levels[0]:.4g} and "
+                        f"{levels[1]:.4g})")
+            else:
+                levels = field_mod.gradient_levels(lo, hi, spec.levels)
             step, _predicted = field_mod.gradient_plan(
-                np.asarray(drawn.values), levels)
-            meshes = field_mod.gradient_meshes(
+                np.asarray(drawn.values), levels,
+                budget=max(self._field_triangle_budget() // n_cells, 2000))
+            meshes = field_mod.tiled(field_mod.gradient_meshes(
                 drawn, levels, lo, hi, alpha=spec.gradient_alpha, step=step,
-                colour_of=colour_of, label="field gradient")
+                colour_of=colour_of, label="field gradient",
+                ramp_positions=(field_mod.REGION_RAMP_POSITIONS
+                                if spec.regions_percent and len(levels) == 2
+                                else None)),
+                grid.cell, cell_range)
             scene.overlay_meshes.extend(meshes)
             n_triangles += sum(m.n_triangles for m in meshes)
             if step > 1:
@@ -2954,7 +2992,9 @@ class PreviewWindow(QMainWindow):
 
         try:
             vertices, faces, normals = volume_mod.isosurface(
-                grid, level, step=self.volume_panel.iso_step_value())
+                grid, level, step=self.volume_panel.iso_step_value(),
+                cell_range=tuple(max(1, int(b.value()))
+                                 for b in self.range_boxes))
         except (ValueError, MemoryError) as error:
             self.statusBar().showMessage(str(error), 9000)
             return
@@ -3378,12 +3418,20 @@ class PreviewWindow(QMainWindow):
     def _on_basicity_scale(self, key: str) -> None:
         """The Tools tab's scale changed: the Site tab, every model's Atom
         tab and the colouring by basicity read the new one."""
+        self.theme.basicity_scale = str(key)
         for controller in self.models:
             try:
                 controller.set_basicity_scale(key)
             except Exception:                 # a model without an atom read
                 pass
         self._update_analysis()
+        # a basicity field on the Volume tab was computed on the other
+        # scale: it is cleared rather than left drawn under the new name
+        if self.volume_panel.field is not None:
+            self.volume_panel.clear()
+            self.statusBar().showMessage(
+                "The basicity field was on the previous scale and has been "
+                "cleared; Compute builds it on the new one.", 9000)
         if getattr(self.theme, "color_mode", None) is theme_mod.ColorMode.BASICITY:
             self._rebuild()
 
