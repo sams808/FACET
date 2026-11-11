@@ -2,6 +2,12 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
+## 2.0.0 — 2026-11-11
+
+- Version 2.0.0: the basicity rechecked and made a library, a new window frame  `408acdd`  2026-11-11
+- Build: a tool that upgrades the installed copy from dist  `feed685`  2026-11-11
+- Changelog for 1.3.0  `76dfef8`  2026-11-11
+
 ## 1.3.0 — 2026-11-11
 
 - Version 1.3.0: an audit of the shared build, and the basicity made legible  `df56539`  2026-11-11
