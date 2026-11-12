@@ -2,11 +2,16 @@
 
 One line per commit, newest first; a version heading marks the commit that began it.
 
-## 2.0.1 — 2026-11-12
+## 2.1.0 — 2026-11-12
 
+- Version 2.1.0: FACET as a Python library, with a manual whose examples are run  `a5a8279`  2026-11-12
+- Changelog for 2.0.1  `eb01137`  2026-11-12
 - Build: the changelog lists what followed a version commit under that version  `cafafad`  2026-11-12
 - Verification: what the first runs on GitHub counted and found  `c2ffad4`  2026-11-12
 - Tests: one toolbar row is asserted where the window got its width  `27df7d2`  2026-11-12
+
+## 2.0.1 — 2026-11-12
+
 - Version 2.0.1: continuous integration, a self-check for any copy  `aa6da87`  2026-11-12
 - Changelog for 2.0.0  `605a517`  2026-11-11
 
