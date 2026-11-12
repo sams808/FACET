@@ -1,0 +1,64 @@
+# Practice glass for the FACET library manual: 20Na2O-10CaO-5Al2O3-65SiO2, 1200 atoms.
+# Pedone et al., J. Phys. Chem. B 110 (2006) 11780: partial charges, Morse + C/r^12.
+# Melt at 3500 K, quench at 10 K/ps, relax at 300 K and zero pressure.
+# Usage: lmp -in in.practice_glass [-var bench 1]      (bench: 2000 steps of the melt only)
+
+units           metal
+atom_style      charge
+boundary        p p p
+read_data       start.data
+
+# types: 1 O, 2 Si, 3 Al, 4 Na, 5 Ca
+pair_style      hybrid/overlay pedone 8.0 coul/long 10.0
+kspace_style    pppm 1.0e-5
+pair_coeff      * * coul/long
+pair_coeff      1 1 pedone 0.042395 1.379316 3.618701 22.0
+pair_coeff      1 2 pedone 0.340554 2.006700 2.100000 1.0
+pair_coeff      1 3 pedone 0.361581 1.900442 2.164818 0.9
+pair_coeff      1 4 pedone 0.023363 1.763867 3.006315 5.0
+pair_coeff      1 5 pedone 0.030211 2.241334 2.923245 5.0
+pair_modify     shift yes
+
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes
+timestep        0.001
+thermo_style    custom step temp pe press vol density
+thermo          2000
+
+# 1. take the overlaps out of the random start
+minimize        1.0e-4 1.0e-6 2000 20000
+reset_timestep  0
+velocity        all create 3500.0 4928459 dist gaussian
+fix             limit all nve/limit 0.1
+fix             bath all langevin 3500.0 3500.0 0.1 90210
+run             5000
+unfix           limit
+unfix           bath
+
+variable        bench index 0
+if "${bench} == 1" then &
+  "fix melt all nvt temp 3500.0 3500.0 0.1" &
+  "run 2000" &
+  "quit"
+
+# 2. melt, 60 ps at 3500 K
+fix             melt all nvt temp 3500.0 3500.0 0.1
+run             60000
+unfix           melt
+
+# 3. quench to 300 K at 10 K/ps
+fix             quench all nvt temp 3500.0 300.0 0.1
+run             320000
+unfix           quench
+
+# 4. relax the volume at 300 K and zero pressure, 60 ps
+fix             relax all npt temp 300.0 300.0 0.1 iso 0.0 0.0 1.0
+run             60000
+
+# 5. 10 ps more, a frame every 2 ps: the practice trajectory (6 frames)
+reset_timestep  0
+dump            traj all custom 2000 practice_glass.lammpstrj id type element x y z
+dump_modify     traj element O Si Al Na Ca sort id format float %.4f
+run             10000
+undump          traj
+write_data      practice_glass.data nocoeff

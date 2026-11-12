@@ -1,0 +1,1407 @@
+<!doctype html><html lang='en'><head><meta charset='utf-8'><title>FACET library manual</title><style>
+@page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+html { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 10pt;
+       color: #16181c; line-height: 1.45; }
+body { margin: 0; }
+h1 { font-size: 21pt; margin: 0 0 4pt 0; color: #10233f; }
+h2 { font-size: 14.5pt; margin: 20pt 0 6pt 0; padding-top: 6pt; color: #10233f;
+     border-top: 1.2pt solid #10233f; break-after: avoid; }
+h3 { font-size: 11.5pt; margin: 13pt 0 4pt 0; color: #1d3a63; break-after: avoid; }
+p, li { orphans: 3; widows: 3; }
+p { margin: 5pt 0; }
+ul, ol { margin: 4pt 0 4pt 0; padding-left: 16pt; }
+a { color: #1d4f91; text-decoration: none; }
+code { font-family: Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace; font-size: 8.6pt;
+       background: #eef1f5; padding: 0.5pt 2.5pt; border-radius: 2pt; overflow-wrap: anywhere; }
+pre { font-family: Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace; font-size: 7.6pt;
+      line-height: 1.32; margin: 5pt 0; padding: 6pt 8pt; border-radius: 3pt;
+      white-space: pre-wrap; overflow-wrap: anywhere; break-inside: avoid-page; }
+pre code { background: none; padding: 0; font-size: inherit; }
+pre.python { background: #f3f5f8; border-left: 2.5pt solid #1d4f91; }
+pre.output { background: #fbfaf6; border-left: 2.5pt solid #b9a878; color: #2c2a25; }
+pre.other { background: #f3f5f8; border-left: 2.5pt solid #7a8594; }
+table { border-collapse: collapse; margin: 6pt 0; font-size: 8.8pt; width: 100%; }
+th { text-align: left; background: #10233f; color: #fff; padding: 3pt 6pt; font-weight: 600; }
+td { padding: 3pt 6pt; border-bottom: 0.5pt solid #d5dae2; vertical-align: top; }
+td code, th code { white-space: normal; overflow-wrap: anywhere; }
+img { max-width: 62%; display: block; margin: 6pt auto; }
+blockquote { margin: 7pt 0; padding: 5pt 10pt; background: #eef4fb; border-left: 2.5pt solid #1d4f91; }
+blockquote p { margin: 2pt 0; }
+.cover { background: #10233f; color: #fff; padding: 16pt 18pt; border-radius: 4pt; margin-bottom: 12pt; }
+.cover h1 { color: #fff; }
+.cover p { margin: 2pt 0; color: #d7e0ee; }
+</style></head><body><div class='cover'><h1>FACET in your own Python code</h1>
+<p>A manual for the FACET library, version 2.1.0.</p>
+<p>Everything the FACET window computes, called from a script or a notebook:
+coordination numbers cut by bond valence, bond-valence sums, powder patterns
+and pair distribution functions of crystal structures; Qn, oxygen speciation,
+rings, g(r), S(Q) and diffusion of molecular-dynamics glass models; optical
+basicity of both. Every example below was run to produce the output printed
+under it.</p></div><h2>1. Install and check</h2>
+<p>The library needs Python 3.11 or newer. It is the same package as the
+application, installed from GitHub:</p>
+<pre class="python"><code>python -m pip install &quot;git+https://github.com/sams808/FACET&quot;
+python -m pip install pandas matplotlib openpyxl          # tables, figures, Excel files
+</code></pre>
+<p>The second line is optional: without pandas, matplotlib and openpyxl the
+library still computes everything, and only <code>to_frame()</code>, the figures and the
+<code>.xlsx</code> exports are unavailable. The FACET application installed from
+<code>FACET-Setup.exe</code> carries its own private Python and cannot be imported from
+a script; the <code>pip</code> installation above is separate and can live beside it.</p>
+<p>To check an installation, and to see which version is in use:</p>
+<pre class="python"><code>import facet
+
+print(facet.__version__)
+print(facet.selfcheck().title)
+</code></pre>
+<pre class="output"><code>2.1.0
+90 of 90 checks within tolerance
+</code></pre>
+<p><code>facet.selfcheck()</code> recomputes the numbers FACET's documentation states for
+its bundled structures. From a terminal, <code>python -m facet --selfcheck</code> runs a
+longer check that also opens the window.</p>
+<p>To move to a newer version, repeat the first <code>pip</code> line with <code>--upgrade</code>.</p>
+<h2>2. A first look</h2>
+<p>Six crystal structures and one small glass model are bundled with FACET, so
+every example in this manual runs as written. <code>facet.example(name)</code> opens
+one; with a file of your own, <code>facet.read(path)</code> opens a crystal structure
+and <code>facet.model(path)</code> a molecular-dynamics model.</p>
+<pre class="python"><code>print(&quot;, &quot;.join(facet.examples()))
+</code></pre>
+<pre class="output"><code>quartz, eulytite, senarmontite, valentinite, cryolite, bipo4, glass, glass-trajectory
+</code></pre>
+<p>A crystal structure, and the coordination of its cation sites:</p>
+<pre class="python"><code>c = facet.example(&quot;eulytite&quot;)            # Bi4(SiO4)3
+print(c)
+print(c.sites().select(&quot;site&quot;, &quot;ox&quot;, &quot;CN&quot;, &quot;BVS / v.u.&quot;, &quot;phi&quot;, &quot;plateau / decades&quot;))
+</code></pre>
+<pre class="output"><code>&lt;Crystal 'Eulytine' I -4 3 d: 3 sites, 76 atoms in the cell; v_bond 0.075 v.u.&gt;
+sites of Eulytine
+site  ox  CN  BVS / v.u.  phi     plateau / decades
+----  --  --  ----------  ------  -----------------
+Bi    3   6   3.2404      0.4194  1.092
+Si    4   4   4.0139      0       1.7005
+note: bond threshold 0.075 v.u., listing threshold 0.02 v.u., parameters: Brese &amp; O'Keeffe 1991
+</code></pre>
+<p>A glass model, and the Qn distribution of its silicon:</p>
+<pre class="python"><code>m = facet.example(&quot;glass&quot;)               # 20Na2O-10CaO-5Al2O3-65SiO2, 1200 atoms
+print(repr(m))
+r = m.analyse(&quot;glass&quot;, formers=[&quot;Si&quot;, &quot;Al&quot;])
+print(r.table(&quot;glass&quot;, &quot;Qn Si (BV)&quot;).select(&quot;key&quot;, &quot;mean (fraction)&quot;, &quot;items per frame&quot;))
+</code></pre>
+<pre class="output"><code>&lt;Model 'practice_glass.data': 1200 atoms, 1 frame(s)&gt;
+glass: Qn Si (BV)
+key  mean (fraction)  items per frame
+---  ---------------  ---------------
+0    0                260
+1    0.0231           260
+2    0.1231           260
+3    0.4308           260
+4    0.4192           260
+5    0.0038           260
+note: one frame: the spread across frames (std, ddof = 1) is undefined and given as NaN
+</code></pre>
+<p>Optical basicity of a composition:</p>
+<pre class="python"><code>print(facet.basicity.composition(&quot;20Na2O-10CaO-5Al2O3-65SiO2&quot;).value)
+</code></pre>
+<pre class="output"><code>0.5935961013556568
+</code></pre>
+<p>The rest of the manual takes these three in turn: crystal structures
+(section 4), glass models (section 5) and optical basicity (section 6), after
+a section on what the results are.</p>
+<h2>3. What comes back</h2>
+<h3>Tables</h3>
+<p>Anything that is a list of rows comes back as a <code>Table</code>. A <code>Table</code> is a
+Python list of dictionaries, one dictionary per row, and nothing else has to
+be learned to use it:</p>
+<pre class="python"><code>sites = c.sites()
+print(type(sites[0]), len(sites))
+print(sites[0][&quot;site&quot;], sites[0][&quot;CN&quot;], sites[0][&quot;BVS / v.u.&quot;])
+</code></pre>
+<pre class="output"><code>&lt;class 'dict'&gt; 2
+Bi 6 3.2403648509228815
+</code></pre>
+<p>It carries a few helpers for the usual next step. Column names state their
+unit, so the name to type is the name that is printed.</p>
+<pre class="python"><code>print(sites.columns[:9])
+print(sites.column(&quot;BVS / v.u.&quot;))                 # one column as a numpy array
+print(sites.where(element=&quot;Bi&quot;).select(&quot;site&quot;, &quot;CN&quot;, &quot;shortest bond / Å&quot;, &quot;longest bond / Å&quot;))
+</code></pre>
+<pre class="output"><code>['site', 'element', 'ox', 'Wyckoff', 'multiplicity', 'CN', 'CN listed', 'ECoN', 'BVS / v.u.']
+[3.24036485 4.01386418]
+sites of Eulytine
+site  CN  shortest bond / Å  longest bond / Å
+----  --  -----------------  ----------------
+Bi    6   2.158              2.606
+note: bond threshold 0.075 v.u., listing threshold 0.02 v.u., parameters: Brese &amp; O'Keeffe 1991
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Helper</th>
+<th>Gives</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>table.columns</code></td>
+<td>the column names</td>
+</tr>
+<tr>
+<td><code>table.column(name)</code></td>
+<td>one column as a numpy array</td>
+</tr>
+<tr>
+<td><code>table.select(a, b, ...)</code></td>
+<td>the same rows with only these columns</td>
+</tr>
+<tr>
+<td><code>table.where(element="O")</code></td>
+<td>the rows whose column equals the value</td>
+</tr>
+<tr>
+<td><code>table.sorted_by(name, reverse=False)</code></td>
+<td>the rows in order</td>
+</tr>
+<tr>
+<td><code>table.head(n)</code></td>
+<td>the first rows</td>
+</tr>
+<tr>
+<td><code>table.to_frame()</code></td>
+<td>a pandas <code>DataFrame</code></td>
+</tr>
+<tr>
+<td><code>table.to_csv(path)</code></td>
+<td>a CSV file, the notes as comment lines</td>
+</tr>
+<tr>
+<td><code>print(table)</code>, <code>table.text(notes=False)</code></td>
+<td>aligned text, with the title and the notes, or without the notes</td>
+</tr>
+<tr>
+<td><code>table.notes</code></td>
+<td>how the rows were produced: thresholds, parameters</td>
+</tr>
+</tbody>
+</table>
+<p>With pandas, a table becomes a data frame in one call, and everything pandas
+does is then available:</p>
+<pre class="python"><code>frame = c.sites(anions=True).to_frame()
+print(frame.groupby(&quot;element&quot;)[[&quot;CN&quot;, &quot;BVS / v.u.&quot;]].mean().round(3))
+</code></pre>
+<pre class="output"><code>          CN  BVS / v.u.
+element
+Bi       6.0       3.240
+O        3.0       2.084
+Si       4.0       4.014
+</code></pre>
+<p>In a Jupyter notebook a <code>Table</code> left as the last line of a cell is displayed
+as a formatted table.</p>
+<h3>The engine's own objects</h3>
+<p>A calculation that produces more than rows (a powder pattern, a pair
+distribution function, a field over the cell, the analysis of one site)
+returns the object the application itself works with. Each has plain
+attributes, usually numpy arrays, and a <code>notes</code> list. The sections below name
+the attributes worth knowing; <code>help(obj)</code> and <code>dir(obj)</code> show the rest.</p>
+<h3>Notes</h3>
+<p>FACET does not grade its results. A number comes with the statements needed
+to read it: which threshold, which parameter set, whether a bond-valence
+parameter was estimated, what a file left unsaid. They are in <code>table.notes</code>,
+<code>result.notes</code> and, for a model, in <code>print(model)</code>. Reading them is part of
+using the library.</p>
+<h3>Two thresholds</h3>
+<p>Most numbers below depend on two thresholds, both in valence units (v.u.):</p>
+<ul>
+<li><code>v_bond</code> (default 0.075): a contact whose bond valence is above it counts
+  as a bond. It replaces a distance cutoff, and it cuts every anion at the
+  same bond strength instead of at a distance chosen for oxygen.</li>
+<li><code>v_list</code> (default 0.02): contacts above it are kept in the tables, bonded
+  or not.</li>
+</ul>
+<p>The bond valence of a contact of length d is <code>exp((R0 - d) / b)</code>, with <code>R0</code>
+and <code>b</code> from a table of bond-valence parameters (Brese and O'Keeffe 1991 by
+default).</p>
+<pre class="python"><code>print(facet.bond_valence(1.61, r0=1.624))         # a Si-O bond of 1.61 Å
+print(facet.cutoff_distance(r0=1.624, v=0.075))   # the Si-O distance where v = 0.075
+</code></pre>
+<pre class="output"><code>1.0385628036326633
+2.582398851214956
+</code></pre>
+<h2>4. Crystal structures</h2>
+<h3>Reading a structure</h3>
+<p><code>facet.read</code> takes CIF, VESTA, POSCAR and CONTCAR, SHELX (<code>.res</code>, <code>.ins</code>),
+PDB, CrystalMaker text and XYZ files.</p>
+<pre class="python"><code>c = facet.read(&quot;my_structure.cif&quot;)
+c = facet.read(&quot;several.cif&quot;, block=&quot;phase_2&quot;)        # one data block of a CIF
+all_of_them = facet.read_all(&quot;several.cif&quot;)           # every block, a list
+c = facet.read(&quot;my_structure.cif&quot;, v_bond=0.10)       # another bond threshold
+c = facet.read(&quot;my_structure.cif&quot;, params=&quot;bvparm2020&quot;)   # the IUCr parameter table
+</code></pre>
+<p>What was read:</p>
+<pre class="python"><code>c = facet.example(&quot;bipo4&quot;)
+print(c.name, &quot;|&quot;, c.formula, &quot;|&quot;, c.spacegroup)
+print(c.cell.lengths, c.cell.angles, round(c.cell.volume, 2))
+print(c.labels)
+print(c.composition()[&quot;counts&quot;], round(c.density()[&quot;density&quot;], 3), &quot;g/cm3&quot;)
+</code></pre>
+<pre class="output"><code>Ximengite | Bi O4 P | P 31 2 1
+(6.966, 6.966, 6.46) (90.0, 90.0, 120.0) 271.48
+['Bi', 'P', 'O1', 'O2']
+{'Bi': 3.0, 'P': 3.0, 'O': 12.0} 5.578 g/cm3
+</code></pre>
+<p><code>c.check()</code> lists what the reading of the file found worth stating
+(occupancies, missing fields, very short contacts), <code>c.oxidation_states()</code>
+the oxidation state given to each cation and where it came from, and
+<code>c.atoms()</code> every atom of the cell with its coordinates.</p>
+<h3>The sites</h3>
+<p><code>c.sites()</code> has one row per cation site; <code>c.sites(anions=True)</code> adds the
+anion sites.</p>
+<pre class="python"><code>print(c.sites(anions=True).select(&quot;site&quot;, &quot;ox&quot;, &quot;multiplicity&quot;, &quot;CN&quot;, &quot;ECoN&quot;,
+                                  &quot;BVS / v.u.&quot;, &quot;BVS - ox / v.u.&quot;, &quot;phi&quot;))
+</code></pre>
+<pre class="output"><code>sites of Ximengite
+site  ox  multiplicity  CN  ECoN    BVS / v.u.  BVS - ox / v.u.  phi
+----  --  ------------  --  ------  ----------  ---------------  ------
+Bi    3   3             8   6.6471  3.0445      0.0445           0.1279
+P     5   3             4   4       4.5095      -0.4905          0.0009
+O1    -2  6             3   1.0003  1.8445      -0.1555          0.4009
+O2    -2  6             3   1.0002  1.9325      -0.0675          0.3568
+note: bond threshold 0.075 v.u., listing threshold 0.02 v.u., parameters: Brese &amp; O'Keeffe 1991
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CN</code></td>
+<td>contacts with a bond valence above <code>v_bond</code></td>
+</tr>
+<tr>
+<td><code>CN listed</code></td>
+<td>contacts above <code>v_list</code></td>
+</tr>
+<tr>
+<td><code>ECoN</code></td>
+<td>Hoppe's effective coordination number</td>
+</tr>
+<tr>
+<td><code>BVS / v.u.</code></td>
+<td>bond-valence sum over the bonds</td>
+</tr>
+<tr>
+<td><code>BVS - ox / v.u.</code></td>
+<td>the sum minus the oxidation state</td>
+</tr>
+<tr>
+<td><code>phi</code></td>
+<td>length of the bond-valence vector sum over the valence sum: 0 for a centred site, larger when the bonds lean to one side (a stereoactive lone pair)</td>
+</tr>
+<tr>
+<td><code>void half-angle / deg</code></td>
+<td>half-angle of the largest cone at the site holding no ligand</td>
+</tr>
+<tr>
+<td><code>plateau / decades</code></td>
+<td>width, in decades of threshold, of the range of <code>v_bond</code> over which <code>CN</code> does not change</td>
+</tr>
+<tr>
+<td><code>plateau from</code>, <code>plateau to</code></td>
+<td>the ends of that range</td>
+</tr>
+<tr>
+<td><code>estimated parameters</code></td>
+<td>True when a bond-valence parameter was estimated, not tabulated</td>
+</tr>
+</tbody>
+</table>
+<h3>One site</h3>
+<p><code>c.site(label)</code> (or <code>c[label]</code>) is one site. Its most used numbers are
+attributes:</p>
+<pre class="python"><code>bi = c.site(&quot;Bi&quot;)
+print(bi)
+print(bi.cn, round(bi.bvs, 3), round(bi.phi, 3), round(bi.econ, 2), round(bi.void_angle, 1))
+</code></pre>
+<pre class="output"><code>Bi (Bi+3): CN 8 at 0.075 v.u., ECoN 6.65, BVS 3.04, phi 0.128, plateau 0.92 dec / 0.784 A
+8 3.045 0.128 6.65 61.4
+</code></pre>
+<p>Every contact, nearest first:</p>
+<pre class="python"><code>print(bi.contacts().select(&quot;neighbour&quot;, &quot;distance / Å&quot;, &quot;valence / v.u.&quot;, &quot;bonded&quot;, &quot;parameters&quot;))
+</code></pre>
+<pre class="output"><code>contacts of Bi
+neighbour  distance / Å  valence / v.u.  bonded  parameters
+---------  ------------  --------------  ------  ----------
+O1         2.311         0.5503          yes     fitted
+O1         2.311         0.5502          yes     fitted
+O2         2.329         0.5241          yes     fitted
+O2         2.329         0.5241          yes     fitted
+O2         2.5593        0.2813          yes     fitted
+O2         2.5594        0.2812          yes     fitted
+O1         2.753         0.1666          yes     fitted
+O1         2.753         0.1666          yes     fitted
+note: bonded: valence above 0.075 v.u.; listed: above 0.02 v.u.
+</code></pre>
+<p>The coordination number is a function of the threshold. <code>plateaus()</code> lists
+every value it takes and over what range; the row that holds the threshold in
+force is marked.</p>
+<pre class="python"><code>print(bi.plateaus().select(&quot;CN&quot;, &quot;from / v.u.&quot;, &quot;to / v.u.&quot;, &quot;width / decades&quot;,
+                           &quot;holds the bond threshold&quot;))
+</code></pre>
+<pre class="output"><code>plateaus of Bi
+CN  from / v.u.  to / v.u.  width / decades  holds the bond threshold
+--  -----------  ---------  ---------------  ------------------------
+1   0.5502       0.5503     5.652e-06        no
+2   0.5241       0.5502     0.0211           no
+3   0.5241       0.5241     2.150e-06        no
+4   0.2813       0.5241     0.2703           no
+5   0.2812       0.2813     4.449e-05        no
+6   0.1666       0.2812     0.2273           no
+7   0.1666       0.1666     4.428e-05        no
+8   0.02         0.1666     0.9207           yes
+</code></pre>
+<p>Contacts that are equal by symmetry differ in their last digits, which is
+where the plateaus of negligible width between them come from.</p>
+<p>The same site at another threshold, without reading the file again:</p>
+<pre class="python"><code>print(bi.cn_at(0.20), bi.at(0.20).cn, round(bi.at(0.20).bvs, 3))
+</code></pre>
+<pre class="output"><code>6 6 2.711
+</code></pre>
+<p><code>bi.cn_function()</code> returns two arrays, thresholds and coordination numbers,
+for a plot; <code>facet.plot.cn_function(bi)</code> draws it:</p>
+<pre class="python"><code>facet.plot.cn_function(bi, save=&quot;cn_function.png&quot;)
+</code></pre>
+<p><img alt="The coordination number of Bi in BiPO4 against the bond threshold" src="library_manual/cn_function.png" /></p>
+<p>More on one site:</p>
+<pre class="python"><code>print(bi.angles().head(4))
+print(bi.cn_methods().select(&quot;method&quot;, &quot;CN&quot;, &quot;note&quot;))
+</code></pre>
+<pre class="output"><code>angles at Bi
+ligand 1  ligand 2  angle / deg  d1 / Å  d2 / Å
+--------  --------  -----------  ------  ------
+O2        O1        57.115       2.5594  2.753
+O2        O1        57.1158      2.5593  2.753
+O2        O1        64.4519      2.329   2.753
+O2        O1        64.4525      2.329   2.753
+coordination number of Bi by method
+method                 CN      note
+---------------------  ------  ---------------------------------
+Bond valence           8
+Distance cutoff        8
+Within % of shortest   8
+Sum of covalent radii  6
+Maximum gap (Brunner)  4       largest step d(k+1)/d(k) = 1.099
+Maximum gap (1/d)      4
+ECoN (Hoppe)           6.6471  weighted mean distance 2.4019 Å
+CHARDI                 5.4068
+Valence-weighted       5.5329
+Voronoi (solid angle)  6.0526  8 facets above 20% of the largest
+note: spread over the methods: n 10, min 4, max 8, range 4, median 6.03, mean 6.16, integer_values …
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Gives</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>site.contacts()</code></td>
+<td>every contact: distance, valence, bonded or not, parameters and their source</td>
+</tr>
+<tr>
+<td><code>site.plateaus()</code></td>
+<td>each coordination number and its range of threshold</td>
+</tr>
+<tr>
+<td><code>site.cn_function()</code></td>
+<td>arrays for the CN against the threshold</td>
+</tr>
+<tr>
+<td><code>site.cn_at(v)</code>, <code>site.at(v)</code></td>
+<td>the CN, or the whole site, at another threshold</td>
+</tr>
+<tr>
+<td><code>site.angles()</code></td>
+<td>every ligand-centre-ligand angle</td>
+</tr>
+<tr>
+<td><code>site.shells()</code></td>
+<td>contacts in the order a growing cutoff includes them, with running CN and valence sum</td>
+</tr>
+<tr>
+<td><code>site.cn_methods()</code></td>
+<td>the CN by ten definitions (ECoN, CHARDI, largest gap, Voronoi, ...) and their spread</td>
+</tr>
+<tr>
+<td><code>site.shape()</code></td>
+<td>distance statistics, polyhedron volume, distortion indices</td>
+</tr>
+<tr>
+<td><code>site.lone_pair()</code></td>
+<td>phi, the bond-valence vector, the empty cone</td>
+</tr>
+<tr>
+<td><code>site.radial_shells(r_max)</code></td>
+<td>neighbours of any kind grouped by distance</td>
+</tr>
+<tr>
+<td><code>site.exafs_shells(r_max)</code></td>
+<td>shells as an EXAFS fit takes them: N, R, sigma squared</td>
+</tr>
+<tr>
+<td><code>site.write_feff(path)</code></td>
+<td>a FEFF input with the site as absorber</td>
+</tr>
+<tr>
+<td><code>site.text("md")</code></td>
+<td>the site written out, as text, Markdown or LaTeX</td>
+</tr>
+<tr>
+<td><code>site.row()</code></td>
+<td>the site's row of <code>c.sites()</code>, as a dictionary</td>
+</tr>
+<tr>
+<td><code>site.result</code></td>
+<td>the engine's <code>SiteResult</code>, with everything</td>
+</tr>
+</tbody>
+</table>
+<h3>The structure as a whole</h3>
+<pre class="python"><code>print(c.cutoffs().select(&quot;pair&quot;, &quot;R0 / Å&quot;, &quot;bond cutoff / Å&quot;, &quot;shortest / Å&quot;, &quot;bonds&quot;))
+print(c.anion_sums().select(&quot;site&quot;, &quot;expected / v.u.&quot;, &quot;BVS / v.u.&quot;, &quot;contacts&quot;))
+print(round(c.gii()[&quot;gii&quot;], 3), &quot;v.u., largest at&quot;, c.gii()[&quot;worst_site&quot;])
+</code></pre>
+<pre class="output"><code>cutoffs of Ximengite
+pair    R0 / Å  bond cutoff / Å  shortest / Å  bonds
+------  ------  ---------------  ------------  -----
+Bi3+–O  2.09    3.0484           2.311         8
+P5+–O   1.604   2.5624           1.5595        4
+note: bond threshold 0.075 v.u., listing threshold 0.02 v.u., parameters: Brese &amp; O'Keeffe 1991
+note: a cutoff distance is d = R0 - b ln(v); it is not chosen, it follows from the valence thresho …
+anion valence sums of Ximengite
+site  expected / v.u.  BVS / v.u.  contacts
+----  ---------------  ----------  --------
+O1    2                1.8445      3
+O2    2                1.9325      3
+note: bond threshold 0.075 v.u., listing threshold 0.02 v.u., parameters: Brese &amp; O'Keeffe 1991
+0.348 v.u., largest at P
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Gives</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>c.cutoffs()</code></td>
+<td>the distance each cation-anion pair is cut at, with <code>R0</code> and <code>b</code></td>
+</tr>
+<tr>
+<td><code>c.anion_sums()</code></td>
+<td>the valence sum of every anion site</td>
+</tr>
+<tr>
+<td><code>c.charge_balance()</code></td>
+<td>cation and anion valence sums over the cell, and their difference</td>
+</tr>
+<tr>
+<td><code>c.gii()</code>, <code>c.bond_strain()</code></td>
+<td>global instability index, bond strain index</td>
+</tr>
+<tr>
+<td><code>c.a_priori()</code></td>
+<td>a priori bond valences of the bond network, and the two indices against the observed ones</td>
+</tr>
+<tr>
+<td><code>c.connectivity()</code></td>
+<td>which polyhedra share a corner, an edge or a face</td>
+</tr>
+<tr>
+<td><code>c.stability()</code></td>
+<td>the CN of every site over a range of thresholds</td>
+</tr>
+<tr>
+<td><code>c.with_thresholds(v_bond=..., v_list=..., params=...)</code></td>
+<td>the same structure analysed otherwise</td>
+</tr>
+</tbody>
+</table>
+<p><code>c.stability()</code> returns an object with <code>thresholds</code>, <code>per_site[label]</code> (the CN
+at each threshold) and <code>stable_range(label, at)</code>:</p>
+<pre class="python"><code>scan = facet.example(&quot;cryolite&quot;).stability()
+for label in scan.per_site:
+    low, high = scan.stable_range(label, at=0.075)
+    print(f&quot;{label}: CN unchanged from {low:.3f} to {high:.3f} v.u.&quot;)
+</code></pre>
+<pre class="output"><code>Al: CN unchanged from 0.005 to 0.300 v.u.
+Na1: CN unchanged from 0.005 to 0.193 v.u.
+Na2: CN unchanged from 0.064 to 0.077 v.u.
+</code></pre>
+<h3>Diffraction, PDF and EXAFS</h3>
+<pre class="python"><code>pattern = c.diffraction(wavelength=1.5406, two_theta_max=40)     # radiation=&quot;neutron&quot; for neutrons
+lines = facet.table(pattern.reflections)
+print(lines.select(&quot;h&quot;, &quot;k&quot;, &quot;l&quot;, &quot;d&quot;, &quot;two_theta&quot;, &quot;intensity&quot;, &quot;multiplicity&quot;).head(6))
+x, y = pattern.profile(two_theta_min=10, two_theta_max=40)      # a broadened curve
+print(x.shape, round(float(y.max()), 1))
+</code></pre>
+<pre class="output"><code>h  k  l  d       two_theta  intensity  multiplicity
+-  -  -  ------  ---------  ---------  ------------
+1  0  0  6.0327  14.6719    77.8438    6
+1  0  1  4.4091  20.1232    100        12
+1  1  0  3.483   25.5543    30.2318    6
+1  1  1  3.0658  29.1039    28.3231    12
+2  0  0  3.0164  29.5914    79.9477    6
+1  0  2  2.8475  31.3898    80.4843    12
+(1502,) 100.0
+</code></pre>
+<pre class="python"><code>facet.plot.pattern(pattern, save=&quot;pattern.png&quot;)
+</code></pre>
+<p><img alt="The calculated powder pattern of BiPO4" src="library_manual/pattern.png" /></p>
+<p><code>c.d_spacing(h, k, l)</code> and <code>c.two_theta(h, k, l, wavelength)</code> give one
+reflection; <code>c.reflections()</code> lists positions without intensities.</p>
+<p>The pair distribution function comes back with its arrays and with every
+assumption it made:</p>
+<pre class="python"><code>g = c.pdf(r_max=10.0, radiation=&quot;X-ray&quot;)
+print(g.r.shape, g.G.shape)                # also g.g and g.R
+for note in g.notes[:3]:
+    print(&quot;-&quot;, note)
+</code></pre>
+<pre class="output"><code>(1000,) (1000,)
+- X-ray weights at Q = 0; the pair weights are Bi-Bi 40.7%, Bi-O 31.4%, Bi-P 14.7%, O-O 6.1%, O-P  …
+- rho0 = 0.06630 atoms/A^3 from 18 atoms per cell, occupancies included.
+- All 18 atoms took U from the file.
+</code></pre>
+<p>Options of <code>c.pdf</code>: <code>dr</code>, <code>u_iso</code>, <code>q_min</code>, <code>q_max</code>, <code>q_damp</code>, <code>q_broad</code>,
+<code>delta1</code>, <code>delta2</code>. <code>facet.plot.pdf(g)</code> draws it.</p>
+<p>For EXAFS, the shells about an absorber and a FEFF input:</p>
+<pre class="python"><code>shells = facet.table(bi.exafs_shells(r_max=4.0).shells)
+print(shells.select(&quot;element&quot;, &quot;count&quot;, &quot;r_mean&quot;, &quot;sigma2_einstein&quot;))
+</code></pre>
+<pre class="output"><code>element  count  r_mean  sigma2_einstein
+-------  -----  ------  ---------------
+O        4      2.32    0.0048
+O        2      2.5594  0.0048
+O        2      2.753   0.0048
+P        2      3.23    0.0026
+P        4      3.6686  0.0026
+O        2      3.9052  0.0048
+O        2      3.9908  0.0048
+</code></pre>
+<h3>Planes, maps and basicity</h3>
+<pre class="python"><code>plane = c.plane(1, 0, 1)
+print(plane, plane.occupancy(tolerance=0.3), round(plane.angle_to(0, 0, 1), 2))
+</code></pre>
+<pre class="output"><code>&lt;Plane (1 0 1) d = 4.4091 Å&gt; {'Bi': 1.0, 'O': 2.0} 46.96
+</code></pre>
+<p>A valence map is the bond-valence sum a probe ion would have at every point
+of the cell; where it equals the ion's charge, the ion would be correctly
+bonded. It is used to look for the sites and the pathways of a mobile ion.</p>
+<pre class="python"><code>cryolite = facet.example(&quot;cryolite&quot;)
+grid = cryolite.valence_map(&quot;Na&quot;, resolution=0.2)
+print(grid.shape, round(grid.statistics()[&quot;min&quot;], 3))
+print(grid.at_fractional([0.0, 0.0, 0.5]))          # the value at one point
+facet.plot.grid(grid, &quot;c&quot;, 0.25, levels=(0.5, 3.0), save=&quot;valence_map.png&quot;)
+</code></pre>
+<pre class="output"><code>(27, 28, 39) 1.04
+[1.29842761]
+</code></pre>
+<p><img alt="A plane of the Na valence map of cryolite" src="library_manual/valence_map.png" /></p>
+<p><code>c.energy_map(element)</code> turns the map into an energy-like landscape, and
+<code>facet.read_volume(path)</code> reads a CHGCAR, a Gaussian cube or an XSF file into
+the same kind of grid.</p>
+<p><code>c.basicity()</code> gives the optical basicity of the structure (section 6).</p>
+<h3>Writing files and pictures</h3>
+<pre class="python"><code>c.write(&quot;bipo4.cif&quot;)                     # also .vasp (POSCAR), .xyz, .vesta
+c.render(&quot;bipo4.png&quot;, style=&quot;polyhedral&quot;, along=&quot;c&quot;, cell_range=(2, 2, 1))
+</code></pre>
+<p><img alt="BiPO4 drawn by c.render" src="library_manual/bipo4.png" /></p>
+<p><code>c.render</code> draws the structure as the application does and writes a PNG, an
+SVG or a PDF. <code>style</code> is one of <code>ball-and-stick</code>, <code>polyhedral</code>,
+<code>space-filling</code>, <code>stick</code>, <code>wireframe</code>, <code>displacement ellipsoids</code>; <code>polyhedra</code>
+is <code>True</code>, <code>False</code> or a list of site labels; <code>along</code> is <code>a</code>, <code>b</code>, <code>c</code>, <code>a*</code>,
+<code>b*</code>, <code>c*</code> or a vector.</p>
+<h3>Several structures</h3>
+<p><code>facet.compare</code> puts the cation sites of several structures in one table,
+and <code>facet.report_on</code> writes the full report of the application (sites,
+contacts, plateaus, cutoffs, charge balance, basicity) to an Excel, CSV,
+HTML, Markdown, LaTeX or JSON file.</p>
+<pre class="python"><code>files = [facet.examples()[name] for name in (&quot;senarmontite&quot;, &quot;valentinite&quot;)]
+both = facet.compare(files)                           # the two forms of Sb2O3
+print(both.select(&quot;structure&quot;, &quot;site&quot;, &quot;CN&quot;, &quot;BVS / v.u.&quot;, &quot;phi&quot;, &quot;plateau / decades&quot;))
+report = facet.report_on(files, &quot;sb2o3.xlsx&quot;)
+print({name: len(rows) for name, rows in report.tables().items()})
+</code></pre>
+<pre class="output"><code>sites of several structures
+structure     site  CN  BVS / v.u.  phi     plateau / decades
+------------  ----  --  ----------  ------  -----------------
+Senarmontite  Sb    6   3.2035      0.4604  0.6082
+Valentinite   Sb    5   3.1503      0.4874  0.9412
+{'sites': 2, 'contacts': 11, 'plateaus': 9, 'cutoffs': 2, 'balance': 2, 'basicity': 5}
+</code></pre>
+<p>Both take a folder as well as a list of files.</p>
+<h2>5. Glass models from molecular dynamics</h2>
+<h3>Opening a model</h3>
+<p><code>facet.model</code> reads LAMMPS data files and dumps, extended XYZ, DL_POLY
+(CONFIG, REVCON, HISTORY), VASP (POSCAR, XDATCAR), GROMACS, CP2K and other
+trajectory formats, with one frame or many. A LAMMPS file numbers its atom
+types and does not name them, so the elements are given as a <code>type_map</code>:</p>
+<pre class="python"><code>path = facet.examples()[&quot;glass&quot;]                 # a LAMMPS data file
+m = facet.model(path, type_map={1: &quot;O&quot;, 2: &quot;Si&quot;, 3: &quot;Al&quot;, 4: &quot;Na&quot;, 5: &quot;Ca&quot;})
+for line in m.describe()[2:10]:
+    print(line)
+</code></pre>
+<pre class="output"><code>1200 atoms per frame; 1 readable frame(s)
+timesteps 10000 to 10000
+no frame times in the file
+box (frame 0): a 24.9422, b 24.9422, c 24.9422 Å; alpha 90, beta 90, gamma 90 deg; volume 15516.8  …
+number density (frame 0) 0.0773356 atoms/Å^3
+composition (frame 0): Al 40, Ca 40, Na 160, O 700, Si 260
+the box is the same in every frame
+type map (user): 1 -&gt; O, 2 -&gt; Si, 3 -&gt; Al, 4 -&gt; Na, 5 -&gt; Ca
+</code></pre>
+<p>When the <code>Masses</code> section holds the elements' own masses, FACET names the
+types from them and the <code>type_map</code> can be left out; a mass written short
+(22.9 for sodium) is not recognised, and the reader then asks for the map.</p>
+<p><code>print(m)</code> gives the whole statement of what was read and what was assumed
+(units, charges, box). It is worth reading once for every new kind of file.</p>
+<pre class="python"><code>print(m.n_atoms, m.n_frames, m.composition())
+print(round(m.density(), 3), &quot;g/cm3&quot;)
+print(m.oxidation_states())
+</code></pre>
+<pre class="output"><code>1200 1 {'Al': 40, 'Ca': 40, 'Na': 160, 'O': 700, 'Si': 260}
+2.661 g/cm3
+{'Al': 3, 'Ca': 2, 'Na': 1, 'O': -2, 'Si': 4}
+</code></pre>
+<p>The oxidation states are the usual ones of each element. An element in
+another state is given where it is used: <code>ox={"Fe": 2}</code>.</p>
+<p><code>m.frame(k)</code> is one frame (<code>k</code> from 0, negative from the end) with its arrays:
+<code>elements</code>, <code>cart_ang</code> (positions in Å), <code>frac</code>, <code>box_ang</code>, and <code>time_ps</code>
+when the file states it.</p>
+<p>A model keeps its file open, so that a long trajectory is read frame by frame
+and not at once. <code>m.close()</code> closes it; in a loop over many files, <code>with
+facet.model(path) as m:</code> closes each at the end of its block (the last
+recipe of section 8).</p>
+<h3>The analyses</h3>
+<p><code>facet.analyses()</code> lists every analysis a model can be given, with what each
+measures and what it needs:</p>
+<pre class="python"><code>print(facet.analyses().select(&quot;analysis&quot;, &quot;runs&quot;, &quot;needs&quot;))
+</code></pre>
+<pre class="output"><code>analyses of an MD model
+analysis                runs              needs
+----------------------  ----------------  -------------------------------------------------------- …
+glass                   per frame         formers
+basicity                per frame
+scattering              per frame         scattering.r_window, scattering.radiations
+rings                   per frame         formers, network.ring_criterion, network.ring_max_size
+coordination-sequences  per frame         formers, network.n_shells
+polyhedral-sharing      per frame         formers
+components              per frame         formers
+warren-cowley           per frame
+bond-order              per frame
+tetrahedral-order       per frame
+polyhedron-shape        per frame
+voronoi                 per frame
+empty-spheres           per frame         voids.radii
+free-volume             per frame         voids.grid_spacing_ang, voids.probe_radius_ang, voids.ra …
+channels                per frame         channels.delta_vu, channels.deltas_vu, channels.probe
+modifier-density        per frame         channels.k_rich, channels.modifiers
+void-regions            per frame         channels.void_probe_radius_ang, voids.radii
+nmr                     per frame         nmr.correlation, nmr.delta_ppm, nmr.fwhm_ppm, nmr.linesh …
+exafs                   per frame         exafs.absorber
+bond-lifetimes          per frame         a time axis (timestep_fs or frame_interval_ps) and two f …
+msd                     whole trajectory  a time axis (timestep_fs or frame_interval_ps) and two f …
+self-correlations       whole trajectory  dynamics.lag_t_ps, a time axis (timestep_fs or frame_int …
+distinct-van-hove       whole trajectory  dynamics.distinct_n_origins, dynamics.distinct_pairs, dy …
+vacf                    whole trajectory  a time axis (timestep_fs or frame_interval_ps) and two f …
+kinetic-temperature     whole trajectory  a time axis (timestep_fs or frame_interval_ps) and two f …
+conductivity            whole trajectory  charges_e, dynamics.fit_t_min_ps/fit_t_max_ps, temperatu …
+nmr-comparison          after the others  nmr.measured_fractions
+scattering-comparison   after the others  scattering.measured, scattering.r_window, scattering.rad …
+feff                    after the others  exafs.absorber, feff.cluster_radius_ang, feff.edge, feff …
+</code></pre>
+<h3>Running an analysis</h3>
+<p><code>m.analyse(names..., inputs...)</code> runs analyses and returns their results.
+The <code>glass</code> analysis is the main one: coordination numbers by bond valence
+and by distance, oxygen speciation, Qn, bond angles and lengths, partial g(r).
+It needs the network formers.</p>
+<pre class="python"><code>r = m.analyse(&quot;glass&quot;, formers=[&quot;Si&quot;, &quot;Al&quot;])
+print(r)
+print(r.descriptors().where(kind=&quot;distribution&quot;).select(&quot;descriptor&quot;, &quot;rows&quot;).head(14))
+</code></pre>
+<pre class="output"><code>&lt;Results of glass: 176 descriptor(s)&gt;
+descriptors measured
+descriptor                   rows
+---------------------------  ----
+CN Al (BV)                   2
+Al CN (4, 5, 6, other) (BV)  4
+CN Ca (BV)                   5
+CN Na (BV)                   6
+CN O (BV)                    5
+CN Si (BV)                   2
+O speciation (BV)            4
+Qn Al (BV)                   6
+Qn Si (BV)                   6
+Qn(mAl) Al (BV)              7
+Qn(mAl) Si (BV)              13
+Qn(mSi) Al (BV)              8
+Qn(mSi) Si (BV)              12
+O linkages (BV)              10
+</code></pre>
+<p>Each line is a <em>descriptor</em>: one table of one analysis. <code>(BV)</code> marks a
+descriptor counted with the bond-valence threshold, <code>(distance)</code> the same
+counted with a distance cutoff at the first minimum of g(r); both are
+always given. <code>r.find(text)</code> searches the names, and <code>r.table(analysis,
+descriptor)</code> returns one as rows:</p>
+<pre class="python"><code>print(r.table(&quot;glass&quot;, &quot;O speciation (BV)&quot;).select(&quot;key&quot;, &quot;mean (fraction)&quot;, &quot;items per frame&quot;))
+print(r.table(&quot;glass&quot;, &quot;Al CN (4, 5, 6, other) (BV)&quot;).select(&quot;key&quot;, &quot;mean (fraction)&quot;))
+print(r.table(&quot;glass&quot;, &quot;mean CN Na (BV)&quot;).select(&quot;descriptor&quot;, &quot;mean (1)&quot;))
+print(r.table(&quot;glass&quot;, &quot;distance cutoffs&quot;).select(&quot;pair&quot;, &quot;cutoff (Å)&quot;))
+</code></pre>
+<pre class="output"><code>glass: O speciation (BV)
+key         mean (fraction)  items per frame
+----------  ---------------  ---------------
+free        0.0014           700
+NBO         0.28             700
+BO          0.7157           700
+tricluster  0.0029           700
+note: one frame: the spread across frames (std, ddof = 1) is undefined and given as NaN
+glass: Al CN (4, 5, 6, other) (BV)
+key    mean (fraction)
+-----  ---------------
+Al4    0.925
+Al5    0.075
+Al6    0
+other  0
+note: one frame: the spread across frames (std, ddof = 1) is undefined and given as NaN
+glass: mean CN Na (BV)
+descriptor  mean (1)
+----------  --------
+mean CN Na  4.2
+note: one frame: the spread across frames (std, ddof = 1) is undefined and given as NaN
+glass: distance cutoffs
+pair  cutoff (Å)
+----  ----------
+Al-O  2.88
+Ca-O  3.38
+Na-O  3.46
+Si-O  2.48
+</code></pre>
+<p>A curve, such as a partial g(r), is a container with its arrays:</p>
+<pre class="python"><code>g = r.get(&quot;glass&quot;, &quot;g O-Si&quot;)
+print(type(g).__name__, g.axis_name, g.axis_unit, g.axis.shape, g.mean.shape)
+peak = g.axis[g.mean.argmax()]
+print(f&quot;first Si-O peak at {peak:.2f} Å&quot;)
+facet.plot.descriptor(r, &quot;glass&quot;, &quot;g O-Si&quot;, save=&quot;g_si_o.png&quot;)
+</code></pre>
+<pre class="output"><code>Series r_ang Å (600,) (600,)
+first Si-O peak at 1.60 Å
+</code></pre>
+<p><img alt="The Si-O partial g(r) of the practice glass" src="library_manual/g_si_o.png" /></p>
+<p>What the run states about the model and about itself is in <code>r.notes</code>, the
+full provenance (file, frames, thresholds, cutoffs, every method parameter)
+in <code>r.provenance</code>, and <code>r.export</code> writes everything:</p>
+<pre class="python"><code>written = r.export(&quot;glass.xlsx&quot;)                 # one sheet per descriptor
+files = r.export(&quot;glass_csv&quot;)                    # or one CSV per descriptor
+print(written[0].name, len(files), &quot;CSV files&quot;)
+</code></pre>
+<pre class="output"><code>glass.xlsx 179 CSV files
+</code></pre>
+<h3>Several frames</h3>
+<p>With a trajectory, each descriptor is the mean over the frames with its
+spread, and <code>per_frame=True</code> adds the frames one by one.</p>
+<pre class="python"><code>t = facet.example(&quot;glass-trajectory&quot;)            # six frames, 2 ps apart
+print(repr(t))
+rt = t.analyse(&quot;glass&quot;, formers=[&quot;Si&quot;, &quot;Al&quot;])
+print(rt.table(&quot;glass&quot;, &quot;Qn Si (BV)&quot;).select(&quot;key&quot;, &quot;mean (fraction)&quot;, &quot;std (fraction)&quot;, &quot;frames used&quot;))
+qn = rt.table(&quot;glass&quot;, &quot;Qn Si (BV)&quot;, per_frame=True)       # one more column per frame
+print(qn.select(&quot;key&quot;, &quot;frame 0 (fraction)&quot;, &quot;frame 2 (fraction)&quot;, &quot;frame 5 (fraction)&quot;))
+</code></pre>
+<pre class="output"><code>&lt;Model 'practice_glass.lammpstrj.gz': 1200 atoms, 6 frame(s)&gt;
+glass: Qn Si (BV)
+key  mean (fraction)  std (fraction)  frames used
+---  ---------------  --------------  -----------
+0    0                0               6
+1    0.0231           0               6
+2    0.1218           0.002           6
+3    0.4308           0.0042          6
+4    0.4199           0.0016          6
+5    0.0045           0.0016          6
+glass: Qn Si (BV)
+key  frame 0 (fraction)  frame 2 (fraction)  frame 5 (fraction)
+---  ------------------  ------------------  ------------------
+0    0                   0                   0
+1    0.0231              0.0231              0.0231
+2    0.1192              0.1231              0.1231
+3    0.4346              0.4308              0.4308
+4    0.4192              0.4192              0.4192
+5    0.0038              0.0038              0.0038
+</code></pre>
+<p><code>frames</code> chooses the frames: <code>frames="0:100:5"</code> (start, stop, step), a
+<code>slice</code>, or a list of indices. Opening a trajectory reads nothing until a
+frame is needed, so a long file costs only the frames used.</p>
+<h3>Inputs, options and what is missing</h3>
+<p>An analysis that lacks an input says which before any frame is read:</p>
+<pre class="python"><code>for line in m.missing(&quot;rings&quot;, &quot;scattering&quot;):
+    print(&quot;-&quot;, line[:96])
+</code></pre>
+<pre class="output"><code>- rings: formers: the network formers (cation elements, e.g. Si,B); the 'bridging anion' graph and
+- scattering: scattering.r_window: 'none' or 'Lorch', the M(r) of the sine transform; it changes S
+- scattering: scattering.radiations: one or more of X-ray, neutron, electron
+- rings: network.ring_criterion: king, guttman or primitive: the definition of a ring
+- rings: network.ring_max_size: the largest ring searched, in graph nodes; the cost grows with it
+</code></pre>
+<p>The inputs are keywords of <code>analyse</code>. The top-level ones are <code>formers</code>,
+<code>frames</code>, <code>ox</code>, <code>v_bond</code>, <code>v_list</code>, <code>timestep_fs</code> or <code>frame_interval_ps</code>,
+<code>temperature_k</code>, <code>charges_e</code> and <code>workers</code>. The others are grouped by topic,
+each group a dictionary: <code>glass</code>, <code>scattering</code>, <code>network</code>, <code>order</code>, <code>voids</code>,
+<code>channels</code>, <code>nmr</code>, <code>exafs</code>, <code>dynamics</code>, <code>basicity</code>.</p>
+<pre class="python"><code>r2 = m.analyse(&quot;rings&quot;, &quot;scattering&quot;, formers=[&quot;Si&quot;, &quot;Al&quot;],
+               network={&quot;ring_criterion&quot;: &quot;king&quot;, &quot;ring_max_size&quot;: 10},
+               scattering={&quot;radiations&quot;: [&quot;X-ray&quot;, &quot;neutron&quot;], &quot;r_window&quot;: &quot;Lorch&quot;})
+print(r2.descriptors(&quot;rings&quot;).select(&quot;descriptor&quot;, &quot;kind&quot;))
+sizes = r2.table(&quot;rings&quot;, &quot;ring sizes (T atoms: Al, Si), king&quot;).select(&quot;key&quot;, &quot;mean (fraction)&quot;)
+print(sizes.text(notes=False))
+print(len(sizes.notes), &quot;notes, the first:&quot;, sizes.notes[0][:60], &quot;...&quot;)
+s = r2.get(&quot;scattering&quot;, &quot;S(Q) neutron&quot;)
+print(s.axis_name, s.axis_unit, s.axis[:3], s.mean[:3].round(3))
+</code></pre>
+<pre class="output"><code>descriptors measured
+descriptor                            kind
+------------------------------------  ------------
+R_C(n), king rings                    series
+R_N(n), king rings                    series
+P_N(n), king rings                    series
+P_max(n), king rings                  series
+P_min(n), king rings                  series
+distinct rings by size (nodes), king  distribution
+ring sizes (nodes), king              distribution
+ring sizes (T atoms: Al, Si), king    distribution
+rings: ring sizes (T atoms: Al, Si), king
+key  mean (fraction)
+---  ---------------
+3    0.0037
+4    0.0618
+5    0.1292
+6    0.161
+7    0.2004
+8    0.2079
+9    0.1273
+10   0.1086
+10 notes, the first: graph: bridging anion: formers Al, Si linked through a share ...
+q_inv_ang 1/Å [0.02 0.04 0.06] [0.102 0.102 0.102]
+</code></pre>
+<p><code>print(facet.options())</code> lists every option of every group with its type and
+default, and a wrong name or value is refused with the list of the valid
+ones. <code>m.preset(name)</code> gives the analyses and options of one of the
+questions the application offers as presets (<code>facet.presets()</code> lists them):</p>
+<pre class="python"><code>p = m.preset(&quot;Aluminosilicate&quot;)
+print(p[&quot;analyses&quot;])
+print(p[&quot;formers&quot;], p[&quot;network&quot;], p[&quot;voids&quot;])
+</code></pre>
+<pre class="output"><code>['glass', 'basicity', 'rings', 'polyhedral-sharing', 'components', 'bond-order', 'polyhedron-shape …
+['Al', 'Si'] {'ring_criterion': 'king', 'ring_max_size': '12'} {'radii': 'vdw'}
+</code></pre>
+<h3>Dynamics</h3>
+<p>The analyses of time (<code>msd</code>, <code>vacf</code>, <code>bond-lifetimes</code>, <code>conductivity</code>, the
+van Hove functions) need more than one frame and a time axis. When the file
+does not state its frame times, the time between frames is given:</p>
+<pre class="python"><code>rd = t.analyse(&quot;msd&quot;, frame_interval_ps=2.0)
+print(rd.descriptors().select(&quot;descriptor&quot;, &quot;kind&quot;, &quot;rows&quot;).head(8))
+</code></pre>
+<pre class="output"><code>descriptors measured
+descriptor                 kind    rows
+-------------------------  ------  ----
+MSD Al                     series  6
+MSD Ca                     series  6
+MSD Na                     series  6
+MSD O                      series  6
+MSD Si                     series  6
+MSD of the centre of mass  series  6
+</code></pre>
+<p>The practice trajectory is six frames of a glass at 300 K, where nothing
+diffuses; a diffusion coefficient needs a long run of a melt and the fit
+window <code>dynamics={"fit_t_min_ps": ..., "fit_t_max_ps": ...}</code>.</p>
+<h3>Atom by atom</h3>
+<p><code>m.atoms()</code> gives every atom of a frame with what FACET measures on a site:</p>
+<pre class="python"><code>atoms = m.atoms()
+print(atoms.head(4).select(&quot;atom&quot;, &quot;element&quot;, &quot;CN&quot;, &quot;BVS / v.u.&quot;, &quot;phi&quot;, &quot;plateau / decades&quot;))
+frame = atoms.to_frame()
+print(frame.groupby(&quot;element&quot;)[[&quot;CN&quot;, &quot;BVS / v.u.&quot;, &quot;phi&quot;]].mean().round(3))
+</code></pre>
+<pre class="output"><code>atoms of practice_glass.data, frame 0
+atom  element  CN  BVS / v.u.  phi     plateau / decades
+----  -------  --  ----------  ------  -----------------
+1     Si       4   3.992       0.0639  1.5955
+2     Si       4   4.1094      0.0753  1.6147
+3     O        2   1.9244      0.3545  1.5756
+4     Na       4   0.5967      0.4191  0.5149
+note: bond threshold 0.075 v.u., listing threshold 0.02 v.u.
+            CN  BVS / v.u.    phi
+element
+Al       4.075       3.134  0.072
+Ca       5.475       1.642  0.152
+Na       4.200       0.845  0.288
+O        2.993       2.011  0.313
+Si       4.004       4.159  0.062
+</code></pre>
+<p>One atom can be read exactly as a site of a crystal (section 4): its
+contacts, plateaus, angles, CN function and CN by other methods.</p>
+<pre class="python"><code>number = atoms.where(element=&quot;Al&quot;)[0][&quot;atom&quot;]
+al = m.site(number)
+print(al)
+print(al.contacts().select(&quot;neighbour&quot;, &quot;distance / Å&quot;, &quot;valence / v.u.&quot;, &quot;bonded&quot;))
+</code></pre>
+<pre class="output"><code>Al6 (Al+3): CN 4 at 0.075 v.u., ECoN 3.84, BVS 3.32, phi 0.067, plateau 1.49 dec / 1.269 A
+contacts of Al6
+neighbour  distance / Å  valence / v.u.  bonded
+---------  ------------  --------------  ------
+O553       1.6651        0.9627          yes
+O1167      1.6971        0.8829          yes
+O252       1.7097        0.8534          yes
+O890       1.8295        0.6172          yes
+note: bonded: valence above 0.075 v.u.; listed: above 0.02 v.u.
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Gives</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>m.atoms(k)</code></td>
+<td>every atom: CN, valence sum, phi, plateau width</td>
+</tr>
+<tr>
+<td><code>m.site(atom, k)</code></td>
+<td>one atom as a site</td>
+</tr>
+<tr>
+<td><code>m.environments(element, formers=...)</code></td>
+<td>the environments of an element grouped by likeness: (groups, per atom)</td>
+</tr>
+<tr>
+<td><code>m.write_environment(atom, path, shells=2)</code></td>
+<td>the atom and its neighbours out to <code>shells</code> bonds, as an XYZ file</td>
+</tr>
+<tr>
+<td><code>m.density_map(elements, grid, sigma)</code></td>
+<td>smoothed number density of some elements over the box</td>
+</tr>
+<tr>
+<td><code>m.basicity(formers=...)</code></td>
+<td>optical basicity of the frame (section 6)</td>
+</tr>
+<tr>
+<td><code>m.parity(table_path, ...)</code></td>
+<td>another code's per-atom table beside FACET's values</td>
+</tr>
+</tbody>
+</table>
+<h2>6. Optical basicity</h2>
+<p>Optical basicity has its own part of the library, <code>facet.basicity</code>, with its
+own reference (<code>docs/basicity_library.md</code>). The three entry points:</p>
+<pre class="python"><code>fb = facet.basicity
+comp = fb.composition(&quot;20Na2O-10CaO-5Al2O3-65SiO2&quot;)        # moles; unit=&quot;wt&quot; for weights
+print(round(comp.value, 4), round(comp.polarisability, 3), round(comp.band(&quot;Pb2+&quot;)))
+
+quartz = facet.example(&quot;quartz&quot;).basicity()                # a crystal: lambda per anion site
+print(round(quartz.bulk, 4), round(quartz.value, 4))
+
+glass = m.basicity(formers=[&quot;Si&quot;, &quot;Al&quot;])                   # a model frame: lambda per atom
+print(round(glass.bulk, 4), round(glass.value, 4))
+print(fb.text_table((&quot;anion&quot;, &quot;class&quot;, &quot;atoms&quot;, &quot;mean&quot;, &quot;sd&quot;, &quot;low&quot;, &quot;high&quot;), glass.by_class()))
+</code></pre>
+<pre class="output"><code>0.5936 1.551 42299
+0.4775 0.4544
+0.5936 0.574
+anion  class       atoms  mean   sd     low    high
+-----  ----------  -----  -----  -----  -----  -----
+O      free        1      1.051  0.000  1.051  1.051
+O      NBO         196    0.726  0.039  0.621  0.884
+O      BO          501    0.514  0.064  0.380  0.716
+O      tricluster  2      0.516  0.052  0.465  0.568
+</code></pre>
+<p><code>comp.value</code> is Λ from the composition alone (Duffy and Ingram); the
+<code>value</code> of a structure or a frame is the mean of the microscopic λ of its
+anions, each from the bond valences it receives. <code>glass.values</code> is λ per
+atom, <code>glass.linkages()</code> groups the anions by what they are bonded to, and
+<code>glass.field("Na")</code> maps what a probe cation would sense. The scale of
+basicity moderating parameters is an argument (<code>scale="duffy"</code>).</p>
+<h2>7. Figures</h2>
+<p>The quick figures are for a first look. Each returns the matplotlib figure;
+<code>save="name.png"</code> (or <code>.pdf</code>, <code>.svg</code>) writes it and <code>show=True</code> opens a
+window.</p>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Draws</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>facet.plot.cn_function(site)</code></td>
+<td>the CN of a site against the threshold</td>
+</tr>
+<tr>
+<td><code>facet.plot.contacts(site)</code></td>
+<td>bond valence against distance for every contact</td>
+</tr>
+<tr>
+<td><code>facet.plot.stability(crystal)</code></td>
+<td>the CN of every site against the threshold</td>
+</tr>
+<tr>
+<td><code>facet.plot.pattern(pattern)</code></td>
+<td>a powder pattern, lines and profile</td>
+</tr>
+<tr>
+<td><code>facet.plot.pdf(pdf, which="G")</code></td>
+<td>a pair distribution function</td>
+</tr>
+<tr>
+<td><code>facet.plot.grid(grid, "c", 0.5)</code></td>
+<td>one plane of a map</td>
+</tr>
+<tr>
+<td><code>facet.plot.descriptor(results, analysis, name)</code></td>
+<td>one descriptor of a model: bars, steps or a curve with its spread</td>
+</tr>
+<tr>
+<td><code>facet.basicity.plot.histogram(frame_result)</code> and others</td>
+<td>the basicity figures</td>
+</tr>
+</tbody>
+</table>
+<p>For a figure of one's own, every number is in the objects. The Qn
+distributions of the two formers of the practice glass, side by side:</p>
+<pre class="python"><code>import matplotlib
+matplotlib.use(&quot;Agg&quot;)
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(5.2, 3.2), layout=&quot;constrained&quot;)
+for shift, former, colour in ((-0.2, &quot;Si&quot;, &quot;#2a78d6&quot;), (0.2, &quot;Al&quot;, &quot;#eb6834&quot;)):
+    table = rt.table(&quot;glass&quot;, f&quot;Qn {former} (BV)&quot;)
+    n = table.column(&quot;key&quot;)
+    ax.bar(n + shift, table.column(&quot;mean (fraction)&quot;), width=0.38, color=colour,
+           yerr=table.column(&quot;std (fraction)&quot;), capsize=2, label=former)
+ax.set_xlabel(&quot;n of Qn&quot;)
+ax.set_ylabel(&quot;fraction&quot;)
+ax.legend(frameon=False, title=&quot;former&quot;)
+fig.savefig(&quot;qn.png&quot;, dpi=200)
+</code></pre>
+<p><img alt="Qn of Si and Al in the practice glass, mean and spread over six frames" src="library_manual/qn.png" /></p>
+<h2>8. Recipes</h2>
+<p>Each recipe runs as written on the bundled files. With files of your own,
+replace the list of paths, for instance by <code>sorted(Path("my_folder").glob("*.cif"))</code>.</p>
+<h3>A table of one element's sites over many structures</h3>
+<pre class="python"><code>import pandas as pd
+
+rows = []
+for name in (&quot;eulytite&quot;, &quot;bipo4&quot;):
+    crystal = facet.example(name)                       # facet.read(path) for a file
+    for row in crystal.sites().where(element=&quot;Bi&quot;):
+        rows.append({&quot;structure&quot;: crystal.name, **row})
+bi = pd.DataFrame(rows)[[&quot;structure&quot;, &quot;site&quot;, &quot;CN&quot;, &quot;BVS / v.u.&quot;, &quot;phi&quot;, &quot;plateau / decades&quot;]]
+print(bi.round(3).to_string(index=False))
+bi.to_csv(&quot;bi_sites.csv&quot;, index=False)
+</code></pre>
+<pre class="output"><code>structure site  CN  BVS / v.u.   phi  plateau / decades
+ Eulytine   Bi   6       3.240 0.419              1.092
+Ximengite   Bi   8       3.045 0.128              0.921
+</code></pre>
+<h3>Optical basicity along a composition series</h3>
+<pre class="python"><code>series = []
+for x in (0, 5, 10, 15, 20):
+    text = f&quot;{20 - x}Na2O-{10 + x}CaO-5Al2O3-65SiO2&quot;
+    found = facet.basicity.composition(text)
+    series.append({&quot;composition&quot;: text, &quot;Lambda&quot;: round(found.value, 4),
+                   &quot;alpha(O2-) / Å3&quot;: round(found.polarisability, 3)})
+print(facet.Table(series))
+</code></pre>
+<pre class="output"><code>composition                 Lambda  alpha(O2-) / Å3
+--------------------------  ------  ---------------
+20Na2O-10CaO-5Al2O3-65SiO2  0.5936  1.551
+15Na2O-15CaO-5Al2O3-65SiO2  0.5892  1.545
+10Na2O-20CaO-5Al2O3-65SiO2  0.5847  1.539
+5Na2O-25CaO-5Al2O3-65SiO2   0.5803  1.533
+0Na2O-30CaO-5Al2O3-65SiO2   0.5759  1.526
+</code></pre>
+<h3>Qn of every frame of a trajectory</h3>
+<pre class="python"><code>per_frame = rt.table(&quot;glass&quot;, &quot;Qn Si (BV)&quot;, per_frame=True).to_frame().set_index(&quot;key&quot;)
+frames = per_frame[[c for c in per_frame.columns if c.startswith(&quot;frame &quot;)]].T
+frames.index = [int(name.split()[1]) for name in frames.index]       # &quot;frame 3 (fraction)&quot; -&gt; 3
+frames.index.name = &quot;frame&quot;
+print(frames.round(3).to_string())
+</code></pre>
+<pre class="output"><code>key      0      1      2      3      4      5
+frame
+0      0.0  0.023  0.119  0.435  0.419  0.004
+1      0.0  0.023  0.123  0.431  0.419  0.004
+2      0.0  0.023  0.123  0.431  0.419  0.004
+3      0.0  0.023  0.123  0.423  0.423  0.008
+4      0.0  0.023  0.119  0.435  0.419  0.004
+5      0.0  0.023  0.123  0.431  0.419  0.004
+</code></pre>
+<h3>A per-atom file for OVITO or a spreadsheet</h3>
+<pre class="python"><code>atoms = m.atoms().to_frame()
+atoms[&quot;lambda&quot;] = m.basicity(formers=[&quot;Si&quot;, &quot;Al&quot;]).values        # NaN for the cations
+atoms.to_csv(&quot;atoms.csv&quot;, index=False)
+print(atoms[[&quot;atom&quot;, &quot;element&quot;, &quot;CN&quot;, &quot;BVS / v.u.&quot;, &quot;lambda&quot;]].head(4).round(3).to_string(index=False))
+</code></pre>
+<pre class="output"><code> atom element  CN  BVS / v.u.  lambda
+    1      Si   4       3.992     NaN
+    2      Si   4       4.109     NaN
+    3       O   2       1.924   0.497
+    4      Na   4       0.597     NaN
+</code></pre>
+<h3>Several models, one table</h3>
+<pre class="python"><code>from pathlib import Path
+
+rows = []
+for path in sorted(Path(&quot;runs&quot;).glob(&quot;*.data&quot;)):
+    with facet.model(path, type_map={1: &quot;O&quot;, 2: &quot;Si&quot;, 3: &quot;Na&quot;}) as model:
+        results = model.analyse(&quot;glass&quot;, formers=[&quot;Si&quot;])
+        for row in results.table(&quot;glass&quot;, &quot;Qn Si (BV)&quot;):
+            rows.append({&quot;model&quot;: path.stem, &quot;n&quot;: row[&quot;key&quot;], &quot;fraction&quot;: row[&quot;mean (fraction)&quot;]})
+table = pd.DataFrame(rows).pivot(index=&quot;model&quot;, columns=&quot;n&quot;, values=&quot;fraction&quot;)
+</code></pre>
+<h2>9. When something goes wrong</h2>
+<table>
+<thead>
+<tr>
+<th>What is printed</th>
+<th>What it means, and what to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>... type_map ...</code> when opening a LAMMPS file</td>
+<td>the file numbers its atom types; give <code>type_map={1: "O", 2: "Si", ...}</code> in the order of the <code>Masses</code> section</td>
+</tr>
+<tr>
+<td><code>... is an MD model, not a crystal structure</code></td>
+<td>the file was given to <code>facet.read</code>; open it with <code>facet.model</code></td>
+</tr>
+<tr>
+<td><code>rings: formers: ...</code> or another <code>analysis: input: ...</code> line</td>
+<td>the analysis lacks an input; <code>m.missing(...)</code> lists them all, and each is a keyword of <code>analyse</code></td>
+</tr>
+<tr>
+<td><code>unknown option ...</code> or <code>... is not one of ...</code></td>
+<td>a name or a value is misspelt; the message lists the valid ones, and <code>print(facet.options())</code> all of them</td>
+</tr>
+<tr>
+<td><code>no site labelled ...</code></td>
+<td>the label is not in the file; <code>c.labels</code> lists the labels</td>
+</tr>
+<tr>
+<td>a note that a parameter was <em>estimated</em></td>
+<td>no tabulated bond-valence parameter covers the pair; the valence sums of that site rest on an estimate, and the note names the pair</td>
+</tr>
+<tr>
+<td>a note that the model <em>is not neutral</em></td>
+<td>the atom counts and the oxidation states do not balance; the count of one element is usually the cause</td>
+</tr>
+<tr>
+<td><code>nan</code> in a table</td>
+<td>the quantity is undefined there: a spread over one frame, a plateau width exactly on a step, λ of a cation</td>
+</tr>
+<tr>
+<td><code>to_frame() needs pandas</code>, <code>the figures need matplotlib</code></td>
+<td>the optional package is not installed (section 1)</td>
+</tr>
+<tr>
+<td>a different number from the application</td>
+<td>the thresholds or the parameter set differ; <code>table.notes</code> and <code>r.provenance</code> state those used</td>
+</tr>
+</tbody>
+</table>
+<p>A calculation that cannot be done is refused with the reason. It is not
+replaced by an approximate one.</p>
+<h2>10. Reporting results</h2>
+<p>The numbers depend on choices, and a result is reproducible when they are
+stated with it:</p>
+<ul>
+<li>the FACET version (<code>facet.__version__</code>);</li>
+<li>the bond threshold and the listing threshold, in valence units;</li>
+<li>the bond-valence parameter set (<code>c.params.name</code>, or the note of any table);</li>
+<li>for a model: the formers, the frames used, and whether a quantity is the
+  bond-valence count or the distance count;</li>
+<li>for optical basicity: the scale.</li>
+</ul>
+<p><code>table.notes</code>, <code>results.provenance</code> and the header of every exported file
+carry them. The references behind the main quantities:</p>
+<ul>
+<li>Bond valence: I. D. Brown and D. Altermatt, Acta Cryst. B41 (1985) 244;
+  N. E. Brese and M. O'Keeffe, Acta Cryst. B47 (1991) 192.</li>
+<li>Effective coordination number: R. Hoppe, Z. Kristallogr. 150 (1979) 23.</li>
+<li>Optical basicity: J. A. Duffy and M. D. Ingram, J. Non-Cryst. Solids 21
+  (1976) 373; J. A. Duffy, J. Non-Cryst. Solids 109 (1989) 35.</li>
+<li>The practice glass: interatomic potential of A. Pedone et al., J. Phys.
+  Chem. B 110 (2006) 11780. It is a small, quickly quenched model for trying
+  the library, and its input files are in <code>docs/practice_glass</code>.</li>
+</ul>
+<h2>11. Reference</h2>
+<h3>Functions of <code>facet</code></h3>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>facet.read(path, block=None, v_bond=, v_list=, params=)</code></td>
+<td>a <code>Crystal</code></td>
+</tr>
+<tr>
+<td><code>facet.read_all(path)</code></td>
+<td>a list of <code>Crystal</code>, one per data block</td>
+</tr>
+<tr>
+<td><code>facet.model(path, type_map=..., **reader_options)</code></td>
+<td>a <code>Model</code></td>
+</tr>
+<tr>
+<td><code>facet.load(path)</code></td>
+<td>a <code>Model</code> or a <code>Crystal</code>, by what the file is</td>
+</tr>
+<tr>
+<td><code>facet.example(name)</code>, <code>facet.examples()</code></td>
+<td>a bundled file opened; the names and paths</td>
+</tr>
+<tr>
+<td><code>facet.compare(paths_or_crystals)</code></td>
+<td>one table of the cation sites of several structures</td>
+</tr>
+<tr>
+<td><code>facet.report_on(paths, out=None, fmt=None, ...)</code></td>
+<td>the report over several structures, written when <code>out</code> is given</td>
+</tr>
+<tr>
+<td><code>facet.analyses()</code>, <code>facet.presets()</code>, <code>facet.options()</code></td>
+<td>the analyses of a model, the presets, every option</td>
+</tr>
+<tr>
+<td><code>facet.parameters(name)</code></td>
+<td>a bond-valence parameter set: <code>"built-in"</code>, <code>"bvparm2020"</code> or a file</td>
+</tr>
+<tr>
+<td><code>facet.bond_valence(d, r0, b=0.37)</code>, <code>facet.cutoff_distance(r0, v, b=0.37)</code></td>
+<td>the bond-valence formula and its inverse</td>
+</tr>
+<tr>
+<td><code>facet.read_volume(path)</code></td>
+<td>a grid from a CHGCAR, cube or XSF file</td>
+</tr>
+<tr>
+<td><code>facet.table(objects)</code>, <code>facet.Table(rows)</code></td>
+<td>a table from the engine's objects, or from rows</td>
+</tr>
+<tr>
+<td><code>facet.selfcheck()</code></td>
+<td>the reference numbers recomputed</td>
+</tr>
+<tr>
+<td><code>facet.basicity</code>, <code>facet.plot</code></td>
+<td>optical basicity; the quick figures</td>
+</tr>
+</tbody>
+</table>
+<h3>A <code>Crystal</code></h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Identity</td>
+<td><code>name</code>, <code>formula</code>, <code>spacegroup</code>, <code>cell</code>, <code>labels</code>, <code>n_sites</code>, <code>n_atoms</code>, <code>notes</code>, <code>structure</code></td>
+</tr>
+<tr>
+<td>Thresholds</td>
+<td><code>v_bond</code>, <code>v_list</code>, <code>params</code>, <code>with_thresholds(...)</code></td>
+</tr>
+<tr>
+<td>Sites</td>
+<td><code>sites(anions=False)</code>, <code>site(label)</code>, <code>results(anions=False)</code>, <code>atoms()</code></td>
+</tr>
+<tr>
+<td>File</td>
+<td><code>composition()</code>, <code>density()</code>, <code>reciprocal_cell()</code>, <code>check()</code>, <code>oxidation_states()</code>, <code>disorder()</code>, <code>configuration(choices)</code></td>
+</tr>
+<tr>
+<td>Bond valence</td>
+<td><code>cutoffs()</code>, <code>anion_sums()</code>, <code>charge_balance()</code>, <code>gii()</code>, <code>bond_strain()</code>, <code>a_priori()</code>, <code>connectivity()</code>, <code>stability()</code></td>
+</tr>
+<tr>
+<td>Simulation</td>
+<td><code>diffraction(...)</code>, <code>reflections(...)</code>, <code>d_spacing(h, k, l)</code>, <code>two_theta(h, k, l)</code>, <code>structure_factor(h, k, l)</code>, <code>pdf(...)</code></td>
+</tr>
+<tr>
+<td>Geometry and maps</td>
+<td><code>plane(h, k, l)</code>, <code>torsion(a, b, c, d)</code>, <code>valence_map(element)</code>, <code>energy_map(element)</code></td>
+</tr>
+<tr>
+<td>Basicity</td>
+<td><code>basicity(scale, formers)</code></td>
+</tr>
+<tr>
+<td>Output</td>
+<td><code>write(path)</code>, <code>render(path, ...)</code></td>
+</tr>
+</tbody>
+</table>
+<h3>A <code>Model</code> and its <code>Results</code></h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>What was read</td>
+<td><code>describe()</code>, <code>n_atoms</code>, <code>n_frames</code>, <code>elements</code>, <code>composition(k)</code>, <code>density(k)</code>, <code>oxidation_states()</code>, <code>frame(k)</code>, <code>close()</code></td>
+</tr>
+<tr>
+<td>Analyses</td>
+<td><code>analyse(*names, **inputs)</code>, <code>missing(*names, **inputs)</code>, <code>available(**inputs)</code>, <code>preset(name)</code>, <code>request(...)</code></td>
+</tr>
+<tr>
+<td>Atom by atom</td>
+<td><code>atoms(k)</code>, <code>site(atom, k)</code>, <code>environments(element)</code>, <code>write_environment(atom, path)</code>, <code>density_map(elements)</code>, <code>basicity(k)</code>, <code>parity(table)</code></td>
+</tr>
+<tr>
+<td>Results</td>
+<td><code>analyses</code>, <code>failed</code>, <code>notes</code>, <code>provenance</code>, <code>minima</code>, <code>descriptors(analysis)</code>, <code>find(text)</code>, <code>table(analysis, descriptor, per_frame=False)</code>, <code>get(analysis, descriptor)</code>, <code>raw(analysis)</code>, <code>export(path)</code></td>
+</tr>
+</tbody>
+</table>
+<h3>From a terminal</h3>
+<p>The same calculations without writing Python:</p>
+<pre class="output"><code>python -m facet.site FILE --all                 one site, or every site, as text
+python -m facet.report FOLDER -o report.xlsx    the report over a set of structures
+python -m facet.md describe FILE                what a model file holds
+python -m facet.md analyses                     the analyses and their inputs
+python -m facet.md analyse FILE --only glass --formers Si,Al --out out.xlsx
+python -m facet.basicity composition &quot;30Na2O-70SiO2&quot;
+python -m facet.check                           the reference numbers
+python -m facet --selfcheck                     this installation, checked
+python -m facet FILE                            the application, on a file
+</code></pre></body></html>

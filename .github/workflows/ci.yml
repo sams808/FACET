@@ -8,7 +8,7 @@ name: ci
 #            that one assertion out (tests/conftest.py, windows_look)
 #   package  the wheel built, installed alone with only its declared dependencies, and checked from outside the
 #            checkout: the self-check (tables, bundled structures, the window opening), the reference numbers,
-#            the basicity commands
+#            the library on a bundled crystal and on the practice glass, the basicity commands
 #   frozen   the Windows application built as a release is (tools/build_exe.py --app) and its own self-check run
 #            in the frozen copy, on the offscreen platform and on the native one
 #
@@ -129,6 +129,25 @@ jobs:
       - name: Reference numbers
         working-directory: ${{ runner.temp }}
         run: python -m facet.check --failures
+      - name: The library, with the declared dependencies and nothing else
+        working-directory: ${{ runner.temp }}
+        run: |
+          python - <<'EOF'
+          import sys
+          import facet
+
+          c = facet.example("quartz")
+          print(c.sites().select("site", "CN", "BVS / v.u.", "phi"))
+          assert c.site("Si").cn == 4
+          assert len(c.diffraction().reflections) > 10 and c.pdf(r_max=6).G.size
+          c.render("quartz.png")
+          with facet.example("glass") as m:
+              r = m.analyse("glass", formers=["Si", "Al"])
+              print(r.table("glass", "Qn Si (BV)").select("key", "mean (fraction)"))
+              assert not r.failed and len(m.atoms()) == 1200
+          loaded = [n for n in ("pandas", "matplotlib", "pymatgen") if n in sys.modules]
+          assert not loaded, loaded
+          EOF
       - name: Basicity commands
         working-directory: ${{ runner.temp }}
         run: |

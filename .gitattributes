@@ -3,3 +3,5 @@
 # clone with core.autocrlf=true turns every LF into CRLF and the tests that cut
 # a file at a known byte stop meaning what they say.
 tests/data/** -text
+# The practice glass is read as LAMMPS wrote it, on every checkout.
+facet/data/examples/practice_glass.* -text

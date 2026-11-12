@@ -242,6 +242,8 @@ that already exist. Revisit only if it is actually wanted.
 | Keyboard and mouse reference | ✓ | – | **done** | *Help ▸ Keyboard and mouse* |
 | Licences and redistribution terms | – | – | **done** | *Help ▸ Licences*, including what the Qt LGPL requires of a build that is passed on |
 | A written statement of what the program does not do | – | – | **done** | a manual section of its own, and `VERIFICATION.md` in the repository |
+| **The whole program as a Python library** | – | – | **done** | `import facet`: a `Crystal` (sites, contacts, plateaus, CN function, CN by other methods, cutoffs, anion sums, a priori valences, connectivity, diffraction, PDF, EXAFS shells and FEFF input, planes, valence and energy maps, basicity, files written, pictures drawn) and a `Model` (the analyses of the Model workspace through the same driver, atom by atom tables, one atom as a site, environments, basicity), tables as plain lists of rows, quick figures; no window toolkit imported except to draw a picture |
+| **A manual of the library whose examples are run** | – | – | **done** | `docs/library_manual.md` and its PDF, for students using the library in their own code: every example is run when the manual is built, its output written under it, and the test suite rebuilds it; a practice glass model is bundled so the examples run as written |
 
 ## 14. Glass models from molecular dynamics
 

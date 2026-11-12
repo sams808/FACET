@@ -15,6 +15,7 @@ passed. This runs in the copy being checked -- the frozen application, or a
 * every bundled structure is present;
 * the numbers the manual states for them are recomputed (``facet.check``);
 * the basicity library reads a composition and a bundled structure;
+* the library opens a bundled crystal and the practice glass model;
 * the manual and the change log are there;
 * the window opens on a bundled structure, lists its sites and draws.
 
@@ -119,6 +120,28 @@ def _basicity_library() -> str:
             f"{len(anions)} anion site(s)")
 
 
+def _library() -> str:
+    """The library front door on what this copy carries: a bundled crystal
+    and, when it is there, the practice glass."""
+    from .. import library
+
+    quartz = library.example("quartz")
+    row = quartz.sites()[0]
+    if row["CN"] != 4:
+        raise RuntimeError(f"quartz Si reads CN {row['CN']}")
+    text = f"quartz Si: CN {row['CN']}, valence sum {row['BVS / v.u.']:.3f} v.u."
+    if "glass" not in library.examples():
+        raise RuntimeError("the practice glass model is missing")
+    with library.example("glass") as glass:
+        atoms = glass.atoms()
+        silicon = atoms.where(element="Si").column("CN")
+        if glass.n_atoms != 1200 or not len(silicon):
+            raise RuntimeError(f"the practice glass holds {glass.n_atoms} atoms")
+        text += (f"; practice glass: {glass.n_atoms} atoms, mean CN of Si "
+                 f"{silicon.mean():.2f}")
+    return text
+
+
 def _documents() -> str:
     from ..core import examples
     from . import help as help_mod
@@ -196,6 +219,7 @@ CHECKS = (
     ("bundled structures", _examples, False),
     ("reference numbers", _reference_numbers, False),
     ("basicity library", _basicity_library, False),
+    ("library", _library, False),
     ("manual and change log", _documents, False),
     ("window", _window, True),
 )

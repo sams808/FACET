@@ -1194,6 +1194,51 @@ frozen application, and failed one test on Windows: the toolbar on one row
 at a 2560 px window, on a runner whose screen holds a window to 1920 px. The
 test now asserts the row count where the window got the width it asked for.
 
+**The library (2.1.0).** `import facet` reaches everything the window
+computes: a `Crystal`, a `Model`, tables, quick figures and pictures
+(`facet/library`). The library adds no calculation of its own. It calls the
+engine the window calls, so what has to be shown is that each call returns
+the engine's number and that the number is the one meant. Each is held to
+something outside the wrapper (`tests/test_library.py`,
+`tests/test_library_model.py`):
+
+* the site table of every bundled structure against `REFERENCE.json`, the
+  numbers the manual states and `facet.check` recomputes;
+* every contact's valence against exp((R₀ − d)/b) from the row's own R₀, b
+  and distance, and the sum of the bonded ones against the site's sum;
+* 2θ of a reflection against Bragg's law from its d spacing; the first peak
+  of the pair distribution function against the shortest P–O bond;
+* the anions' valence sums over the cell against the cations', to 10⁻⁵;
+* the valence map of Na in cryolite, read at the Na1 site, against the
+  valence sum the site analysis gives that site;
+* a model's results against the driver called directly, descriptor for
+  descriptor; one atom read as a site against its row of the atom table;
+  FACET's own per-atom table, written to a file and read back as "another
+  code's", against itself through the parity comparison.
+
+**The practice glass.** The examples of the library manual and the model
+tests needed a glass model that can be passed on, and none of the test
+models is one. A model was made for the purpose with LAMMPS and the Pedone
+potential (20 Na₂O · 10 CaO · 5 Al₂O₃ · 65 SiO₂, 1200 atoms, quenched at
+10 K/ps; `docs/practice_glass` holds the input, the log and what it measures
+as) and is bundled with the examples. It is checked against what is known
+of it from outside FACET: the atom counts it was built with; the density
+LAMMPS printed for its last step (2.661 g/cm³, read from the log by the
+test); zero net charge; and the stoichiometry of its oxygens, the
+composition fixing Na + 2 Ca − Al = 200 non-bridging oxygens of 700 where
+the model has 195.3 non-bridging and 1 free on average over six frames, the
+rest being oxygens on three formers and five-fold aluminium. Si–O is at
+1.60 Å, Al–O at 1.73 Å, 99.6 % of the silicon is four-fold.
+
+**A manual that is run.** `docs/library_manual.md` is built by
+`tools/build_library_manual.py`, which runs every example of its source in
+order and writes what each printed under it; no output is typed. The test
+suite rebuilds it and compares (numbers to three significant figures, so
+that another platform's last digits do not count), and checks that every
+public function and method of the library appears in it
+(`tests/test_library_manual.py`). That check found two methods the first
+draft had left out.
+
 The window's frame was rebuilt for 2.0 (`facet/ui/shell.py`,
 `tests/test_shell.py`), each part against the complaint it answers. The
 toolbar is groups that move to another row when the width runs out: at

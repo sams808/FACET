@@ -1,7 +1,10 @@
 # Optical basicity from Python and the command line
 
 `facet.basicity` gives the optical-basicity calculations of FACET without the
-window: from a script, a notebook or a terminal. It is part of the `facet`
+window: from a script, a notebook or a terminal. It is one part of the FACET
+library; the rest (coordination analysis of crystals, the analyses of MD
+models, figures and pictures) is described in
+[library_manual.md](library_manual.md). It is part of the `facet`
 package, imports no window toolkit, and returns the same numbers as the
 Basicity tab, the Site rows, the MD analysis and the basicity maps.
 

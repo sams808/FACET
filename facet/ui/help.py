@@ -436,6 +436,12 @@ it is whole: the bond-valence table, the bundled structures, the numbers
 above, the basicity library, this manual, and the window opening on a
 structure. It exits with 0 when every line holds and writes the lines, with
 the versions in use, to the file named.</p>
+<p>Everything on these pages is also a Python library, for use in a script or
+a notebook: <code>import facet</code>, then <code>facet.read(path)</code> for
+a crystal structure and <code>facet.model(path)</code> for an MD model. The
+library is installed with <code>pip</code> from the repository and is
+described in its own manual, <code>docs/library_manual.md</code>, whose
+examples are run when it is built.</p>
 """),
 
         ("examples", "The bundled structures", f"""

@@ -6,6 +6,10 @@ Coordination analysis from crystal structure files and from molecular-dynamics
 models of glasses, for people who do not write code. Windows desktop
 application; no Python installation required.
 
+For people who do write code, the same calculations are a Python library:
+`import facet` (see [As a Python library](#as-a-python-library) and the
+manual, [docs/library_manual.md](docs/library_manual.md)).
+
 ## What it is for
 
 A coordination number is not measured. It is produced by choosing a cutoff, and
@@ -341,6 +345,52 @@ written by LAMMPS, ASE, OVITO and pymatgen, five models made with LAMMPS for
 the purpose (four quenched glasses and a melt), and outside codes run on the
 same frames — LAMMPS itself, ASE, OVITO, vitrum, amorphouspy, matscipy,
 pyscal3 and FEFF. No model from the group's own work has been analysed yet.
+
+## As a Python library
+
+Everything the window computes can be called from a script or a notebook.
+The library is the same package, installed with `pip`, and imports no window
+toolkit:
+
+```
+python -m pip install "git+https://github.com/sams808/FACET"
+```
+
+```python
+import facet
+
+c = facet.read("structure.cif")                  # or facet.example("quartz")
+print(c.sites())                                 # CN, valence sum, phi, plateau per site
+bi = c.site("Bi1")
+bi.contacts(); bi.plateaus(); bi.cn_function()   # one site in detail
+c.diffraction(); c.pdf(r_max=10); c.valence_map("Na")
+c.render("structure.png", style="polyhedral")    # a picture, drawn as the window draws it
+
+m = facet.model("glass.data", type_map={1: "O", 2: "Si", 3: "Na"})
+r = m.analyse("glass", "rings", formers=["Si"],
+              network={"ring_criterion": "king", "ring_max_size": 12})
+print(r.table("glass", "Qn Si (BV)"))            # any of the 29 analyses, as rows
+r.export("glass.xlsx")
+m.atoms(); m.site(17); m.basicity(formers=["Si"])
+
+facet.basicity.composition("30Na2O-70SiO2").value
+facet.plot.cn_function(bi, save="cn.png")        # quick figures
+```
+
+A `Crystal` covers the Site, Tools, Diffraction, PDF, EXAFS, Planes and Volume
+pages of the window and the report over several files; a `Model` runs the
+analyses of the Model workspace through the same driver as `python -m
+facet.md`. Lists of rows come back as tables that are plain lists of
+dictionaries (one call from a pandas data frame), and the engine's own
+objects come back with their notes.
+
+**[docs/library_manual.md](docs/library_manual.md)** is the manual, written
+for students using the library in their own code (also as
+[a PDF](docs/FACET-library-manual.pdf)). Every example in it is run when the
+manual is built, and the output printed under each is what the library
+returned; the test suite rebuilds it to confirm that it still does. Six
+crystal structures and a small practice glass model are bundled, so the
+examples run as written (`facet.example("quartz")`, `facet.example("glass")`).
 
 ## Status
 

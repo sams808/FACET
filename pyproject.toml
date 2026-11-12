@@ -8,7 +8,7 @@ name = "facet"
 # and was not: this said 0.1.0 while the application said 0.3.0, so anything
 # installed from the repository reported a version three releases old.
 dynamic = ["version"]
-description = "Coordination analysis from crystal structure files, cut by bond valence rather than by distance"
+description = "Coordination analysis of crystal structures and of MD glass models, cut by bond valence rather than by distance: an application and a Python library"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
