@@ -68,7 +68,11 @@ def test_the_toolbar_reflows_and_never_squeezes_a_control(window, qapp):
         for group in bar._all():
             right = group.mapTo(bar, group.rect().topRight()).x()
             assert right <= bar.width(), (width, right, bar.width())
-    assert rows[2560] == 1, rows
+    # one row on a very wide window -- where the window was given that
+    # width: a screen narrower than 2560 px holds it to its own (a hosted
+    # runner's does), and the last pass of the loop then measured less
+    if window.width() >= 2560:
+        assert rows[2560] == 1, rows
     if windows_look():
         # with the Windows style and font, which the layout was drawn for;
         # a wider font, or the wider controls of Qt 6.12, take a row more
