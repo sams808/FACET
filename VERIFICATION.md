@@ -1162,8 +1162,9 @@ showed:
   `tests/data/reference` (all from the Crystallography Open Database, public
   domain, each listed with its determination); the tests that sweep the
   whole collection, and two that name entries of a licensed database, still
-  skip elsewhere. In a clean checkout 3553 tests run on Linux and 3691 on
-  Windows.
+  skip elsewhere. On GitHub's machines 3553 tests run on Linux and on
+  macOS and 3593 on Windows, where the views are drawn by Qt's software
+  OpenGL.
 * **The toolbar squeezed a control after all.** It stopped folding at four
   rows and put what was left on the fourth whether it fitted or not. With
   Qt 6.12, whose Windows controls are a tenth wider than those of Qt 6.9,
@@ -1187,6 +1188,11 @@ showed:
 
 On four workers (`-n 4 --dist loadfile`) the suite takes about four minutes
 on the machine where it took thirty-six in one process.
+
+The first run on GitHub passed on Linux, on macOS, for the wheel and for the
+frozen application, and failed one test on Windows: the toolbar on one row
+at a 2560 px window, on a runner whose screen holds a window to 1920 px. The
+test now asserts the row count where the window got the width it asked for.
 
 The window's frame was rebuilt for 2.0 (`facet/ui/shell.py`,
 `tests/test_shell.py`), each part against the complaint it answers. The
