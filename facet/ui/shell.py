@@ -69,11 +69,18 @@ def _rule() -> QFrame:
 
 
 class ReflowBar(QWidget):
-    """Groups on as few rows as the width allows (at most ``max_rows``).
+    """Groups on as few rows as the width allows.
 
     ``trailing`` groups are pushed to the right end of the last row they
     land on. The bar's minimum width is its widest group's, so it never
     forces the window wider than one group.
+
+    ``max_rows`` is the number of rows the bar is drawn for at the
+    narrowest window, not a limit: a group that does not fit on the last of
+    them starts another row. Stopping at a fixed count put what was left on
+    the last row whether or not it fitted, which is the squeeze this bar
+    exists to end; it showed with Qt 6.12, whose controls are a tenth wider
+    than those of Qt 6.9 the count was chosen with.
     """
 
     def __init__(self, groups, trailing=(), max_rows: int = 3, parent=None):
@@ -93,7 +100,8 @@ class ReflowBar(QWidget):
         self._rules: list[QFrame] = []
         self._rows: list[QHBoxLayout] = []
         self._holders: list[QWidget] = []
-        for _ in range(self._max_rows):
+        # one row per group at the most: each group alone always fits
+        for _ in range(max(self._max_rows, len(self._groups) + len(self._trailing))):
             holder = QWidget()
             row = QHBoxLayout(holder)
             row.setContentsMargins(*ROW_MARGINS)
@@ -120,8 +128,7 @@ class ReflowBar(QWidget):
             if need <= 0:
                 rows.append(row)
                 continue
-            if used and used + 2 * GROUP_SPACING + 1 + need > room \
-                    and row < self._max_rows - 1:
+            if used and used + 2 * GROUP_SPACING + 1 + need > room:
                 row, used = row + 1, 0
             used += need + (2 * GROUP_SPACING + 1 if used else 0)
             rows.append(row)

@@ -23,11 +23,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import COLLECTION
+
 from facet.core import cif
 from facet.core import diffraction as dif
 from facet.core.utilities import metric_tensor
 
-BI_CIF_DIR = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi")
+BI_CIF_DIR = COLLECTION / "Bi"
 
 
 # ---------------------------------------------------------------------------

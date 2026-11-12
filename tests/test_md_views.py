@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from conftest import dispose
+from conftest import dispose, has_vector_marks
 
 ROOT = Path(__file__).resolve().parent.parent
 MD_DATA = Path(__file__).resolve().parent / "data" / "md"
@@ -318,7 +318,7 @@ def test_vector_exports_are_vectors_and_the_png_is_600_dpi(qapp, containers,
     finally:
         dispose(plot)
     text = svg.read_text(encoding="utf-8")
-    assert "<svg" in text and "<path" in text
+    assert "<svg" in text and has_vector_marks(text)
     assert 'width="180mm" height="110mm"' in text
     assert "image/png" not in text
     assert pdf.read_bytes()[:5] == b"%PDF-"
@@ -536,7 +536,7 @@ def test_the_figure_shown_is_saved_at_600_dpi(browser, tmp_path):
     png = browser.export_figure(tmp_path / "density.png")
     assert QImage(str(png)).dotsPerMeterX() == 23622
     svg = browser.export_figure(tmp_path / "density.svg")
-    assert "<path" in svg.read_text(encoding="utf-8")
+    assert has_vector_marks(svg.read_text(encoding="utf-8"))
     browser.select("glass", "g(r) first minima")
     assert browser.view.figure is None
     with pytest.raises(ValueError):

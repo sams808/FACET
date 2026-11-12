@@ -1,5 +1,7 @@
 # FACET
 
+[![ci](https://github.com/sams808/FACET/actions/workflows/ci.yml/badge.svg)](https://github.com/sams808/FACET/actions/workflows/ci.yml)
+
 Coordination analysis from crystal structure files and from molecular-dynamics
 models of glasses, for people who do not write code. Windows desktop
 application; no Python installation required.
@@ -381,7 +383,27 @@ side.
 
 ```
 py -3.11 -m pytest tests/ -q
+py -3.11 -m pytest tests/ -q -n 4 --dist loadfile     # the same on four workers (pytest-xdist)
 ```
+
+The structures the tests name are in `tests/data/reference`, so a checkout
+on any machine runs them. The tests that sweep a whole collection of CIF
+files skip unless `FACET_REFERENCE_CIFS` names a copy of that collection.
+
+Every push is tested by GitHub Actions (`.github/workflows/ci.yml`): the
+suite on Windows, Linux and macOS; the wheel installed alone and checked;
+the Windows application frozen and its self-check run inside the frozen
+copy. That self-check is also a command, for any copy of FACET:
+
+```
+py -3.11 -m facet --selfcheck                    # a checkout or a pip install
+FACET.exe --selfcheck --out report.json          # the built application
+```
+
+It confirms that the copy is whole: the bond-valence table, the bundled
+structures, the numbers the manual states for them, the basicity library,
+the manual and change log, and the window opening on a structure. The exit
+code is 0 when every line holds.
 
 Three commands run without the window. `py -3.11 -m facet.check` recomputes
 every number the tutorials state for the bundled examples on the machine it

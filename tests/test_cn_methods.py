@@ -12,11 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import COLLECTION
+
 from conftest import sample_cif
 
 from facet.core import cif, cn_methods as M, coordination
 
-CIFS = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs")
+CIFS = COLLECTION / "Bi" / "cifs"
 OCTAHEDRON = sample_cif("1526788", "1526788_Na(BiO3).cif")
 LONE_PAIR = sample_cif("1526458", "1526458_Bi2O3.cif")
 

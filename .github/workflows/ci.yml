@@ -1,0 +1,196 @@
+name: ci
+
+# Every push to main, every pull request, and by hand:
+#   lint     the rules that are errors in any style: syntax, undefined names, misused comparisons
+#   tests    the test suite from source, on four workers: on Windows with the real Windows platform (its style
+#            and font are what the layout is measured in) and software OpenGL, the runner having no graphics
+#            card; on Linux and macOS without a display, where the tests that state a size in pixels leave
+#            that one assertion out (tests/conftest.py, windows_look)
+#   package  the wheel built, installed alone with only its declared dependencies, and checked from outside the
+#            checkout: the self-check (tables, bundled structures, the window opening), the reference numbers,
+#            the basicity commands
+#   frozen   the Windows application built as a release is (tools/build_exe.py --app) and its own self-check run
+#            in the frozen copy, on the offscreen platform and on the native one
+#
+# The tests read their reference structures from tests/data/reference, which is in the repository. The tests
+# that sweep a whole collection of structures skip here: the collection is not public.
+# Every job has a time limit, and so has every test (15 min), so a test that waits on a window fails the run
+# instead of holding a runner for hours.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHONIOENCODING: utf-8
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ruff
+      - name: Syntax errors, undefined names, misused comparisons
+        run: ruff check --select E9,F63,F7,F82 --output-format=github facet tools tests
+
+  tests:
+    name: tests (${{ matrix.os }}, py${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, python: "3.11", platform: windows}     # what the released application is frozen from
+          - {os: windows-latest, python: "3.13", platform: windows}
+          - {os: ubuntu-24.04, python: "3.11", platform: offscreen}
+          - {os: ubuntu-24.04, python: "3.13", platform: offscreen}
+          - {os: macos-15, python: "3.12", platform: offscreen}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      QT_QPA_PLATFORM: ${{ matrix.platform }}
+      QT_OPENGL: software                  # read on Windows only: Qt's own software renderer, no graphics card needed
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Qt runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0
+      # A hosted Windows runner has a 1024 x 768 screen, narrower than the window's minimum width.
+      - name: A screen the window fits on (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+      - name: Install
+        run: python -m pip install -e ".[dev,extra,report]"
+      - name: Versions
+        run: python -m pip list
+      - name: Tests
+        run: python -m pytest -q -n 4 --dist loadfile --timeout 900 -p no:cacheprovider -rfE
+      - name: Self-check from source
+        timeout-minutes: 10
+        run: python -m facet --selfcheck --out selfcheck-source.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: selfcheck-source-${{ matrix.os }}-py${{ matrix.python }}
+          path: selfcheck-source.json
+          if-no-files-found: ignore
+
+  package:
+    name: wheel, installed alone
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Qt runtime libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0
+      - name: Build the wheel and the source archive
+        run: |
+          python -m pip install build
+          python -m build
+          ls -l dist
+      - name: Install the wheel with its declared dependencies and nothing else
+        run: python -m pip install dist/*.whl
+      # From here on the working directory is outside the checkout, so `facet` is the installed copy.
+      - name: The installed copy is the one that runs
+        working-directory: ${{ runner.temp }}
+        run: python -c "import facet, pathlib; p = pathlib.Path(facet.__file__).resolve(); print(p); assert 'site-packages' in p.parts, p"
+      - name: Self-check of the installed copy
+        working-directory: ${{ runner.temp }}
+        timeout-minutes: 10
+        run: python -m facet --selfcheck --out "$GITHUB_WORKSPACE/selfcheck-wheel.json"
+      - name: Reference numbers
+        working-directory: ${{ runner.temp }}
+        run: python -m facet.check --failures
+      - name: Basicity commands
+        working-directory: ${{ runner.temp }}
+        run: |
+          facet-basicity scales
+          facet-basicity composition "30Na2O-70SiO2"
+          quartz="$(python -c 'from facet.core import examples; print(examples.folder() / "quartz_SiO2_cod9013321.cif")')"
+          python -m facet.basicity structure "$quartz"
+          python -m facet.basicity structure "$quartz" --json > basicity.json
+          python -c "import json; d = json.load(open('basicity.json')); print(sorted(d))"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: selfcheck-wheel
+          path: selfcheck-wheel.json
+          if-no-files-found: ignore
+
+  frozen:
+    name: frozen application (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install (not editable) with the packer
+        run: python -m pip install ".[report]" pyinstaller
+      - name: Build the application folder
+        timeout-minutes: 25
+        run: python tools/build_exe.py --app
+      - name: What was built
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse dist\FACET -File
+          "{0} files, {1:N0} MB" -f $files.Count, (($files | Measure-Object Length -Sum).Sum / 1MB)
+          foreach ($f in "FACET.exe", "_internal\facet\data\bvparm2020.cif", "_internal\facet\data\CHANGELOG.md",
+                         "_internal\facet\data\examples\REFERENCE.json") {
+            if (-not (Test-Path "dist\FACET\$f")) { throw "dist\FACET\$f is missing" }
+          }
+      - name: Self-check of the frozen copy (offscreen)
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process -FilePath "dist\FACET\FACET.exe" -ArgumentList "--selfcheck --out `"$PWD\selfcheck-frozen-offscreen.json`"" -Wait -PassThru
+          if (Test-Path selfcheck-frozen-offscreen.json) { Get-Content selfcheck-frozen-offscreen.json }
+          if ($p.ExitCode -ne 0) { throw "the frozen self-check exited $($p.ExitCode)" }
+      - name: Self-check of the frozen copy (native Windows platform)
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = $null
+          $p = Start-Process -FilePath "dist\FACET\FACET.exe" -ArgumentList "--selfcheck --out `"$PWD\selfcheck-frozen-native.json`"" -Wait -PassThru
+          if (Test-Path selfcheck-frozen-native.json) { Get-Content selfcheck-frozen-native.json }
+          if ($p.ExitCode -ne 0) { throw "the frozen self-check exited $($p.ExitCode)" }
+          $j = Get-Content selfcheck-frozen-native.json -Raw | ConvertFrom-Json
+          if (-not $j.environment.frozen) { throw "the report does not come from a frozen copy" }
+          "frozen self-check: $($j.checks.Count) checks hold on the $($j.environment.qt_platform) platform"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: selfcheck-frozen
+          path: selfcheck-frozen-*.json
+          if-no-files-found: ignore

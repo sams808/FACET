@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from conftest import dispose, sample_cif
+from conftest import dispose, has_vector_marks, sample_cif
 
 SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 
@@ -217,7 +217,7 @@ def test_the_view_exports_through_its_own_method(qapp, tmp_path):
         svg = widget.save_vector(tmp_path / "from_view.svg")
         assert Path(svg).is_file()
         text = Path(svg).read_text(encoding="utf-8", errors="replace")
-        assert "<path" in text
+        assert has_vector_marks(text)
         assert "image/png" not in text
 
         pdf = widget.save_vector(tmp_path / "from_view.pdf")

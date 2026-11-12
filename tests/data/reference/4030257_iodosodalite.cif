@@ -1,0 +1,128 @@
+#------------------------------------------------------------------------------
+#$Date: 2016-03-21 05:30:10 +0200 (Mon, 21 Mar 2016) $
+#$Revision: 178481 $
+#$URL: file:///home/coder/svn-repositories/cod/cif/4/03/02/4030257.cif $
+#------------------------------------------------------------------------------
+#
+# This file is available in the Crystallography Open Database (COD),
+# http://www.crystallography.net/
+#
+# All data on this site have been placed in the public domain by the
+# contributors.
+#
+data_4030257
+loop_
+_publ_author_name
+'Weller, M. T.'
+'Wong, G.'
+_publ_section_title
+;
+ Mixed halide sodalites
+;
+_journal_name_full
+'European Journal of Solid State and Inorganic Chemistry'
+_journal_page_first              619
+_journal_page_last               633
+_journal_volume                  26
+_journal_year                    1989
+_chemical_formula_sum            'Al6 I2 Na8 O24 Si6'
+_chemical_formula_weight         1152.11
+_space_group_IT_number           218
+_symmetry_cell_setting           cubic
+_symmetry_Int_Tables_number      218
+_symmetry_space_group_name_Hall  'P -4n 2 3'
+_symmetry_space_group_name_H-M   'P -4 3 n'
+_cell_angle_alpha                90
+_cell_angle_beta                 90
+_cell_angle_gamma                90
+_cell_formula_units_Z            1
+_cell_length_a                   9.0318(4)
+_cell_length_b                   9.0318(4)
+_cell_length_c                   9.0318(4)
+_cell_volume                     736.75(6)
+_diffrn_ambient_temperature      293
+_diffrn_radiation_probe          neutron
+_diffrn_radiation_wavelength     1.909
+_exptl_crystal_density_diffrn    2.597
+_pd_proc_ls_prof_wR_expected     0.1300
+_pd_proc_ls_prof_wR_factor       0.2777
+_refine_ls_R_I_factor            0.1650
+_cod_data_source_file            EJSSIC-1989-26-619-633-7.cif
+_cod_data_source_block           sodalites-7
+_cod_original_cell_volume        736.76(10)
+_cod_database_code               4030257
+loop_
+_symmetry_equiv_pos_site_id
+_symmetry_equiv_pos_as_xyz
+1 x,y,z
+2 1/2+y,1/2-x,1/2-z
+3 -x,-y,z
+4 1/2-y,1/2+x,1/2-z
+5 x,-y,-z
+6 1/2-y,1/2-x,1/2+z
+7 -x,y,-z
+8 1/2+y,1/2+x,1/2+z
+9 z,x,y
+10 1/2+x,1/2-z,1/2-y
+11 -z,-x,y
+12 1/2-x,1/2+z,1/2-y
+13 z,-x,-y
+14 1/2-x,1/2-z,1/2+y
+15 -z,x,-y
+16 1/2+x,1/2+z,1/2+y
+17 y,z,x
+18 1/2+z,1/2+y,1/2+x
+19 1/2+z,1/2-y,1/2-x
+20 1/2-z,1/2-y,1/2+x
+21 1/2-z,1/2+y,1/2-x
+22 y,-z,-x
+23 -y,-z,x
+24 -y,z,-x
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_B_iso_or_equiv
+I I 0 0 0 1 5.62(43)
+Na Na 0.2014(7) 0.2014(7) 0.2014(7) 1 3.82(16)
+Al Al 0.25 0.50 0.0 1 3.5(15)
+Si Si 0.25 0.0 0.5 1 2.5(13)
+O O 0.1459(15) 0.4526(4) 0.1477(15) 1 3.21(6)
+loop_
+_geom_angle_atom_site_label_1
+_geom_angle_atom_site_label_2
+_geom_angle_atom_site_label_3
+_geom_angle
+_geom_angle_site_symmetry_1
+_geom_angle_site_symmetry_3
+_geom_angle_publ_flag
+O Si O 112.6(7) 9_555 13_556 yes
+O Si O 107.9(4) 9_555 20_555 yes
+O Si O 107.9(4) 9_555 21_545 yes
+O Si O 107.9(4) 13_556 20_555 yes
+O Si O 107.9(4) 13_556 21_545 yes
+O Si O 112.6(6) 20_555 21_545 yes
+O Al O 112.3(6) . 5_565 yes
+O Al O 108.1(4) . 12_555 yes
+O Al O 108.1(4) . 14_554 yes
+O Al O 108.1(4) 5_565 12_555 yes
+O Al O 108.1(4) 5_565 14_554 yes
+O Al O 112.3(6) 12_555 14_554 yes
+Si O Al 144.5(5) 17_555 . yes
+loop_
+_geom_bond_atom_site_label_1
+_geom_bond_atom_site_label_2
+_geom_bond_distance
+_geom_bond_site_symmetry_2
+_geom_bond_publ_flag
+Si O 1.665(13) 9_555 yes
+Si O 1.665(13) 13_556 yes
+Si O 1.665(13) 20_555 yes
+Si O 1.665(13) 21_545 yes
+Al O 1.687(13) . yes
+Al O 1.687(13) 5_565 yes
+Al O 1.687(13) 12_555 yes
+Al O 1.687(13) 14_554 yes

@@ -1,0 +1,178 @@
+#------------------------------------------------------------------------------
+#$Date: 2016-03-25 15:54:39 +0200 (Fri, 25 Mar 2016) $
+#$Revision: 179942 $
+#$URL: file:///home/coder/svn-repositories/_RELOADED_COD/cod-reloaded/cif/7/02/37/7023719.cif $
+#------------------------------------------------------------------------------
+#
+# This file is available in the Crystallography Open Database (COD),
+# http://www.crystallography.net/
+#
+# All data on this site have been placed in the public domain by the
+# contributors.
+#
+data_7023719
+loop_
+_publ_author_name
+'Achary, S. N.'
+'Errandonea, D.'
+'Mu\~noz, A'
+'Rodr\'iguez-Hern\'andez, P'
+'Manj\'on, F J'
+'Krishna, P. S. R.'
+'Patwe, S. J.'
+'Grover, V.'
+'Tyagi, A. K.'
+_publ_section_title
+;
+ Experimental and theoretical investigations on the polymorphism and
+ metastability of BiPO4.
+;
+_journal_issue                   42
+_journal_name_full
+'Dalton transactions (Cambridge, England : 2003)'
+_journal_page_first              14999
+_journal_page_last               15015
+_journal_paper_doi               10.1039/c3dt51823j
+_journal_volume                  42
+_journal_year                    2013
+_chemical_formula_sum            'Bi O4 P'
+_chemical_formula_weight         303.95
+_space_group_IT_number           14
+_symmetry_cell_setting           monoclinic
+_symmetry_space_group_name_Hall  '-P 2yn'
+_symmetry_space_group_name_H-M   'P 1 21/n 1'
+_audit_creation_date             2012-07-26T17:46
+_audit_creation_method           'from EXP file using GSAS2CIF'
+_audit_update_record
+' 2012-07-26T17:46  Initial CIF as created by GSAS2CIF'
+_cell_angle_alpha                90.0
+_cell_angle_beta                 103.695(5)
+_cell_angle_gamma                90.0
+_cell_formula_units_Z            4
+_cell_length_a                   6.7561(4)
+_cell_length_b                   6.9408(4)
+_cell_length_c                   6.47637(33)
+_cell_volume                     295.06(3)
+_pd_block_id                     |BIPO4N_300K|SNA|Dhruva
+_pd_phase_name
+'from F:/BiPO4/BiPO4-RT/ND/MonaziteNEW/BiPO4-Monazite-67987-ICSD.ce'
+_cod_data_source_file            c3dt51823j.cif
+_cod_data_source_block           BIPO4_300K_Monazite_type
+_cod_depositor_comments
+;
+The following automatic conversions were performed:
+
+'_geom_bond_publ_flag' value 'N' changed to 'n' according to
+/home/saulius/struct/CIF-dictionaries/cif_core.dic dictionary named
+'cif_core.dic' version 2.4.2 from 2011-04-26 (26
+times).
+
+'_geom_angle_publ_flag' value 'N' changed to 'n' according
+to /home/saulius/struct/CIF-dictionaries/cif_core.dic dictionary
+named 'cif_core.dic' version 2.4.2 from 2011-04-26 (37 times).
+
+Automatic conversion script
+Id: cif_fix_values 1891 2012-01-12 08:04:46Z andrius 
+;
+_cod_original_cell_volume        295.06113
+_cod_database_code               7023719
+loop_
+_symmetry_equiv_pos_site_id
+_symmetry_equiv_pos_as_xyz
+1 +x,+y,+z
+2 -x+1/2,+y+1/2,-z+1/2
+-1 -x,-y,-z
+-2 +x+1/2,-y+1/2,+z+1/2
+loop_
+_atom_site_type_symbol
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_thermal_displace_type
+_atom_site_U_iso_or_equiv
+_atom_site_symmetry_multiplicity
+BI Bi1 0.2871(5) 0.1447(5) 0.0860(5) 1.0 Uiso 0.0092(6) 4
+P P1 0.2966(8) 0.1615(8) 0.6163(7) 1.0 Uiso 0.0073(9) 4
+O O1 0.2617(6) 0.0003(6) 0.4459(8) 1.0 Uiso 0.0110(9) 4
+O O2 0.3771(6) 0.3410(7) 0.5143(6) 1.0 Uiso 0.0067(7) 4
+O O3 0.4618(6) 0.1029(7) 0.8136(7) 1.0 Uiso 0.0025(8) 4
+O O4 0.1161(7) 0.2011(7) 0.7097(7) 1.0 Uiso 0.0067(9) 4
+loop_
+_geom_angle_atom_site_label_1
+_geom_angle_atom_site_label_2
+_geom_angle_atom_site_label_3
+_geom_angle
+_geom_angle_site_symmetry_1
+_geom_angle_site_symmetry_3
+_geom_angle_publ_flag
+O1 Bi1 O1 115.08(17) 1_555 2_555 n
+O1 Bi1 O2 77.16(17) 1_555 2_545 n
+O1 Bi1 O3 141.17(20) 1_555 1_554 n
+O1 Bi1 O3 70.73(19) 1_555 -1_656 n
+O1 Bi1 O4 146.91(20) 1_555 1_554 n
+O1 Bi1 O4 97.16(17) 1_555 -2_665 n
+O1 Bi1 O2 143.53(18) 2_555 2_545 n
+O1 Bi1 O3 98.03(21) 2_555 1_554 n
+O1 Bi1 O3 143.58(19) 2_555 -1_656 n
+O1 Bi1 O4 74.89(18) 2_555 1_554 n
+O1 Bi1 O4 71.54(16) 2_555 -2_665 n
+O2 Bi1 O3 88.32(18) 2_545 1_554 n
+O2 Bi1 O3 72.27(16) 2_545 -1_656 n
+O2 Bi1 O4 78.10(18) 2_545 1_554 n
+O2 Bi1 O4 143.70(18) 2_545 -2_665 n
+O3 Bi1 O3 70.56(20) 1_554 -1_656 n
+O3 Bi1 O4 58.80(15) 1_554 1_554 n
+O3 Bi1 O4 73.74(18) 1_554 -2_665 n
+O3 Bi1 O4 121.20(20) -1_656 1_554 n
+O3 Bi1 O4 72.06(16) -1_656 -2_665 n
+O4 Bi1 O4 115.74(18) 1_554 -2_665 n
+O1 P1 O2 106.5(4) 1_555 1_555 n
+O1 P1 O3 111.0(4) 1_555 1_555 n
+O1 P1 O4 114.6(4) 1_555 1_555 n
+O2 P1 O3 107.7(4) 1_555 1_555 n
+O2 P1 O4 114.7(4) 1_555 1_555 n
+O3 P1 O4 102.19(32) 1_555 1_555 n
+Bi1 O1 Bi1 110.23(22) 1_555 2_545 n
+Bi1 O1 P1 109.33(30) 1_555 1_555 n
+Bi1 O1 P1 140.3(4) 2_545 1_555 n
+Bi1 O2 P1 128.92(27) 2_555 1_555 n
+Bi1 O3 Bi1 109.44(20) 1_556 -1_656 n
+Bi1 O3 P1 101.25(26) 1_556 1_555 n
+Bi1 O3 P1 138.01(33) -1_656 1_555 n
+Bi1 O4 Bi1 125.05(22) 1_556 -2_566 n
+Bi1 O4 P1 97.65(27) 1_556 1_555 n
+Bi1 O4 P1 135.39(30) -2_566 1_555 n
+loop_
+_geom_bond_atom_site_label_1
+_geom_bond_atom_site_label_2
+_geom_bond_distance
+_geom_bond_site_symmetry_2
+_geom_bond_publ_flag
+Bi1 P1 3.060(6) 1_554 n
+Bi1 O1 2.580(5) 1_555 n
+Bi1 O1 2.492(6) 2_555 n
+Bi1 O2 2.399(6) 2_545 n
+Bi1 O2 2.700(5) -2_565 n
+Bi1 O3 2.361(5) 1_554 n
+Bi1 O3 2.394(5) -1_656 n
+Bi1 O4 2.468(5) 1_554 n
+Bi1 O4 2.426(6) -2_665 n
+P1 Bi1 3.060(6) 1_556 n
+P1 O1 1.550(7) 1_555 n
+P1 O2 1.567(7) 1_555 n
+P1 O3 1.539(6) 1_555 n
+P1 O4 1.509(6) 1_555 n
+O1 Bi1 2.580(5) 1_555 n
+O1 Bi1 2.492(6) 2_545 n
+O1 P1 1.550(7) 1_555 n
+O2 Bi1 2.399(6) 2_555 n
+O2 Bi1 2.700(5) -2_666 n
+O2 P1 1.567(7) 1_555 n
+O3 Bi1 2.361(5) 1_556 n
+O3 Bi1 2.394(5) -1_656 n
+O3 P1 1.539(6) 1_555 n
+O4 Bi1 2.468(5) 1_556 n
+O4 Bi1 2.426(6) -2_566 n
+O4 P1 1.509(6) 1_555 n

@@ -18,13 +18,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import COLLECTION
+
 from conftest import sample_cif
 
 from facet.core import (bv, bv_files, bv_report, cif, coordination, diffraction,
                         md_readers, planes, polyhedra, quality, readers, volume)
 from facet.core.structure import Atom, Cell, Site, Structure
 
-BI_DIR = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi")
+BI_DIR = COLLECTION / "Bi"
 SAMPLE = sample_cif("1526458", "1526458_Bi2O3.cif")
 
 

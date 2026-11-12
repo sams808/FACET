@@ -1148,6 +1148,46 @@ figure, and a subprocess confirms that it imports neither Qt nor matplotlib
 until a figure is asked for. On the 12 811-atom glass: λ of every anion with
 linkages and C(r) in 3.5 s, the Ca field and its cube file in 6 s.
 
+**Run somewhere else (2.0.1).** Until this version every test had run on one
+machine, with one set of package versions, against a collection of CIF files
+that exists only there. The suite now runs on GitHub's machines for every
+push (`.github/workflows/ci.yml`: Windows, Linux and macOS; Python 3.11 to
+3.13; the newest release of every dependency), and before that it was run in
+a clean Linux installation and in a clean Windows environment. What that
+showed:
+
+* **A quarter of the suite needed files that were not in the repository.**
+  Without the collection, 513 tests skipped and 31 failed, most of them
+  for want of one structure. The fifteen structures the tests name are now in
+  `tests/data/reference` (all from the Crystallography Open Database, public
+  domain, each listed with its determination); the tests that sweep the
+  whole collection, and two that name entries of a licensed database, still
+  skip elsewhere. In a clean checkout 3553 tests run on Linux and 3691 on
+  Windows.
+* **The toolbar squeezed a control after all.** It stopped folding at four
+  rows and put what was left on the fourth whether it fitted or not. With
+  Qt 6.12, whose Windows controls are a tenth wider than those of Qt 6.9,
+  the *Tabulate above* box was held to 57 px of the 112 it asks for at a
+  1100 px window. A group that does not fit now starts another row, at any
+  count (`tests/test_shell.py`).
+* **Tests that measured the font, not the layout.** A test that looked for
+  `<path` in an exported SVG failed with Qt 6.12, which writes the same
+  curve as `<polyline>`. A test that counted light pixels on every third row
+  missed a line 1.4 px thick when a different font moved the plot by one
+  pixel. The assertions that state a size in pixels hold with the Windows
+  style and font and are asserted there (`windows_look` in
+  `tests/conftest.py`); on other platforms the rest of each test runs.
+* **Nothing checked what a build or an installation carries.** The 2.0.0
+  wheel lacked the bond-valence table and every test passed. `--selfcheck`
+  runs in the copy being checked (the bond-valence table, the bundled
+  structures, the 90 reference numbers, the basicity library, the manual,
+  the window opening on a structure) and is run in the wheel installed
+  alone and in the frozen application, built from an environment that holds
+  only FACET's dependencies (`tests/test_startcheck.py`).
+
+On four workers (`-n 4 --dist loadfile`) the suite takes about four minutes
+on the machine where it took thirty-six in one process.
+
 The window's frame was rebuilt for 2.0 (`facet/ui/shell.py`,
 `tests/test_shell.py`), each part against the complaint it answers. The
 toolbar is groups that move to another row when the width runs out: at

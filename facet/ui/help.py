@@ -430,6 +430,12 @@ facet.check</code> recomputes every number the tutorials state for the
 bundled examples on this machine and reports each against its tolerance;
 <code>--parity TABLE TRAJECTORY</code> lays another code's per-atom values
 for one MD frame beside FACET's, descriptor by descriptor.</p>
+<p><code>FACET.exe --selfcheck --out report.json</code>, or <code>py -3.11
+-m facet --selfcheck</code> from Python, makes this copy of FACET check that
+it is whole: the bond-valence table, the bundled structures, the numbers
+above, the basicity library, this manual, and the window opening on a
+structure. It exits with 0 when every line holds and writes the lines, with
+the versions in use, to the file named.</p>
 """),
 
         ("examples", "The bundled structures", f"""

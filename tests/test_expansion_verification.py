@@ -15,11 +15,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import COLLECTION
+
 from conftest import sample_cif
 
 from facet.core import bv, bv_report, cif, coordination, polyhedra, quality
 
-BI_DIR = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi")
+BI_DIR = COLLECTION / "Bi"
 FM3M = sample_cif("04-008-3529", "Bi0.92 O1.54 Si0.08 - 04-008-3529.cif")
 EQUAL_SHELL = sample_cif("1010311", "1010311_Bi2O3.cif")
 

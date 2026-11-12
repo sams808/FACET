@@ -117,11 +117,32 @@ Two hidden imports have to be declared explicitly, and both are recorded in
   only when a user clicks Export in the built application, which is the worst
   place to find out.
 
+## What is checked on every push
+
+`.github/workflows/ci.yml` runs on GitHub's machines for every push to
+`main` and every pull request:
+
+| Job | What it does |
+|---|---|
+| `lint` | syntax errors, undefined names and misused comparisons (`ruff`, rules E9, F63, F7, F82) |
+| `tests` | the suite from source on Windows (Python 3.11 and 3.13), Linux (3.11 and 3.13) and macOS (3.12), on four workers, without a display |
+| `package` | the wheel built, installed with only its declared dependencies, and checked from outside the checkout: `--selfcheck`, `facet.check`, the `facet-basicity` commands |
+| `frozen` | `tools/build_exe.py --app` on a clean Windows machine, then `FACET.exe --selfcheck` in the frozen copy, on the offscreen platform and on the native one |
+
+The `frozen` job builds in an environment that holds FACET's dependencies
+and nothing else, which the machine a release is built on does not. It does
+not build the installer or publish anything: a release is still built and
+checked by hand, as below.
+
 ## Before passing a build on
 
 1. `py -3.11 -m pytest tests/ -q` — the suite must be green.
-2. Build, then actually run `dist/FACET/FACET.exe` on a structure. A missing
-   hidden import is invisible until the application starts.
+2. Build, then run `dist\FACET\FACET.exe --selfcheck --out report.json`
+   and read the report: the frozen copy checks its own tables, bundled
+   structures and reference numbers, opens its window on a structure and
+   exits with 0 when every line holds. Then actually run
+   `dist/FACET/FACET.exe` on a structure. A missing hidden import is
+   invisible until the application starts.
 3. Check `dist/FACET/licenses/` exists and is populated, including
    `BUILD.txt`, the record of the commit, Python, platform and every package
    version the build was made from.

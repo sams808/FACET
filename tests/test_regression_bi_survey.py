@@ -23,13 +23,15 @@ from pathlib import Path
 
 import pytest
 
+from conftest import COLLECTION
+
 from facet.core import cif, coordination
 
 # The survey lives outside the repository -- it is the author's working data,
 # not something FACET ships.
-SURVEY = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\study")
+SURVEY = COLLECTION / "Bi" / "study"
 CIF_DIRS = [
-    Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi\cifs"),
+    COLLECTION / "Bi" / "cifs",
     SURVEY / "cifs_cod",
 ]
 

@@ -285,20 +285,35 @@ def test_a_hidden_series_is_not_drawn(qapp):
     visible = Series(np.linspace(10, 90, 200), np.full(200, 50.0),
                      color=(255, 255, 255))
     plot.set_series([visible])
-    lit = _count_light(_render(plot))
+    rect, _ = plot._metrics(800, 480, plot.font())
+    _, py = plot._to_device(rect, visible.x, visible.y + visible.offset)
+    row = int(round(float(py[0])))
+    span = range(int(rect.left()) + 4, int(rect.right()) - 4)
+
+    lit = _light_on_the_line(_render(plot), row, span)
+    assert lit > 0.8 * len(span), "the series was not drawn where it belongs"
     visible.visible = False
     plot.set_series([visible], keep_view=True)
-    assert _count_light(_render(plot)) < lit / 4
+    assert _light_on_the_line(_render(plot), row, span) < lit / 4
 
 
-def _count_light(image) -> int:
-    total = 0
-    for row in range(0, image.height(), 3):
-        for column in range(0, image.width(), 3):
-            pixel = image.pixelColor(column, row)
+def _light_on_the_line(image, row: int, columns) -> int:
+    """Light pixels on the rows the horizontal series occupies.
+
+    Counted where the line is, not over the whole image: the axis text is
+    light as well, and how much of it there is depends on the font, so a
+    count over everything moved with the platform. The line is 1.4 px thick
+    and falls on ``row`` or a neighbour; the best of the three is taken.
+    """
+    best = 0
+    for r in (row - 1, row, row + 1):
+        count = 0
+        for column in columns:
+            pixel = image.pixelColor(column, r)
             if pixel.red() > 200 and pixel.green() > 200:
-                total += 1
-    return total
+                count += 1
+        best = max(best, count)
+    return best
 
 
 # ---------------------------------------------------------------------------

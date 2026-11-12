@@ -30,9 +30,12 @@ dependencies = [
 
 [project.optional-dependencies]
 extra = ["pymatgen>=2024.1"]        # estimated parameters, comparison CN methods
-report = ["pandas>=2.0", "matplotlib>=3.8"]
+report = ["pandas>=2.0", "matplotlib>=3.8", "openpyxl>=3.1"]   # openpyxl: the .xlsx exports
 plot = ["matplotlib>=3.8"]          # the quick figures of facet.basicity
-dev = ["pytest>=8.0", "pytest-qt>=4.4"]
+# what the suite needs: -n 4 --dist loadfile runs it on four workers
+# (pytest-xdist), --timeout stops a test that waits on a window
+dev = ["pytest>=8.0", "pytest-qt>=4.4", "pytest-xdist>=3.5",
+       "pytest-timeout>=2.3", "networkx>=3.0"]
 
 [project.scripts]
 # optical basicity without the window: facet-basicity composition "30Na2O-70SiO2"

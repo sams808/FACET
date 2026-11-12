@@ -26,13 +26,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import COLLECTION
+
 from conftest import sample_cif
 
 from facet.core import cif
 from facet.core import diffraction as dif
 from facet.core import pdf as P
 
-BI_CIF_DIR = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif\Bi")
+BI_CIF_DIR = COLLECTION / "Bi"
 
 
 def _build(a, b, c, alpha, beta, gamma, spacegroup, rows):

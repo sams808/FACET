@@ -41,6 +41,40 @@ def dispose(*widgets) -> None:
         app.processEvents()
 
 
+def windows_look() -> bool:
+    """True when widgets measure as a Windows user sees them.
+
+    The sizes the layout tests state in pixels -- a page no wider than its
+    470 px column, a window that can be made 730 px tall -- are those of the
+    Windows style with the Segoe UI font, which is what FACET is drawn for.
+    They hold on the native Windows platform. On the offscreen platform Qt
+    falls back to the Fusion style and, on Windows, to a font database with
+    no fonts in it (a short label measures 360 px); on Linux and macOS the
+    interface font is wider and taller. There the same assertions measure
+    the font, not the layout.
+
+    A test asks this before it asserts a pixel size. Everything else it
+    asserts runs everywhere. Needs the QApplication to exist.
+    """
+    import sys
+
+    from PySide6.QtGui import QGuiApplication
+
+    return sys.platform == "win32" and QGuiApplication.platformName() == "windows"
+
+
+def has_vector_marks(svg_text: str) -> bool:
+    """True when an SVG holds drawn geometry rather than an embedded picture.
+
+    Which element Qt writes for a stroked line depends on its version: Qt 6.9
+    writes ``<path>``, Qt 6.12 writes ``<polyline>`` (and ``<polygon>`` or
+    ``<circle>`` for closed shapes). A test that asked for ``<path>`` alone
+    passed on one and failed on the other with the same curve in the file.
+    """
+    return any(tag in svg_text for tag in
+               ("<path", "<polyline", "<polygon", "<line", "<circle", "<ellipse"))
+
+
 # ---------------------------------------------------------------------------
 # finding the reference structures
 # ---------------------------------------------------------------------------
@@ -50,6 +84,18 @@ def dispose(*widgets) -> None:
 # system, and keeping one copy of each structure under its most descriptive
 # name, silently skipped a quarter of the suite. A database code does not move,
 # so the tests ask for that instead.
+
+import os as _os0
+from pathlib import Path as _Path
+
+REFERENCE_DIR = _Path(__file__).resolve().parent / "data" / "reference"
+
+#: The whole collection of CIF files the sweeping tests read ("for every
+#: structure of the collection ..."). It is on one machine and is not public;
+#: FACET_REFERENCE_CIFS names a copy elsewhere. Where the folder is absent
+#: those tests skip.
+COLLECTION = _Path(_os0.environ.get(
+    "FACET_REFERENCE_CIFS", r"C:\Users\samso\Desktop\WSU_work\XRD\cif"))
 
 _CIF_ROOT = None
 _BY_CODE: dict[str, object] = {}
@@ -68,10 +114,22 @@ def _index() -> dict:
         return _BY_CODE
     from pathlib import Path
 
-    _CIF_ROOT = Path(r"C:\Users\samso\Desktop\WSU_work\XRD\cif")
+    import re
+
+    # The structures the tests name one by one travel with the repository
+    # (tests/data/reference, all from the Crystallography Open Database), so
+    # a checkout anywhere runs them, and runs the same bytes everywhere. They
+    # are indexed first: a name or a code found there is never looked for in
+    # the collection.
+    for path in sorted(REFERENCE_DIR.glob("*.cif")):
+        _BY_NAME.setdefault(path.name, path)
+        for code in re.findall(r"\d{6,8}", path.stem):
+            _BY_CODE.setdefault(code, path)
+
+    # then the collection, where there is one (COLLECTION, above)
+    _CIF_ROOT = Path(COLLECTION)
     if not _CIF_ROOT.is_dir():
         return _BY_CODE
-    import re
 
     for path in _CIF_ROOT.rglob("*.cif"):
         if "_duplicates" in path.parts:

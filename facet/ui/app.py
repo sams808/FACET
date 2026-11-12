@@ -50,6 +50,14 @@ def main(argv: list[str] | None = None) -> int:
 
     chrome.apply(app, theme_mod.Theme())
 
+    # FACET.exe --selfcheck [--out report.json]: this copy checks that it is
+    # whole (tables, bundled structures, the window opening) and exits with
+    # 0 or 1; no splash, nothing left on screen. See facet.ui.startcheck.
+    if "--selfcheck" in argv[1:]:
+        from . import startcheck
+
+        return startcheck.main(app, argv)
+
     started = time.perf_counter()
     splash = Splash()
     splash.show()

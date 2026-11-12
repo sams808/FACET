@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from conftest import dispose
+from conftest import dispose, windows_look
 
 from facet.core import theme as T
 from facet.ui import chrome
@@ -434,6 +434,8 @@ def test_the_window_fits_on_a_laptop_screen(window):
     the two docks and the panel column all have real minimums; it is checked
     against a 1440 px screen rather than 1366.
     """
+    if not windows_look():
+        pytest.skip("pixel sizes are those of the Windows style and font")
     minimum = window.minimumSizeHint()
     assert minimum.height() <= 730, (
         f"the window cannot be made shorter than {minimum.height()} px, so it "
@@ -465,4 +467,4 @@ def test_all_ten_pages_are_named_at_every_window_size(window, qapp):
         assert wanted <= column.width(), (
             f"at a {width} px window the five names want {wanted} px and "
             f"the column has {column.width()}")
-    assert column.bar.sizeHint().width() <= tabs.minimumWidth()
+    assert column.bar.sizeHint().width() <= tabs.minimumWidth() or not windows_look()
