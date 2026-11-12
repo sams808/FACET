@@ -52,6 +52,14 @@ def build(entries, current_version: str) -> str:
                 name = current_version
         lines.append(f"- {title}  `{h}`  {d}")
     sections.append((name, date, lines))
+    # Commits made after the one that names the current version are part of
+    # that version as it is built and tagged (what its own checks found):
+    # they are listed under it, not under a second heading of the same
+    # number reading "in progress".
+    if len(sections) > 1 and sections[0][0].endswith("(in progress)") \
+            and sections[1][0] == current_version:
+        after, version = sections[0], sections[1]
+        sections[:2] = [(version[0], version[1], after[2] + version[2])]
     text = ["# What changed", "",
             "One line per commit, newest first; a version heading marks the "
             "commit that began it.", ""]
